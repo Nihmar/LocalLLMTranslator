@@ -1,6 +1,10 @@
+from __future__ import annotations
+
 import argparse
 from dataclasses import dataclass
 from pathlib import Path
+
+from local_llm_translator.settings import load_settings
 
 
 @dataclass
@@ -23,6 +27,7 @@ def build_config(argv: list[str] | None = None) -> Config:
         prog="llm-translate",
         description="Translate a PDF book using a local LLM.",
     )
+
     parser.add_argument("--input", required=True, type=Path, help="Input PDF file")
     parser.add_argument("--lang", required=True, help="Target language (e.g. Italiano)")
     parser.add_argument(
@@ -46,43 +51,47 @@ def build_config(argv: list[str] | None = None) -> Config:
         choices=["md", "epub", "pdf", "docx"],
         help="Output format (requires pandoc for non-md formats)",
     )
-    parser.add_argument(
-        "--base-url",
-        default="http://localhost:8001/v1",
-        help="OpenAI-compatible API base URL",
-    )
-    parser.add_argument("--api-key", default="sk-mock", help="API key")
-    parser.add_argument("--model", default="llama3", help="Model name")
-    parser.add_argument(
-        "--context-size",
-        type=int,
-        default=8192,
-        help="Max input tokens per request",
-    )
+    parser.add_argument("--base-url", default=None, help="OpenAI-compatible API base URL")
+    parser.add_argument("--api-key", default=None, help="API key")
+    parser.add_argument("--model", default=None, help="Model name")
+    parser.add_argument("--context-size", type=int, default=None, help="Max input tokens")
     parser.add_argument(
         "--mock",
         action="store_true",
-        help="Shorthand for --base-url http://localhost:8001/v1 (overrides --base-url)",
+        help="Shorthand for --base-url http://localhost:8001/v1",
     )
 
-    args = parser.parse_args(argv)
+    raw = vars(parser.parse_args(argv))
+    settings = load_settings()
+    api = settings.get("api", {})
+    out = settings.get("output", {})
 
-    if args.mock:
-        args.base_url = "http://localhost:8001/v1"
+    def _first(*values: object) -> object:
+        return next((v for v in values if v is not None), None)
 
-    if args.output is None:
-        args.output = Path("output") / args.input.stem
+    base_url: str | None = _first(
+        "http://localhost:8001/v1" if raw["mock"] else None,
+        raw["base_url"],
+        api.get("base_url"),
+        "http://localhost:8001/v1",
+    )  # type: ignore[assignment]
+
+    output_dir = raw["output"] or out.get("directory")
+    if output_dir is None:
+        output_dir = Path("output") / raw["input"].stem
+    elif isinstance(output_dir, str):
+        output_dir = Path(output_dir)
 
     return Config(
-        input_path=args.input,
-        target_language=args.lang,
-        style=args.style,
-        output_dir=args.output,
-        from_chapter=args.from_chapter,
-        to_chapter=args.to_chapter,
-        output_format=args.output_format,
-        base_url=args.base_url,
-        api_key=args.api_key,
-        model=args.model,
-        context_size=args.context_size,
+        input_path=raw["input"],
+        target_language=raw["lang"],
+        style=raw["style"],
+        output_dir=output_dir,
+        from_chapter=raw["from_chapter"],
+        to_chapter=raw["to_chapter"],
+        output_format=_first(raw["output_format"], out.get("format"), "md"),  # type: ignore[arg-type]
+        base_url=base_url,  # type: ignore[arg-type]
+        api_key=_first(raw["api_key"], api.get("api_key"), "sk-mock"),  # type: ignore[arg-type]
+        model=_first(raw["model"], api.get("model"), "llama3"),  # type: ignore[arg-type]
+        context_size=_first(raw["context_size"], api.get("context_size"), 8192),  # type: ignore[arg-type]
     )
