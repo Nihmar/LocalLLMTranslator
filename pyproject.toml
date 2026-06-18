@@ -19,6 +19,7 @@ llm-translate = "local_llm_translator.__main__:main"
 [dependency-groups]
 dev = [
     "fastapi>=0.137.2",
+    "pyinstaller>=6.21.0",
     "pyright>=1.1.410",
     "pytest>=9.1.0",
     "pytest-asyncio>=1.4.0",

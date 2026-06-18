@@ -219,3 +219,7 @@ __marimo__/
 
 # Test data (PDF files too large for git)
 test_data/
+
+# AppImage build artifacts
+*.AppImage
+*.spec

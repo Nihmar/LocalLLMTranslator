@@ -123,6 +123,22 @@ CLI arguments always override config file values.
 
 ## Development
 
+### Running
+
+```sh
+# Terminal 1 — mock API server (echoes input as output)
+uv run python mock_server.py
+
+# Terminal 2 — translate a PDF (--mock points at the mock server)
+uv run llm-translate --input test_data/sample.pdf --lang Italiano --style historian --mock
+
+# Or in one shot (background mock server + --mock flag)
+uv run python mock_server.py --port 8001 &
+uv run llm-translate --input test_data/sample.pdf --lang Italiano --style historian --mock
+```
+
+### Static analysis & tests
+
 ```sh
 uv run ruff check src tests          # lint
 uv run ruff format --check src tests # format check
@@ -151,48 +167,24 @@ AppImage allows you to distribute `llm-translate` as a single self-contained exe
 
 ### Prerequisites
 
-- `docker` or `podman` (for the build container)
-- `linuxdeploy` and `appimagetool` (or use the container-based build)
+- `appimagetool` (install from https://github.com/AppImage/AppImageKit)
+- `uv` and the project already synced
 
-### Build steps
+### Build script
 
 ```sh
-# 1. Create a build directory
-mkdir -p build/AppDir
-
-# 2. Install Python + dependencies into AppDir
-uv pip install --python 3.14 --target build/AppDir/usr/lib/python3.14/site-packages -e .
-uv pip install --python 3.14 --target build/AppDir/usr/lib/python3.14/site-packages pyinstaller
-
-# 3. Build with PyInstaller
-uv run pyinstaller --onefile --name llm-translate \
-    --distpath build/AppDir/usr/bin \
-    src/local_llm_translator/__main__.py
-
-# 4. Create AppDir structure
-cp build/AppDir/usr/bin/llm-translate build/AppDir/usr/bin/
-mkdir -p build/AppDir/usr/share/applications
-cat > build/AppDir/usr/share/applications/llm-translate.desktop <<EOF
-[Desktop Entry]
-Name=LLM Translator
-Exec=llm-translate
-Terminal=true
-Type=Application
-Categories=Office;
-EOF
-
-# 5. Build AppImage using linuxdeploy
-wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
-chmod +x linuxdeploy-x86_64.AppImage
-./linuxdeploy-x86_64.AppImage --appdir build/AppDir --output appimage
-
+./build-appimage.sh
 # Result: LLM_Translator-x86_64.AppImage
 ```
 
-After building, you can run:
+The script performs these steps:
+1. Builds a portable executable with PyInstaller (`--onefile`)
+2. Creates an `AppDir` with `AppRun`, `.desktop` file, and icon
+3. Wraps it with `appimagetool`
+
+You can then run:
 
 ```sh
-chmod +x LLM_Translator-x86_64.AppImage
 ./LLM_Translator-x86_64.AppImage --input book.pdf --lang Italiano --style historian
 ```
 
