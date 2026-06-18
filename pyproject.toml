@@ -7,17 +7,23 @@ authors = [
     { name = "nihmar", email = "manente.alessandro@proton.me" }
 ]
 requires-python = ">=3.14"
-dependencies = []
+dependencies = [
+    "httpx",
+    "pymupdf4llm",
+    "textual",
+]
 
 [project.scripts]
 llm-translate = "local_llm_translator.__main__:main"
 
 [dependency-groups]
 dev = [
+    "fastapi>=0.137.2",
     "pyright>=1.1.410",
     "pytest>=9.1.0",
     "pytest-cov>=7.1.0",
     "ruff>=0.15.17",
+    "uvicorn>=0.49.0",
 ]
 
 [build-system]
