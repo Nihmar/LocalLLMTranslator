@@ -49,7 +49,7 @@ def _detect_chapter_level(markdown: str) -> int:
     return max(counts, key=counts.get)  # type: ignore[arg-type]
 
 
-def _parse_headings(markdown: str, chapter_level: int) -> list[Section]:
+def _parse_headings(markdown: str, chapter_level: int) -> list[Section]:  # noqa: C901, PLR0915
     """Split markdown at *chapter_level* headings.
 
     Text found between a higher-level heading and the first chapter-level
@@ -62,6 +62,7 @@ def _parse_headings(markdown: str, chapter_level: int) -> list[Section]:
     current_level = 0
 
     def flush() -> None:
+        nonlocal current_heading, current_level, current_lines
         if current_lines or current_heading:
             sections.append(
                 Section(
@@ -72,14 +73,17 @@ def _parse_headings(markdown: str, chapter_level: int) -> list[Section]:
                     index=len(sections),
                 )
             )
+            current_heading = ""
+            current_level = 0
+            current_lines = []
 
-    pending_higher: str | None = None
+    pending_higher_heading: str | None = None
     higher_lines: list[str] = []
 
     for line in lines:
         m = _HEADING_RE.match(line)
         if not m:
-            if pending_higher is not None:
+            if pending_higher_heading is not None:
                 higher_lines.append(line)
             else:
                 current_lines.append(line)
@@ -89,10 +93,15 @@ def _parse_headings(markdown: str, chapter_level: int) -> list[Section]:
         heading_text = m.group(2)
 
         if level == chapter_level:
-            if pending_higher is not None:
+            if pending_higher_heading is not None and any(higher_lines):
+                current_heading = pending_higher_heading
+                current_level = level - 1
+                current_lines = higher_lines
                 flush()
-                higher_lines.clear()
-                pending_higher = None
+                pending_higher_heading = None
+            elif pending_higher_heading is not None:
+                pending_higher_heading = None
+                higher_lines = []
 
             flush()
             current_heading = heading_text
@@ -100,7 +109,7 @@ def _parse_headings(markdown: str, chapter_level: int) -> list[Section]:
             current_lines = []
         elif level < chapter_level:
             flush()
-            pending_higher = heading_text
+            pending_higher_heading = heading_text
             higher_lines = []
             current_lines = []
             current_heading = ""
@@ -108,7 +117,10 @@ def _parse_headings(markdown: str, chapter_level: int) -> list[Section]:
         else:
             current_lines.append(line)
 
-    if pending_higher is not None:
+    if pending_higher_heading is not None and any(higher_lines):
+        current_heading = pending_higher_heading
+        current_level = chapter_level - 1
+        current_lines = higher_lines
         flush()
 
     flush()

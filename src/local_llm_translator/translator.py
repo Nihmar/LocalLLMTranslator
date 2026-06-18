@@ -72,11 +72,10 @@ async def run_translation(
             config.input_path, output_dir, config.target_language, config.style
         )
 
-    # --- Extract PDF to markdown ---
-    md_text = extract_markdown(config.input_path, output_dir)
-
     # --- Build section list (only if not already from state) ---
     if not state.sections:
+        # --- Extract PDF to markdown ---
+        md_text = extract_markdown(config.input_path, output_dir)
         sections = split_markdown(md_text, config.context_size)
         state.sections = [
             {
