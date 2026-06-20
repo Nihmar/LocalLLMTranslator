@@ -18,15 +18,21 @@ class LLMClient:
         self,
         system_prompt: str,
         user_text: str,
+        max_tokens: int | None = None,
     ) -> str:
         """Send a translation request and return the assistant response."""
-        payload = {
+        if not user_text.strip():
+            msg = "translate() called with empty user_text"
+            raise ValueError(msg)
+        payload: dict[str, object] = {
             "model": self.model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_text},
-            ],
+            "messages": [],
         }
+        if system_prompt.strip():
+            payload["messages"].append({"role": "system", "content": system_prompt})  # type: ignore[union-attr]
+        payload["messages"].append({"role": "user", "content": user_text})  # type: ignore[union-attr]
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
 
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -35,11 +41,17 @@ class LLMClient:
 
         url = f"{self.base_url}/chat/completions"
 
+        _LOGGER.debug("LLM request: %s", {k: v for k, v in payload.items() if k != "messages"})
+        for msg in payload["messages"]:  # type: ignore[union-attr]
+            content = str(msg.get("content", ""))  # type: ignore[union-attr]
+            _LOGGER.debug("  [%s] len=%d: %r", msg.get("role"), len(content), content[:200])  # type: ignore[union-attr]
+
         async with AsyncClient(timeout=self.timeout) as client:
             try:
                 resp = await client.post(url, json=payload, headers=headers)
                 resp.raise_for_status()
                 data = resp.json()
+                _LOGGER.debug("LLM response: %r", data)
             except HTTPStatusError as e:
                 _LOGGER.exception("API returned %s: %s", e.response.status_code, e.response.text)
                 raise

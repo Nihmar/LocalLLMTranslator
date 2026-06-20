@@ -9,7 +9,7 @@ def main() -> None:
     config = build_config()
 
     logging.basicConfig(
-        level=logging.INFO,
+        level=logging.DEBUG if config.debug else logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
 

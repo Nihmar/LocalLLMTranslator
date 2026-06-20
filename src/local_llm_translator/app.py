@@ -65,22 +65,29 @@ class TranslatorTUI(App[None]):
 
     def on_mount(self) -> None:
         self._start_time = time.monotonic()
-        self.run_translation_worker()  # type: ignore[unused_coroutine]
+        self.run_worker(self.run_translation_worker())
 
     async def run_translation_worker(self) -> None:
         def on_progress(done: int, total: int, heading: str) -> None:
-            self.call_from_thread(self._update_ui, done, total, heading)
+            self._update_ui(done, total, heading)
 
-        await run_translation(self._config, on_progress=on_progress)
+        def on_heading(text: str) -> None:
+            self.query_one("#log", RichLog).write(f"[bold yellow]🏷[/] Translating heading: {text}")
+
+        try:
+            await run_translation(self._config, on_progress=on_progress, on_heading=on_heading)
+        except Exception as exc:  # noqa: BLE001
+            self.query_one("#log", RichLog).write(
+                f"[bold red]✗ Error: {exc}[/]",
+            )
+            return
 
         elapsed = time.monotonic() - self._start_time
         mins, secs = divmod(int(elapsed), 60)
-        self.call_from_thread(
-            self.query_one("#timer", Static).update,
+        self.query_one("#timer", Static).update(
             f"[green]Done in {mins}:{secs:02d}[/]",
         )
-        self.call_from_thread(
-            self.query_one("#log", RichLog).write,
+        self.query_one("#log", RichLog).write(
             "[bold green]✓ Translation complete![/]",
         )
 

@@ -20,6 +20,8 @@ class Config:
     api_key: str
     model: str
     context_size: int
+    timeout: int
+    debug: bool
 
 
 def build_config(argv: list[str] | None = None) -> Config:
@@ -56,6 +58,17 @@ def build_config(argv: list[str] | None = None) -> Config:
     parser.add_argument("--model", default=None, help="Model name")
     parser.add_argument("--context-size", type=int, default=None, help="Max input tokens")
     parser.add_argument(
+        "--timeout",
+        type=int,
+        default=None,
+        help="LLM request timeout in seconds (default: 600)",
+    )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable debug logging (shows full LLM request/response)",
+    )
+    parser.add_argument(
         "--mock",
         action="store_true",
         help="Shorthand for --base-url http://localhost:8001/v1",
@@ -78,7 +91,7 @@ def build_config(argv: list[str] | None = None) -> Config:
 
     output_dir = raw["output"] or out.get("directory")
     if output_dir is None:
-        output_dir = Path("output") / raw["input"].stem
+        output_dir = raw["input"].parent / raw["input"].stem
     elif isinstance(output_dir, str):
         output_dir = Path(output_dir)
 
@@ -94,4 +107,6 @@ def build_config(argv: list[str] | None = None) -> Config:
         api_key=_first(raw["api_key"], api.get("api_key"), "sk-mock"),  # type: ignore[arg-type]
         model=_first(raw["model"], api.get("model"), "llama3"),  # type: ignore[arg-type]
         context_size=_first(raw["context_size"], api.get("context_size"), 8192),  # type: ignore[arg-type]
+        timeout=_first(raw["timeout"], api.get("timeout"), 600),  # type: ignore[arg-type]
+        debug=raw.get("debug", False),
     )

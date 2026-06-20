@@ -32,6 +32,8 @@ class TestTranslator:
             api_key="sk-mock",
             model="mock",
             context_size=8192,
+            timeout=600,
+            debug=False,
         )
 
     async def test_resume_from_state(self, tmp_output: Path, config: Config) -> None:

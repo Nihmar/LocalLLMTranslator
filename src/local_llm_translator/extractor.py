@@ -24,9 +24,10 @@ def extract_markdown(pdf_path: Path, output_dir: Path) -> str:
 
     md_text: str = pymupdf4llm.to_markdown(  # type: ignore[reportUnknownMemberType]
         str(pdf_path),
-        save_images=True,
+        write_images=True,
         image_path=str(images_dir),
         page_chunks=False,
+        use_ocr=False,
     )
 
     _LOGGER.info("Extraction complete (%d chars)", len(md_text))
