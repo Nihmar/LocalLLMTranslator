@@ -14,10 +14,12 @@ class TestEstimateTokens:
         assert estimate_tokens("") == 1
 
     def test_four_words(self) -> None:
-        assert estimate_tokens("one two three four") == 1
+        # 18 chars / 3 = 6
+        assert estimate_tokens("one two three four") == 6
 
     def test_eight_words(self) -> None:
-        assert estimate_tokens("one two three four five six seven eight") == 2
+        # 39 chars / 3 = 13
+        assert estimate_tokens("one two three four five six seven eight") == 13
 
 
 class TestDetectChapterLevel:
@@ -81,9 +83,9 @@ class TestSplitMarkdown:
 
     def test_oversized_section(self) -> None:
         big = f"# Chapter 1\n\n{'hello world ' * 2000}\n\n# Chapter 2\n\nsmall"
-        sections = split_markdown(big, context_size=512)  # ~1000 words / 4 ≈ 250 tokens
-        # Should split ch1 because it exceeds 512 tokens
-        assert len(sections) >= 2
+        sections = split_markdown(big, context_size=512)  # ~24K chars / 3 ≈ 8K tokens
+        # Should split ch1 into many chunks
+        assert len(sections) >= 10
         assert all(s.token_estimate <= 512 for s in sections)
 
     def test_contiguous_indices(self) -> None:

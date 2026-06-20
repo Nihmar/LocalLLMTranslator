@@ -2,10 +2,6 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from collections.abc import Sequence
 
 _MAX_HEADING_LEVEL = 6
 _MIN_PARTS_FOR_SPLIT = 2
@@ -24,7 +20,8 @@ _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+)$", re.MULTILINE)
 
 
 def estimate_tokens(text: str) -> int:
-    return max(1, len(text.split()) // 4)
+    """Estimate token count using character-based heuristic (~4 chars/token)."""
+    return max(1, len(text) // 3)
 
 
 def _detect_chapter_level(markdown: str) -> int:
@@ -127,15 +124,21 @@ def _parse_headings(markdown: str, chapter_level: int) -> list[Section]:  # noqa
     return sections
 
 
-def _chunk_by_words(
-    heading: str, level: int, words: Sequence[str], chunk_size: int, start_index: int
+def _chunk_by_chars(
+    heading: str, level: int, text: str, max_chars: int, start_index: int
 ) -> list[Section]:
-    """Split word list into fixed-size chunks, each as a Section."""
+    """Split text into fixed-size character chunks, each as a Section."""
     chunks: list[Section] = []
-    i = 0
-    while i < len(words):
-        chunk_words = words[i : i + chunk_size]
-        chunk_text = " ".join(chunk_words)
+    pos = 0
+    text_len = len(text)
+    while pos < text_len:
+        # Try to break at a word boundary near max_chars
+        end = min(pos + max_chars, text_len)
+        if end < text_len:
+            space = text.rfind(" ", pos, end)
+            if space > pos:
+                end = space + 1
+        chunk_text = text[pos:end]
         chunks.append(
             Section(
                 heading=f"{heading} (cont.)",
@@ -145,7 +148,7 @@ def _chunk_by_words(
                 index=start_index + len(chunks),
             )
         )
-        i += chunk_size
+        pos = end
     return chunks
 
 
@@ -158,22 +161,22 @@ def _split_oversized(section: Section, max_tokens: int, start_index: int) -> lis
 
     next_level = section.level + 1
     if next_level > _MAX_HEADING_LEVEL:
-        return _chunk_by_words(
+        return _chunk_by_chars(
             section.heading,
             section.level,
-            section.text.split(),
-            max_tokens * 4,
+            section.text,
+            max_tokens * 3,
             start_index,
         )
 
     pattern = re.compile(rf"^{'#' * next_level}\s+(.+)$", re.MULTILINE)
     parts = pattern.split(section.text)
     if len(parts) < _MIN_PARTS_FOR_SPLIT:
-        return _chunk_by_words(
+        return _chunk_by_chars(
             section.heading,
             section.level,
-            section.text.split(),
-            max_tokens * 4,
+            section.text,
+            max_tokens * 3,
             start_index,
         )
 

@@ -110,22 +110,23 @@ def _check_integrity(state: TranslationState, output_dir: Path) -> set[int]:
 
 
 async def _translate_heading(
-    llm: LLMClient, heading: str, target_language: str, section_index: int
+    llm: LLMClient,
+    heading: str,
+    target_language: str,
+    section_index: int,
+    prompt_template: str,
 ) -> str | None:
-    """Translate a single heading with retries."""
+    """Translate a single heading using the same prompt style as body translation."""
     if not heading.strip():
         _LOGGER.warning("Heading %d: empty heading, skipping", section_index)
         return None
-    system_prompt = (
-        f"Translate the following heading into {target_language}. "
-        f"Return ONLY the translated heading, no explanations."
-    )
+    system_content = _build_system_message(prompt_template, target_language)
+    user_content = _render_prompt(prompt_template, target_language, "", heading)
     _LOGGER.info("Heading %d translating: %r", section_index, heading)
-    _LOGGER.info("  system: %r", system_prompt)
     max_retries = 3
     for attempt in range(1, max_retries + 1):
         try:
-            result = await llm.translate(system_prompt, heading, max_tokens=256)
+            result = await llm.translate(system_content, user_content, max_tokens=256)
         except Exception as exc:  # noqa: BLE001
             _LOGGER.warning(
                 "Heading %d attempt %d/%d failed: %s",
@@ -136,7 +137,6 @@ async def _translate_heading(
             )
         else:
             _LOGGER.info("Heading %d raw response: %r", section_index, result)
-            # Strip markdown heading syntax (#, ##, etc.) and surrounding whitespace
             cleaned = result.strip()
             cleaned = re.sub(r"^#{1,6}\s+", "", cleaned)
             cleaned = cleaned.rstrip(".。").strip()
@@ -158,7 +158,7 @@ async def _ensure_heading_translated(
     state: TranslationState,
     section_index: int,
     llm: LLMClient,
-    target_language: str,
+    prompt_template: str,
     on_heading: HeadingCallback | None = None,
 ) -> None:
     """Translate a section heading if not already done, saving state on success."""
@@ -169,7 +169,9 @@ async def _ensure_heading_translated(
     if on_heading:
         on_heading(heading)
     _LOGGER.info("Translating heading %d: %s", section_index, heading)
-    result = await _translate_heading(llm, heading, target_language, section_index)
+    result = await _translate_heading(
+        llm, heading, state.target_language, section_index, prompt_template
+    )
     if result:
         sec_data["translated_heading"] = result
         state.save(Path(state.output_dir))
@@ -195,14 +197,20 @@ def _skip_if_empty(
 
 async def _translate_missing_headings(
     state: TranslationState,
-    from_idx: int,
-    to_idx: int,
+    index_range: tuple[int, int],
     llm: LLMClient,
+    prompt_template: str,
     on_heading: HeadingCallback | None,
 ) -> None:
     """Translate headings for all sections in range that are missing translation."""
-    for i in range(from_idx, to_idx):
-        await _ensure_heading_translated(state, i, llm, state.target_language, on_heading)
+    for i in range(index_range[0], index_range[1]):
+        await _ensure_heading_translated(
+            state,
+            i,
+            llm,
+            prompt_template,
+            on_heading,
+        )
 
 
 async def run_translation(
@@ -280,7 +288,7 @@ async def run_translation(
     )
 
     # --- Translate missing headings for ALL sections (including already-completed ones) ---
-    await _translate_missing_headings(state, from_idx, to_idx, llm, on_heading)
+    await _translate_missing_headings(state, (from_idx, to_idx), llm, prompt_template, on_heading)
 
     if not to_process:
         _LOGGER.info("All requested sections already translated, nothing to do")
