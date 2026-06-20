@@ -218,17 +218,16 @@ def _split_oversized(section: Section, max_tokens: int, start_index: int) -> lis
 def split_markdown(markdown: str, context_size: int) -> list[Section]:
     """Split markdown into sections that fit within context_size tokens.
 
-    Detects the natural chapter heading level (typically h2 for multi-part
-    books, h1 for flat books) and splits there first. Oversized sections
-    are recursively split by deeper heading levels or word-chunked as a
-    last resort.
+    Uses 70% of context_size as the target to leave room for system prompt,
+    previous context, and the LLM response.
     """
+    target = int(context_size * 0.7)
     chapter_level = _detect_chapter_level(markdown)
     raw = _parse_headings(markdown, chapter_level)
 
     sections: list[Section] = []
     for section in raw:
-        sections.extend(_split_oversized(section, context_size, len(sections)))
+        sections.extend(_split_oversized(section, target, len(sections)))
 
     for i, s in enumerate(sections):
         s.index = i
