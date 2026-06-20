@@ -39,3 +39,17 @@ class TestExtractor:
 
         with pytest.raises(Exception):
             extract_markdown(tmp_output / "nope.pdf", tmp_output)
+
+    def test_extract_epub(self, tmp_output):
+        """Extract from a programmatically-generated EPUB."""
+        epub_path = tmp_output / "simple.epub"
+        doc = fitz.open()
+        page = doc.new_page()
+        page.insert_text((50, 50), "# Prologue", fontsize=14)
+        page.insert_text((50, 80), "Once upon a time.", fontsize=11)
+        doc.save(str(epub_path))
+        doc.close()
+
+        md = extract_markdown(epub_path, tmp_output)
+        assert "Prologue" in md
+        assert "Once upon a time" in md
