@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 _MAX_HEADING_LEVEL = 6
 _MIN_PARTS_FOR_SPLIT = 2
+_PLAIN_MIN_PARTS = 3  # preamble + match + content = at least 3 parts
 
 
 @dataclass
@@ -17,6 +18,61 @@ class Section:
 
 
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+)$", re.MULTILINE)
+_PLAIN_CHAPTER_RE = re.compile(
+    r"^\s*(?:Chapter|CHAPTER|Ch\.|Part|PART|Book|BOOK)\s+[IVXLCDM0-9]+.*$",
+    re.MULTILINE,
+)
+_PLAIN_NUMBERED_RE = re.compile(r"^\s*(?:[0-9]+|[IVXLCDM]+)\.?\s+[A-Z].*$", re.MULTILINE)
+
+
+def _split_by_pattern(text: str, pattern: re.Pattern[str], max_tokens: int) -> list[Section] | None:
+    """Try to split text using a regex pattern. Returns None if no matches."""
+    parts = pattern.split(text)
+    if len(parts) < _PLAIN_MIN_PARTS:
+        return None
+    sections: list[Section] = []
+    preamble = parts[0].strip()
+    if preamble:
+        sections.append(Section(heading="", level=0, text=preamble, token_estimate=0, index=0))
+    for i in range(1, len(parts), 2):
+        heading = parts[i].strip()
+        content = parts[i + 1].strip() if i + 1 < len(parts) else ""
+        sections.append(Section(heading=heading, level=1, text=content, token_estimate=0, index=0))
+    result: list[Section] = []
+    for s in sections:
+        result.extend(_split_oversized(s, max_tokens, len(result)))
+    for i, s in enumerate(result):
+        s.index = i
+        s.token_estimate = estimate_tokens(s.text)
+    return result
+
+
+def _split_plain_text(text: str, max_tokens: int) -> list[Section]:
+    """Split plain text (no markdown headings) into sections."""
+    for pattern in (_PLAIN_CHAPTER_RE, _PLAIN_NUMBERED_RE):
+        result = _split_by_pattern(text, pattern, max_tokens)
+        if result is not None:
+            return result
+
+    # Last resort: split by paragraphs
+    paragraphs = re.split(r"\n\s*\n", text)
+    chunks: list[str] = []
+    current = ""
+    for para in paragraphs:
+        if estimate_tokens(current + "\n\n" + para) <= max_tokens:
+            current = f"{current}\n\n{para}" if current else para
+        else:
+            if current:
+                chunks.append(current)
+            current = para
+    if current:
+        chunks.append(current)
+    return [
+        Section(
+            heading="", level=0, text=c.strip(), token_estimate=estimate_tokens(c.strip()), index=i
+        )
+        for i, c in enumerate(chunks)
+    ]
 
 
 def estimate_tokens(text: str) -> int:
@@ -219,9 +275,15 @@ def split_markdown(markdown: str, context_size: int) -> list[Section]:
     """Split markdown into sections that fit within context_size tokens.
 
     Uses 70% of context_size as the target to leave room for system prompt,
-    previous context, and the LLM response.
+    previous context, and the LLM response. Falls back to plain-text chapter
+    detection when no markdown headings are found (e.g., EPUB content).
     """
     target = int(context_size * 0.7)
+
+    # If no markdown headings found, use plain-text splitter
+    if not _HEADING_RE.search(markdown):
+        return _split_plain_text(markdown, target)
+
     chapter_level = _detect_chapter_level(markdown)
     raw = _parse_headings(markdown, chapter_level)
 
