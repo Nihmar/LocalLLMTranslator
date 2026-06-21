@@ -364,17 +364,40 @@ def _write_translated_markdown(
 ) -> None:
     output_path = output_dir / f"translated.{output_format}"
     lines: list[str] = []
+    total_original = 0
+    total_translated = 0
+    missing = 0
     for sec in sections:
         heading = sec.get("translated_heading") or sec.get("heading")
         if heading:
             heading_mark = "#" * sec["level"]
             lines.append(f"{heading_mark} {heading}")
-        if sec.get("translated_text"):
-            lines.append(sec["translated_text"])
+        original = sec.get("original_text", "")
+        translated = sec.get("translated_text")
+        if translated:
+            total_original += len(original)
+            total_translated += len(translated)
+            lines.append(translated)
+        else:
+            missing += 1
+            total_original += len(original)
+            if original.strip():
+                lines.append(f"[UNTRANSLATED]\n{original}")
         lines.append("")
 
     text = "\n".join(lines)
     output_path.write_text(text, encoding="utf-8")
+    _LOGGER.info(
+        "Written %s: %d chars, %d sections (%d missing, %d translated). "
+        "Original total chars: %d, Translated total chars: %d",
+        output_path.name,
+        len(text),
+        len(sections),
+        missing,
+        len(sections) - missing,
+        total_original,
+        total_translated,
+    )
 
     if output_format != "md":
         _LOGGER.info(
