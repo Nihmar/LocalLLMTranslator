@@ -109,12 +109,22 @@ async def _translate_heading(
     if not heading.strip():
         _LOGGER.warning("Heading %d: empty heading, skipping", section_index)
         return None
-    # Use a simple, proven prompt for headings — the full template is overkill
-    system_content = f"Translate this heading to {target_language}. Return only the translation."
-    user_content = heading
+
+    # Two prompt strategies: bare (no system msg) then with system msg
+    strategies = [
+        # Strategy 1: single user message, no system — works with most models
+        ("", f"Translate to {target_language}:\n\n{heading}"),
+        # Strategy 2: system + user — better for instruction-tuned models
+        (
+            f"Translate this heading to {target_language}. Return only the translation.",
+            heading,
+        ),
+    ]
+
     _LOGGER.info("Heading %d translating: %r", section_index, heading)
     max_retries = 3
     for attempt in range(1, max_retries + 1):
+        system_content, user_content = strategies[(attempt - 1) % len(strategies)]
         try:
             result = await llm.translate(system_content, user_content, max_tokens=256)
         except Exception as exc:  # noqa: BLE001
