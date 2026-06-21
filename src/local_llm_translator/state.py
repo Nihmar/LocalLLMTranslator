@@ -33,9 +33,12 @@ class TranslationState:
     target_language: str
     style: str
     sections: list[_SectionDict] = field(default_factory=list)  # pyright: ignore[reportUnknownVariableType]
-    completed_indices: list[int] = field(default_factory=list)  # pyright: ignore[reportUnknownVariableType]
     created_at: str = ""
     updated_at: str = ""
+
+    def completed_indices(self) -> list[int]:
+        """Return indices of sections that have a translation (computed, not stored)."""
+        return sorted(i for i, s in enumerate(self.sections) if s.get("translated_text"))
 
     @staticmethod
     def _hash_file(path: Path) -> str:
@@ -62,8 +65,10 @@ class TranslationState:
             return None
         try:
             data: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+            # Drop legacy field if present
+            data.pop("completed_indices", None)
             return cls(**data)
-        except (json.JSONDecodeError, KeyError) as e:
+        except (json.JSONDecodeError, KeyError, TypeError) as e:
             _LOGGER.warning("Failed to load state file: %s", e)
             return None
 

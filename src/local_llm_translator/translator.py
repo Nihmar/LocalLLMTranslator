@@ -94,19 +94,9 @@ def _cleanup_empty_sections(state: TranslationState, output_dir: Path) -> None:
 
 
 def _check_integrity(state: TranslationState, output_dir: Path) -> set[int]:
-    """Rebuild completed_indices from actual section data."""
+    """Return the set of section indices that have a completed translation."""
     _cleanup_empty_sections(state, output_dir)
-    stated = set(state.completed_indices)
-    actual = {i for i, s in enumerate(state.sections) if s.get("translated_text")}
-    if stated != actual:
-        _LOGGER.warning(
-            "State mismatch: completed_indices=%s but actual=%s — correcting",
-            sorted(stated),
-            sorted(actual),
-        )
-        state.completed_indices = sorted(actual)
-        state.save(output_dir)
-    return actual
+    return set(state.completed_indices())
 
 
 async def _translate_heading(
@@ -189,7 +179,6 @@ def _skip_if_empty(
         _LOGGER.info("Section %d has empty body — skipping", section.index)
         state.sections[section.index]["translated_text"] = ""
         completed.add(section.index)
-        state.completed_indices = sorted(completed)
         state.save(Path(state.output_dir))
         return True
     return False
@@ -213,6 +202,13 @@ async def _translate_missing_headings(
         )
 
 
+def _dump_extracted_markdown(output_dir: Path, md_text: str) -> None:
+    """Save raw extracted markdown for debugging."""
+    path = output_dir / "extracted.md"
+    path.write_text(md_text, encoding="utf-8")
+    _LOGGER.info("Raw markdown saved to %s (%d chars)", path, len(md_text))
+
+
 async def run_translation(
     config: Config,
     on_progress: ProgressCallback | None = None,
@@ -232,7 +228,7 @@ async def run_translation(
     if state is not None and state.is_compatible(config.input_path):
         _LOGGER.info(
             "Resuming translation (%d sections completed out of %d)",
-            len(state.completed_indices),
+            len(state.completed_indices()),
             len(state.sections),
         )
     else:
@@ -244,6 +240,8 @@ async def run_translation(
     if not state.sections:
         # --- Extract PDF to markdown ---
         md_text = extract_markdown(config.input_path, output_dir)
+        _dump_extracted_markdown(output_dir, md_text)
+
         sections = split_markdown(md_text, config.context_size)
         state.sections = [
             {
@@ -334,7 +332,6 @@ async def run_translation(
             translated_history.append(translated)
             state.sections[section.index]["translated_text"] = translated
             completed.add(section.index)
-            state.completed_indices = sorted(completed)
             state.save(output_dir)
             if on_progress:
                 on_progress(done + 1, total, section.heading)

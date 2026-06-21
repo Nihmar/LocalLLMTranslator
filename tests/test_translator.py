@@ -47,7 +47,6 @@ class TestTranslator:
             "sections": [
                 {"heading": "Ch1", "level": 1, "original_text": "hi", "translated_text": "ciao"},
             ],
-            "completed_indices": [0],
             "created_at": "2025-01-01T00:00:00",
             "updated_at": "2025-01-01T00:00:00",
         }

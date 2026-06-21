@@ -13,7 +13,7 @@ class TestTranslationState:
         assert state.target_language == "Italiano"
         assert state.style == "historian"
         assert state.sections == []
-        assert state.completed_indices == []
+        assert state.completed_indices() == []
 
     def test_save_and_load(self, tmp_output: Path) -> None:
         pdf = tmp_output / "test.pdf"
@@ -23,14 +23,13 @@ class TestTranslationState:
         state.sections = [
             {"heading": "Ch1", "level": 2, "original_text": "text", "translated_text": None},
         ]
-        state.completed_indices = []
         state.save(tmp_output)
 
         loaded = TranslationState.load(tmp_output)
         assert loaded is not None
         assert len(loaded.sections) == 1
         assert loaded.sections[0]["heading"] == "Ch1"
-        assert loaded.completed_indices == []
+        assert loaded.completed_indices() == []
 
     def test_resume_matching_hash(self, tmp_output: Path) -> None:
         pdf = tmp_output / "test.pdf"
@@ -73,21 +72,21 @@ class TestTranslationState:
         state = TranslationState.new(pdf, tmp_output, "Italiano", "historian")
         state.sections = [
             {"heading": "Ch1", "level": 2, "original_text": "text1", "translated_text": None},
-            {"heading": "Ch2", "level": 2, "original_text": "text2", "translated_text": None},
+            {"heading": "Ch2", "level": 2, "original_text": "text2", "translated_text": "ciao"},
         ]
-        state.completed_indices = [0]
         state.save(tmp_output)
 
         loaded = TranslationState.load(tmp_output)
         assert loaded is not None
-        assert loaded.completed_indices == [0]
+        assert loaded.completed_indices() == [1]
         assert loaded.sections[0]["translated_text"] is None
+        assert loaded.sections[1]["translated_text"] == "ciao"
 
-        # Simulate completing section 1
+        # Complete section 0
         loaded.sections[0]["translated_text"] = "translated1"
-        loaded.completed_indices = [0]
         loaded.save(tmp_output)
 
         re_loaded = TranslationState.load(tmp_output)
         assert re_loaded is not None
         assert re_loaded.sections[0]["translated_text"] == "translated1"
+        assert re_loaded.completed_indices() == [0, 1]
