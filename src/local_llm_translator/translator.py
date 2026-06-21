@@ -104,14 +104,14 @@ async def _translate_heading(
     heading: str,
     target_language: str,
     section_index: int,
-    prompt_template: str,
 ) -> str | None:
-    """Translate a single heading using the same prompt style as body translation."""
+    """Translate a single heading using a minimal prompt optimized for short text."""
     if not heading.strip():
         _LOGGER.warning("Heading %d: empty heading, skipping", section_index)
         return None
-    system_content = _build_system_message(prompt_template, target_language)
-    user_content = _render_prompt(prompt_template, target_language, "", heading)
+    # Use a simple, proven prompt for headings — the full template is overkill
+    system_content = f"Translate this heading to {target_language}. Return only the translation."
+    user_content = heading
     _LOGGER.info("Heading %d translating: %r", section_index, heading)
     max_retries = 3
     for attempt in range(1, max_retries + 1):
@@ -148,7 +148,6 @@ async def _ensure_heading_translated(
     state: TranslationState,
     section_index: int,
     llm: LLMClient,
-    prompt_template: str,
     on_heading: HeadingCallback | None = None,
 ) -> None:
     """Translate a section heading if not already done, saving state on success."""
@@ -159,9 +158,7 @@ async def _ensure_heading_translated(
     if on_heading:
         on_heading(heading)
     _LOGGER.info("Translating heading %d: %s", section_index, heading)
-    result = await _translate_heading(
-        llm, heading, state.target_language, section_index, prompt_template
-    )
+    result = await _translate_heading(llm, heading, state.target_language, section_index)
     if result:
         sec_data["translated_heading"] = result
     else:
@@ -189,18 +186,11 @@ async def _translate_missing_headings(
     state: TranslationState,
     index_range: tuple[int, int],
     llm: LLMClient,
-    prompt_template: str,
     on_heading: HeadingCallback | None,
 ) -> None:
     """Translate headings for all sections in range that are missing translation."""
     for i in range(index_range[0], index_range[1]):
-        await _ensure_heading_translated(
-            state,
-            i,
-            llm,
-            prompt_template,
-            on_heading,
-        )
+        await _ensure_heading_translated(state, i, llm, on_heading)
 
 
 def _dump_extracted_markdown(output_dir: Path, md_text: str) -> None:
@@ -302,7 +292,7 @@ async def run_translation(
     )
 
     # --- Translate missing headings for ALL sections (including already-completed ones) ---
-    await _translate_missing_headings(state, (from_idx, to_idx), llm, prompt_template, on_heading)
+    await _translate_missing_headings(state, (from_idx, to_idx), llm, on_heading)
 
     if not to_process:
         _LOGGER.info("All requested sections already translated, nothing to do")
