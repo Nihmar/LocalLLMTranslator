@@ -209,6 +209,17 @@ def _dump_extracted_markdown(output_dir: Path, md_text: str) -> None:
     _LOGGER.info("Raw markdown saved to %s (%d chars)", path, len(md_text))
 
 
+def _ensure_markdown_dump(output_dir: Path, input_path: Path) -> None:
+    """Dump extracted markdown if it doesn't already exist."""
+    dump_path = output_dir / "extracted.md"
+    if not dump_path.exists():
+        try:
+            md_text = extract_markdown(input_path, output_dir)
+            _dump_extracted_markdown(output_dir, md_text)
+        except Exception:  # noqa: BLE001
+            _LOGGER.warning("Failed to dump extracted markdown", exc_info=True)
+
+
 async def run_translation(
     config: Config,
     on_progress: ProgressCallback | None = None,
@@ -255,6 +266,8 @@ async def run_translation(
         ]
         state.save(output_dir)
     else:
+        _ensure_markdown_dump(output_dir, config.input_path)
+
         sections = [
             Section(
                 heading=s["heading"],
@@ -270,8 +283,10 @@ async def run_translation(
     completed = _check_integrity(state, output_dir)
 
     # --- Apply --from / --to filters ---
-    from_idx = 0 if config.from_chapter is None else config.from_chapter - 1
-    to_idx = len(sections) if config.to_chapter is None else config.to_chapter
+    from_idx, to_idx = (
+        0 if config.from_chapter is None else config.from_chapter - 1,
+        len(sections) if config.to_chapter is None else config.to_chapter,
+    )
     to_process = [s for s in sections[from_idx:to_idx] if s.index not in completed]
 
     # --- Load prompt template ---
