@@ -154,7 +154,7 @@ async def _ensure_heading_translated(
     """Translate a section heading if not already done, saving state on success."""
     sec_data = state.sections[section_index]
     heading: str = sec_data.get("heading", "")
-    if not heading or sec_data.get("translated_heading"):
+    if not heading or sec_data.get("translated_heading") is not None:
         return
     if on_heading:
         on_heading(heading)
@@ -164,9 +164,10 @@ async def _ensure_heading_translated(
     )
     if result:
         sec_data["translated_heading"] = result
-        state.save(Path(state.output_dir))
     else:
         _LOGGER.warning("Heading %d translation failed, keeping original", section_index)
+        sec_data["translated_heading"] = ""  # Mark as attempted, don't retry on resume
+    state.save(Path(state.output_dir))
 
 
 def _skip_if_empty(
