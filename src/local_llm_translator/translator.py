@@ -126,7 +126,7 @@ async def _translate_heading(
     for attempt in range(1, max_retries + 1):
         system_content, user_content = strategies[(attempt - 1) % len(strategies)]
         try:
-            result = await llm.translate(system_content, user_content, max_tokens=256)
+            result = await llm.translate(system_content, user_content, max_tokens=None)
         except Exception as exc:  # noqa: BLE001
             _LOGGER.warning(
                 "Heading %d attempt %d/%d failed: %s",
