@@ -99,6 +99,48 @@ def _check_integrity(state: TranslationState, output_dir: Path) -> set[int]:
     return set(state.completed_indices())
 
 
+def _extract_heading(text: str) -> str | None:
+    """Extract a clean heading from a potentially verbose LLM response.
+
+    Tries: bold markers, last short line, then full strip.
+    """
+    text = text.strip()
+    if not text:
+        return None
+
+    _max_heading_len = 200
+
+    # If short enough, it's already a heading
+    if len(text) <= _max_heading_len:
+        return re.sub(r"^#{1,6}\s+", "", text).rstrip(".。").strip() or None
+
+    # Look for bold text markers (common in verbose model responses)
+    bold = re.findall(r"\*\*(.+?)\*\*", text)
+    if bold:
+        best = min(bold, key=len).strip().rstrip(".。").strip()
+        if best:
+            _LOGGER.debug("Extracted heading from bold: %r", best)
+            return best
+
+    # Look for the last short line (often the final answer)
+    for raw_line in reversed(text.split("\n")):
+        stripped = raw_line.strip()
+        if not stripped:
+            continue
+        stripped = re.sub(r"^[#>\-\*\s]+", "", stripped).strip()
+        _min_len = 3
+        if _min_len <= len(stripped) <= _max_heading_len and not stripped.startswith(
+            ("Here", "If ", "Use ", "Note", "The ")
+        ):
+            _LOGGER.debug("Extracted heading from last line: %r", stripped)
+            return stripped.rstrip(".。").strip()
+
+    # Fallback: just use the cleaned text, truncated
+    cleaned = re.sub(r"^#{1,6}\s+", "", text)
+    cleaned = cleaned[:_max_heading_len].rstrip(".。").strip()
+    return cleaned or None
+
+
 async def _translate_heading(
     llm: LLMClient,
     heading: str,
@@ -113,10 +155,19 @@ async def _translate_heading(
     # Two prompt strategies: bare (no system msg) then with system msg
     strategies = [
         # Strategy 1: single user message, no system — works with most models
-        ("", f"Translate to {target_language}:\n\n{heading}"),
+        (
+            "",
+            (
+                f"Translate ONLY this heading to {target_language}.\n"
+                f"Do NOT explain, just the translation:\n\n{heading}"
+            ),
+        ),
         # Strategy 2: system + user — better for instruction-tuned models
         (
-            f"Translate this heading to {target_language}. Return only the translation.",
+            (
+                f"Translate this heading to {target_language}. "
+                f"Output ONLY the translation, no other text."
+            ),
             heading,
         ),
     ]
@@ -137,9 +188,7 @@ async def _translate_heading(
             )
         else:
             _LOGGER.info("Heading %d raw response: %r", section_index, result)
-            cleaned = result.strip()
-            cleaned = re.sub(r"^#{1,6}\s+", "", cleaned)
-            cleaned = cleaned.rstrip(".。").strip()
+            cleaned = _extract_heading(result)
             if cleaned:
                 return cleaned
             _LOGGER.warning(
