@@ -162,6 +162,8 @@ pub fn run() {
             commands::project::project_create,
             commands::project::project_get,
             commands::project::project_delete,
+            commands::project::project_export,
+            commands::project::project_import,
             commands::endpoint::endpoint_list,
             commands::endpoint::endpoint_upsert,
             commands::endpoint::endpoint_delete,

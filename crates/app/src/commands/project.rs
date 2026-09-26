@@ -1,6 +1,6 @@
 //! `project_*` commands.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use super::{Ack, CreateProjectRequest};
@@ -99,4 +99,41 @@ pub async fn project_get(state: State<'_, AppState>, id: String) -> Result<Proje
 pub async fn project_delete(state: State<'_, AppState>, id: String) -> Result<Ack> {
     repo::delete_project(&state.pool, &id).await?;
     Ok(Ack::done())
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ExportBundleRequest {
+    pub project_id: String,
+    /// Destination `.llmtz`; when absent it goes to the project output directory.
+    #[serde(default)]
+    pub output_path: Option<String>,
+}
+
+/// Write the project as a `.llmtz` bundle (PLAN.md §6).
+#[tauri::command]
+pub async fn project_export(
+    state: State<'_, AppState>,
+    req: ExportBundleRequest,
+) -> Result<crate::pipeline::bundle::ExportBundleOutcome> {
+    crate::pipeline::bundle::export_project(
+        &state.pool,
+        &state.data_dir,
+        &req.project_id,
+        req.output_path.as_deref(),
+    )
+    .await
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ImportBundleRequest {
+    pub archive_path: String,
+}
+
+/// Import a `.llmtz` bundle as a new project; an existing id is rejected.
+#[tauri::command]
+pub async fn project_import(
+    state: State<'_, AppState>,
+    req: ImportBundleRequest,
+) -> Result<Project> {
+    crate::pipeline::bundle::import_project(&state.pool, &state.data_dir, &req.archive_path).await
 }

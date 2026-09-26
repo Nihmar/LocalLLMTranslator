@@ -36,6 +36,7 @@ minijinja.workspace = true
 parking_lot.workspace = true
 async-trait.workspace = true
 bytes.workspace = true
+zip.workspace = true
 
 [dev-dependencies]
 wiremock.workspace = true

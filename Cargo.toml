@@ -53,6 +53,7 @@ minijinja = "2"
 parking_lot = "0.12"
 async-trait = "0.1"
 bytes = "1"
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 # Test-only helpers.
 wiremock = "0.6"

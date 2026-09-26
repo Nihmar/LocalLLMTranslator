@@ -1,5 +1,6 @@
 //! Pipeline: ingestion, translation and export orchestration.
 
+pub mod bundle;
 pub mod chat_call;
 pub mod export;
 pub mod glossary;

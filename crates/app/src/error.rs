@@ -27,6 +27,9 @@ pub enum AppError {
     #[error("serialization error: {0}")]
     Json(#[from] serde_json::Error),
 
+    #[error("archive error: {0}")]
+    Zip(#[from] zip::result::ZipError),
+
     #[error("template error: {0}")]
     Template(#[from] minijinja::Error),
 
@@ -53,7 +56,6 @@ pub enum AppError {
 
     #[error("invalid input: {0}")]
     Invalid(String),
-
     #[error("job error: {0}")]
     Job(String),
 
@@ -83,6 +85,7 @@ impl AppError {
             AppError::Http(_) => "http",
             AppError::Io(_) => "io",
             AppError::Json(_) => "json",
+            AppError::Zip(_) => "zip",
             AppError::Template(_) => "template",
             AppError::SidecarTimeout(_) => "sidecar_timeout",
             AppError::SidecarUnavailable(_) => "sidecar_unavailable",
