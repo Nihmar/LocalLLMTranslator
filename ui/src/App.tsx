@@ -44,7 +44,7 @@ const NAV_ENTRIES: readonly NavEntry[] = [
   { id: "ingest", step: "1", label: "Ingestione", hint: "File, formato, capitoli" },
   { id: "models", step: "2", label: "Modelli", hint: "Endpoint, salute, ruoli" },
   { id: "translate", step: "3", label: "Traduzione", hint: "Chunk, avvio, risorse" },
-  { id: "review", step: "4", label: "Revisione", hint: "Diff bilingue (M4)" },
+  { id: "review", step: "4", label: "Revisione", hint: "Diff bilingue, suggerimenti, QA" },
   { id: "export", step: "5", label: "Export", hint: "PDF, EPUB, DOCX" },
   { id: "jobs", step: "•", label: "Job", hint: "Coda, ETA, log live" },
 ];

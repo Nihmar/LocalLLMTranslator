@@ -43,9 +43,15 @@ import type {
   ReconConfirmRequest,
   ReconSnapshot,
   ReconStartRequest,
+  QaFinding,
+  QaReportRequest,
+  ReviewStartRequest,
+  ReviewStartResult,
   RoleBinding,
   RoleBindingSet,
   SidecarStatus,
+  Suggestion,
+  SuggestionListRequest,
   TranslationStartRequest,
   TranslationStartResult,
 } from "./types";
@@ -73,6 +79,11 @@ const COMMANDS = {
   glossaryList: "glossary_list",
   glossaryUpsert: "glossary_upsert",
   glossaryDelete: "glossary_delete",
+  reviewStart: "review_start",
+  suggestionList: "suggestion_list",
+  suggestionAccept: "suggestion_accept",
+  suggestionReject: "suggestion_reject",
+  qaReport: "qa_report",
   jobList: "job_list",
   chunkList: "chunk_list",
   chunkGet: "chunk_get",
@@ -262,6 +273,36 @@ export function glossaryUpsert(request: GlossaryUpsertRequest): Promise<Glossary
 /** Remove a term. The translator prompt stops seeing it immediately. */
 export function glossaryDelete(id: string): Promise<Ack> {
   return call<Ack>(COMMANDS.glossaryDelete, { id });
+}
+
+// --- review and QA (PLAN.md §11.4) -----------------------------------------------------------
+
+/**
+ * Enqueues the review passes for the eligible chunks of a project. A pending equivalent job is
+ * not duplicated; follow the work through `job://progress`.
+ */
+export function reviewStart(request: ReviewStartRequest): Promise<ReviewStartResult> {
+  return call<ReviewStartResult>(COMMANDS.reviewStart, { req: request });
+}
+
+/** `suggestion` rows of a project, candidates included unless filtered. */
+export function suggestionList(request: SuggestionListRequest): Promise<Suggestion[]> {
+  return call<Suggestion[]>(COMMANDS.suggestionList, { req: request });
+}
+
+/** Accept a proposal: the block translation is rewritten and the chunk recomposed. */
+export function suggestionAccept(id: string): Promise<Suggestion> {
+  return call<Suggestion>(COMMANDS.suggestionAccept, { id });
+}
+
+/** Reject a proposal without touching the translation. */
+export function suggestionReject(id: string): Promise<Suggestion> {
+  return call<Suggestion>(COMMANDS.suggestionReject, { id });
+}
+
+/** `qa_finding` rows of a project, filterable by kind, severity and chunk. */
+export function qaReport(request: QaReportRequest): Promise<QaFinding[]> {
+  return call<QaFinding[]>(COMMANDS.qaReport, { req: request });
 }
 
 // --- jobs and chunks -----------------------------------------------------------------------

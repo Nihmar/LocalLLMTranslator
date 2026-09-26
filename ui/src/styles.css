@@ -541,34 +541,7 @@
     color: #ffe9b8;
   }
 
-  /* --- diff placeholder (ReviewView, milestone M1) --- */
-  .diff-column {
-    background-color: var(--color-surface);
-    border: 1px solid var(--color-line);
-    border-radius: 0.5rem;
-    overflow: hidden;
-  }
-
-  .diff-column-head {
-    padding: 0.5rem 0.7rem;
-    border-bottom: 1px solid var(--color-line);
-    background-color: var(--color-surface-2);
-    font-size: 0.72rem;
-    font-weight: 600;
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
-    color: var(--color-muted);
-  }
-
-  .diff-body {
-    padding: 0.7rem;
-    font-family: var(--font-mono);
-    font-size: 0.74rem;
-    line-height: 1.6;
-    color: var(--color-ink-soft);
-    min-height: 11rem;
-  }
-
+  /* --- review diff (ReviewView, milestone M4) --- */
   .diff-added {
     background-color: rgba(52, 211, 153, 0.14);
     color: #a7f3d0;

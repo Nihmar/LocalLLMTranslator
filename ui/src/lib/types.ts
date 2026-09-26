@@ -375,6 +375,72 @@ export interface GlossaryUpsertRequest {
   target_lang?: string | null;
 }
 
+// --- review and QA (PLAN.md §11.4) ---------------------------------------------------------
+
+/** Row of `suggestion` (`db::models::Suggestion`); `original`/`proposed` are raw strings. */
+export interface Suggestion {
+  id: string;
+  chunk_id: string;
+  /** `editor` | `proofreader`. */
+  pass: string;
+  block_id: string | null;
+  field: string | null;
+  original: string | null;
+  proposed: string | null;
+  reason: string | null;
+  severity: string | null;
+  quote: string | null;
+  /** `pending` | `accepted` | `rejected` | `superseded`. */
+  status: string;
+  created_at: string;
+}
+
+/** Row of `qa_finding` (`db::models::QaFinding`); `details_json` is the raw column. */
+export interface QaFinding {
+  id: string;
+  project_id: string;
+  chunk_id: string | null;
+  block_id: string | null;
+  kind: string;
+  severity: string;
+  details_json: string;
+  status: string;
+  created_at: string;
+}
+
+/** Request body of `review_start` (`commands::review::ReviewStartRequest`). */
+export interface ReviewStartRequest {
+  project_id: string;
+  /** Restrict to these chunks; omitted means every eligible chunk. */
+  chunk_ids?: string[] | null;
+  chapter_id?: string | null;
+  /** `editor` | `proofreader` | `both` (default). */
+  pass?: string | null;
+  /** Also re-run the QA scan on the selected chunks. */
+  with_qa?: boolean;
+}
+
+/** Result of `review_start` (`commands::review::ReviewStartResult`). */
+export interface ReviewStartResult {
+  enqueued: number;
+}
+
+/** Request body of `suggestion_list` (`commands::review::SuggestionListRequest`). */
+export interface SuggestionListRequest {
+  project_id: string;
+  chunk_id?: string | null;
+  pass?: string | null;
+  status?: string | null;
+}
+
+/** Request body of `qa_report` (`commands::review::QaReportRequest`). */
+export interface QaReportRequest {
+  project_id: string;
+  kind?: string | null;
+  severity?: string | null;
+  chunk_id?: string | null;
+}
+
 // --- jobs ----------------------------------------------------------------------------------
 
 /** Row of `job` (`db::models::Job`); `payload_json` is the raw column. */
