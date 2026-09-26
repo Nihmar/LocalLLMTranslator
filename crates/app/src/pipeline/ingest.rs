@@ -21,6 +21,10 @@ pub struct IngestOutcome {
     pub blocks: usize,
     pub chunks: usize,
     pub warnings: Vec<String>,
+    /// Absolute path of the extracted media directory, if the source had any.
+    pub assets_dir: Option<String>,
+    /// Media hrefs as they appear in the Markdown (`assets/<name>`).
+    pub assets: Vec<String>,
 }
 
 /// Run ingestion for a project.
@@ -48,6 +52,16 @@ pub async fn run_ingest(
         .sidecar
         .ingest(source_path, &work_dir.to_string_lossy(), pdf_backend)
         .await?;
+
+    // Make the extracted media observable: the work dir is stable and per project,
+    // so the assets are not persisted in SQLite, but the run log must show them.
+    tracing::info!(
+        project_id,
+        assets = ingest.assets.len(),
+        assets_dir = ingest.assets_dir.as_deref().unwrap_or("<none>"),
+        asset_paths = ?ingest.assets,
+        "ingested document media"
+    );
 
     // 2. Parse the Markdown into stable-id blocks and chapters.
     let parsed = deps.sidecar.parse_document(&ingest.markdown_path).await?;
@@ -147,6 +161,8 @@ pub async fn run_ingest(
         blocks: parsed.blocks.len(),
         chunks: built_chunks.chunks.len(),
         warnings: ingest.warnings,
+        assets_dir: ingest.assets_dir,
+        assets: ingest.assets,
     })
 }
 

@@ -317,6 +317,14 @@ pub struct IngestResult {
     pub chapters: Vec<ChapterInfo>,
     #[serde(default)]
     pub warnings: Vec<String>,
+    /// Absolute path of the directory holding the extracted media, or `None`
+    /// when the source document carries none (see the frozen `ingest` contract).
+    #[serde(default)]
+    pub assets_dir: Option<String>,
+    /// The media hrefs exactly as they appear in the Markdown, relative to
+    /// `markdown_path`, e.g. `assets/harbour.png`.
+    #[serde(default)]
+    pub assets: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -390,6 +398,11 @@ pub struct PandocParams {
     pub template: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub css: Option<String>,
+    /// Directories the sidecar hands to pandoc via `--resource-path` so relative
+    /// targets (e.g. an image href `assets/harbour.png`) resolve. Omitted when
+    /// empty, keeping the wire form identical to the pre-M2 contract.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resource_path: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -616,6 +629,49 @@ mod tests {
         assert_eq!(parsed["id"], 1);
         assert_eq!(parsed["method"], "ping");
         assert_eq!(parsed["jsonrpc"], "2.0");
+    }
+
+    #[test]
+    fn ingest_result_parses_the_media_contract() {
+        // A document without media: the sidecar omits or nulls both keys.
+        let bare: IngestResult = serde_json::from_value(serde_json::json!({
+            "markdown_path": "/work/document.md"
+        }))
+        .unwrap();
+        assert!(bare.assets_dir.is_none());
+        assert!(bare.assets.is_empty());
+
+        let with_media: IngestResult = serde_json::from_value(serde_json::json!({
+            "markdown_path": "/work/document.md",
+            "assets_dir": "/work/assets",
+            "assets": ["assets/harbour.png"]
+        }))
+        .unwrap();
+        assert_eq!(with_media.assets_dir.as_deref(), Some("/work/assets"));
+        assert_eq!(with_media.assets, vec!["assets/harbour.png".to_string()]);
+    }
+
+    #[test]
+    fn pandoc_params_omit_an_empty_resource_path() {
+        let params = PandocParams {
+            units: Vec::new(),
+            metadata: serde_json::json!({}),
+            output_path: "/out/book.epub".into(),
+            output_format: "epub".into(),
+            ..Default::default()
+        };
+        let value = serde_json::to_value(&params).unwrap();
+        assert!(
+            value.get("resource_path").is_none(),
+            "an empty resource_path must not be serialized"
+        );
+
+        let params = PandocParams {
+            resource_path: vec!["/work".into()],
+            ..params
+        };
+        let value = serde_json::to_value(&params).unwrap();
+        assert_eq!(value["resource_path"], serde_json::json!(["/work"]));
     }
 
     #[test]

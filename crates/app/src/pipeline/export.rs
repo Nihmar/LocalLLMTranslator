@@ -1,5 +1,7 @@
 //! Export: per-chapter Markdown units, `metadata.yaml`, Pandoc build.
 
+use std::path::Path;
+
 use serde::{Deserialize, Serialize};
 
 use super::PipelineDeps;
@@ -38,13 +40,10 @@ pub async fn run_export(deps: &PipelineDeps, request: &ExportRequest) -> Result<
         .await?
         .ok_or_else(|| AppError::NotFound(format!("project {}", request.project_id)))?;
 
-    let document_id: Option<String> =
-        sqlx::query_scalar("SELECT id FROM document WHERE project_id = ?1 LIMIT 1")
-            .bind(&request.project_id)
-            .fetch_optional(pool)
-            .await?;
-    let document_id =
-        document_id.ok_or_else(|| AppError::NotFound("project has no ingested document".into()))?;
+    let document = repo::get_document_for_project(pool, &request.project_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("project has no ingested document".into()))?;
+    let document_id = document.id.clone();
 
     let chapters = repo::list_chapters(pool, &document_id).await?;
     let chunks = repo::list_chunks(pool, &document_id).await?;
@@ -113,6 +112,13 @@ pub async fn run_export(deps: &PipelineDeps, request: &ExportRequest) -> Result<
     );
     metadata.author = project.doc_author.clone();
     metadata.language = Some(project.target_lang.clone());
+    // The source document's own metadata (front matter) reaches the output too,
+    // without overriding what the project row already set.
+    match serde_json::from_str::<serde_json::Value>(&document.front_matter_json) {
+        Ok(serde_json::Value::Object(front_matter)) => metadata.merge_front_matter(&front_matter),
+        Ok(_) => {}
+        Err(error) => tracing::warn!(%error, "ignoring unparsable document front matter"),
+    }
     let _ = write_metadata_yaml(&output_dir, &metadata)?;
 
     let output_path = request.output_path.clone().unwrap_or_else(|| {
@@ -121,6 +127,10 @@ pub async fn run_export(deps: &PipelineDeps, request: &ExportRequest) -> Result<
             .to_string_lossy()
             .to_string()
     });
+
+    // Pandoc resolves the units' relative image hrefs (e.g. `assets/harbour.png`)
+    // against the directory that holds `document.md` and the extracted assets dir.
+    let resource_path = resource_paths(&document.markdown_path);
 
     let driver = PandocDriver::new(deps.sidecar.clone());
     let result = driver
@@ -131,6 +141,7 @@ pub async fn run_export(deps: &PipelineDeps, request: &ExportRequest) -> Result<
             &request.output_format,
             request.template.clone(),
             request.css.clone(),
+            resource_path,
         )
         .await?;
 
@@ -176,6 +187,23 @@ fn chunk_has_translation(chunk: &Chunk) -> bool {
 /// Default output filename: `<sanitized project name>.<format>`.
 fn export_filename(project_name: &str, output_format: &str) -> String {
     format!("{}.{}", sanitize(project_name), output_format)
+}
+
+/// Directories pandoc searches to resolve the units' relative targets.
+///
+/// The directory holding the extracted `document.md` comes first, because a
+/// media href such as `assets/harbour.png` is relative to it; the extracted
+/// `assets/` sibling is added only when the sidecar actually wrote media there.
+fn resource_paths(markdown_path: &str) -> Vec<String> {
+    let markdown_dir = Path::new(markdown_path)
+        .parent()
+        .unwrap_or_else(|| Path::new("."));
+    let mut paths = vec![markdown_dir.to_string_lossy().to_string()];
+    let assets_dir = markdown_dir.join("assets");
+    if assets_dir.is_dir() {
+        paths.push(assets_dir.to_string_lossy().to_string());
+    }
+    paths
 }
 
 /// Render chunk outputs (translated when available) into one Markdown unit.
@@ -256,6 +284,32 @@ mod tests {
     fn export_filename_has_no_stray_space_before_extension() {
         assert_eq!(export_filename("Book", "epub"), "Book.epub");
         assert_eq!(export_filename("My Book", "pdf"), "My_Book.pdf");
+    }
+
+    #[test]
+    fn resource_paths_includes_the_assets_dir_only_when_it_exists() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let work = dir.path().join("work");
+        std::fs::create_dir_all(&work).expect("work dir");
+        let markdown = work.join("document.md");
+        std::fs::write(&markdown, "![x](assets/harbour.png)\n").expect("markdown");
+        let markdown_path = markdown.to_string_lossy().to_string();
+
+        // Without extracted media, only the directory holding the markdown is searched.
+        assert_eq!(
+            resource_paths(&markdown_path),
+            vec![work.to_string_lossy().to_string()]
+        );
+
+        // With `<work>/assets` present, it is appended so `assets/...` hrefs resolve.
+        std::fs::create_dir_all(work.join("assets")).expect("assets dir");
+        assert_eq!(
+            resource_paths(&markdown_path),
+            vec![
+                work.to_string_lossy().to_string(),
+                work.join("assets").to_string_lossy().to_string(),
+            ]
+        );
     }
 
     #[test]

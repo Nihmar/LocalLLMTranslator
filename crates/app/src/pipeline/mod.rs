@@ -53,9 +53,4 @@ impl PipelineDeps {
     pub fn prompts_dir(&self, project_id: &str) -> PathBuf {
         self.project_dir(project_id).join("prompts")
     }
-
-    /// Directory holding the extracted Markdown.
-    pub fn markdown_dir(&self, project_id: &str) -> PathBuf {
-        self.project_dir(project_id).join("markdown")
-    }
 }

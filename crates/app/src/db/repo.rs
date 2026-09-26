@@ -268,6 +268,21 @@ pub async fn insert_document(pool: &SqlitePool, d: &Document) -> Result<()> {
     Ok(())
 }
 
+/// The document extracted from `project_id`'s source, if it has been ingested.
+pub async fn get_document_for_project(
+    pool: &SqlitePool,
+    project_id: &str,
+) -> Result<Option<Document>> {
+    let row = sqlx::query_as::<_, Document>(
+        "SELECT id, project_id, markdown_path, front_matter_json, extractor, extractor_version, \
+         created_at FROM document WHERE project_id = ?1 LIMIT 1",
+    )
+    .bind(project_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}
+
 pub async fn insert_chapter(pool: &SqlitePool, c: &Chapter) -> Result<()> {
     sqlx::query(
         "INSERT INTO chapter (id, document_id, order_index, title, level, block_first, block_last, \

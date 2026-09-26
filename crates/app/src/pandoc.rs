@@ -36,6 +36,27 @@ impl BookMetadata {
         }
     }
 
+    /// Reserved keys owned by the typed fields above; a source document never
+    /// overrides them, because a duplicate YAML key would shadow the real value.
+    const RESERVED_KEYS: [&'static str; 3] = ["title", "author", "language"];
+
+    /// Fold the source document's front matter into [`BookMetadata::extra`].
+    ///
+    /// The typed fields (`title`, `author`, `language`) and any key the caller
+    /// has already set explicitly win: only new, non-null keys are added, so the
+    /// project row is never silently overridden by the document.
+    pub fn merge_front_matter(&mut self, front_matter: &serde_json::Map<String, Value>) {
+        for (key, value) in front_matter {
+            if Self::RESERVED_KEYS.contains(&key.as_str()) || value.is_null() {
+                continue;
+            }
+            if self.extra.contains_key(key) {
+                continue;
+            }
+            self.extra.insert(key.clone(), value.clone());
+        }
+    }
+
     /// Render to a `metadata.yaml` document.
     pub fn to_yaml(&self) -> String {
         let mut out = String::new();
@@ -128,6 +149,7 @@ impl PandocDriver {
         output_format: &str,
         template: Option<String>,
         css: Option<String>,
+        resource_path: Vec<String>,
     ) -> Result<PandocResult> {
         let params = PandocParams {
             units,
@@ -136,6 +158,7 @@ impl PandocDriver {
             output_format: output_format.to_string(),
             template,
             css,
+            resource_path,
         };
         self.client.pandoc_build(params).await
     }
@@ -166,5 +189,63 @@ mod tests {
         assert!(yaml.contains("author: Umberto Eco"));
         assert!(yaml.contains("language: it"));
         assert!(yaml.contains("subject: novel"));
+    }
+
+    #[test]
+    fn merge_front_matter_adds_document_keys_without_overriding_explicit_ones() {
+        let mut metadata = BookMetadata::new("The Lantern Keeper");
+        metadata.author = Some("Fixture Author".into());
+        metadata.language = Some("it".into());
+        metadata
+            .extra
+            .insert("publisher".into(), Value::String("Explicit Press".into()));
+
+        let front_matter = serde_json::json!({
+            "title": "A Different Title",
+            "author": "A Different Author",
+            "language": "en",
+            "publisher": "Source Press",
+            "date": "2020",
+            "identifier": "urn:uuid:1",
+            "subject": "novel",
+            "empty": Value::Null,
+        });
+        let map = match front_matter {
+            Value::Object(map) => map,
+            other => panic!("front matter must be an object, got {other:?}"),
+        };
+        metadata.merge_front_matter(&map);
+
+        // Reserved keys and an already-set extra keep their value.
+        assert_eq!(metadata.title, "The Lantern Keeper");
+        assert_eq!(metadata.author.as_deref(), Some("Fixture Author"));
+        assert_eq!(metadata.language.as_deref(), Some("it"));
+        assert_eq!(
+            metadata.extra.get("publisher"),
+            Some(&Value::String("Explicit Press".into()))
+        );
+        // New keys, including the source document's own, reach the output.
+        assert_eq!(
+            metadata.extra.get("date"),
+            Some(&Value::String("2020".into()))
+        );
+        assert_eq!(
+            metadata.extra.get("identifier"),
+            Some(&Value::String("urn:uuid:1".into()))
+        );
+        assert_eq!(
+            metadata.extra.get("subject"),
+            Some(&Value::String("novel".into()))
+        );
+        // A null value is never carried into metadata.yaml.
+        assert!(!metadata.extra.contains_key("empty"));
+
+        let yaml = metadata.to_yaml();
+        assert!(yaml.contains("title: The Lantern Keeper"));
+        assert_eq!(yaml.matches("publisher:").count(), 1);
+        assert!(yaml.contains("date: 2020"));
+        assert!(
+            yaml.contains("identifier: urn:uuid:1") || yaml.contains("identifier: \"urn:uuid:1\"")
+        );
     }
 }
