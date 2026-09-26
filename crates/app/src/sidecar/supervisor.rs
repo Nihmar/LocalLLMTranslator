@@ -197,7 +197,23 @@ impl Supervisor {
     }
 
     fn set_status(&self, status: SidecarStatus) {
-        *self.status.lock() = status.clone();
+        let changed = {
+            let mut current = self.status.lock();
+            let changed = current.state != status.state;
+            *current = status.clone();
+            changed
+        };
+        if changed {
+            // State transitions belong in the log file: they explain why a request was
+            // rejected or retried.
+            tracing::info!(
+                state = ?status.state,
+                pid = status.pid,
+                attempts = status.attempts,
+                message = status.message.as_deref(),
+                "sidecar status"
+            );
+        }
         // Broadcast errors are fine: it means nobody is listening.
         let _ = self.status_tx.send(status);
     }
@@ -308,13 +324,17 @@ impl Supervisor {
             read_loop(BufReader::new(stdout), pending, sink).await;
         });
 
-        // stderr -> structured `log://line` events.
+        // stderr -> structured `log://line` events and the log file.
         if let Some(stderr) = stderr {
             let emitter = self.emitter.clone();
             tokio::spawn(async move {
                 let mut lines = BufReader::new(stderr).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
-                    tracing::debug!(target: "sidecar", "{line}");
+                    match classify_stderr_level(&line) {
+                        "error" => tracing::error!(target: "sidecar", "{line}"),
+                        "warn" => tracing::warn!(target: "sidecar", "{line}"),
+                        _ => tracing::debug!(target: "sidecar", "{line}"),
+                    }
                     emit_log(&*emitter, classify_stderr_level(&line), "sidecar", line);
                 }
             });

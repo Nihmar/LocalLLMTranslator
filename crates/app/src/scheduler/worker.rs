@@ -292,6 +292,13 @@ async fn run_job(inner: &Arc<Inner>, job: Job) {
         return;
     }
     emit_current_job(inner, &job.id).await;
+    tracing::info!(
+        job_id = %job.id,
+        kind = %job.kind,
+        project_id = %job.project_id,
+        "job started"
+    );
+    let started = std::time::Instant::now();
 
     let heartbeat = lease::spawn_heartbeat(
         inner.pool.clone(),
@@ -302,6 +309,7 @@ async fn run_job(inner: &Arc<Inner>, job: Job) {
 
     let outcome = inner.dispatcher.dispatch(&job).await;
     heartbeat.stop();
+    let duration_ms = started.elapsed().as_millis() as i64;
 
     match outcome {
         Ok(()) => {
@@ -309,6 +317,12 @@ async fn run_job(inner: &Arc<Inner>, job: Job) {
                 tracing::warn!(job_id = %job.id, %error, "could not complete job");
             } else {
                 emit_current_job(inner, &job.id).await;
+                tracing::info!(
+                    job_id = %job.id,
+                    kind = %job.kind,
+                    duration_ms,
+                    "job completed"
+                );
             }
         }
         Err(error) => {
@@ -328,7 +342,14 @@ async fn run_job(inner: &Arc<Inner>, job: Job) {
                             job.id, job.kind
                         ),
                     );
-                    tracing::warn!(job_id = %job.id, state, %message, "job attempt failed");
+                    tracing::warn!(
+                        job_id = %job.id,
+                        kind = %job.kind,
+                        state,
+                        duration_ms,
+                        %message,
+                        "job attempt failed"
+                    );
                 }
                 Err(record_error) => {
                     tracing::error!(job_id = %job.id, %record_error, "could not record job failure");

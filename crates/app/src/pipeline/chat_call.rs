@@ -95,6 +95,37 @@ pub async fn run_chat_call(deps: &PipelineDeps, call: &ChatCall<'_>) -> Result<S
     .await;
     let latency_ms = started.elapsed().as_millis() as i64;
 
+    // One line per call in the log file: role, model, tokens and outcome, never the
+    // prompt or the answer (those live in `llm_call`).
+    match &stream_result {
+        Ok(()) => tracing::info!(
+            role = call.role,
+            model = call.model,
+            endpoint_id = call.endpoint_id,
+            chunk_id = call.chunk_id.unwrap_or(""),
+            latency_ms,
+            finish_reason = finish_reason.as_deref().unwrap_or(""),
+            prompt_tokens = usage
+                .as_ref()
+                .and_then(|value| value.prompt_tokens)
+                .unwrap_or(0),
+            completion_tokens = usage
+                .as_ref()
+                .and_then(|value| value.completion_tokens)
+                .unwrap_or(0),
+            "llm call completed"
+        ),
+        Err(error) => tracing::warn!(
+            role = call.role,
+            model = call.model,
+            endpoint_id = call.endpoint_id,
+            chunk_id = call.chunk_id.unwrap_or(""),
+            latency_ms,
+            %error,
+            "llm call failed"
+        ),
+    }
+
     match stream_result {
         Ok(()) => {
             repo::insert_llm_call(

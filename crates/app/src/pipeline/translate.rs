@@ -47,6 +47,7 @@ pub async fn run_translate_chunk(
         Err(error) => {
             // Surface the failed attempt; the job may still be retried, in which
             // case the next run resets the chunk to `running`.
+            tracing::warn!(chunk_id, %error, "chunk translation failed");
             if let Err(mark_error) = repo::set_chunk_status(&deps.pool, chunk_id, "failed").await {
                 tracing::warn!(chunk_id, %mark_error, "could not mark chunk failed");
             }
@@ -127,6 +128,7 @@ async fn translate_chunk_inner(
             error: None,
         };
         repo::finish_chunk(pool, &outcome).await?;
+        tracing::info!(chunk_id = %chunk.id, status = "done", from_cache = true, "chunk settled");
         return Ok(TranslateOutcome {
             chunk_id: chunk.id.clone(),
             status: "done".into(),
@@ -420,6 +422,13 @@ async fn translate_chunk_inner(
         },
     )
     .await?;
+    tracing::info!(
+        chunk_id = %chunk.id,
+        status,
+        from_cache,
+        needs_review = needs_review_reason.as_deref().unwrap_or(""),
+        "chunk settled"
+    );
 
     // Rolling memory: enqueue a chapter summary once the chapter's progress
     // warrants one (PLAN.md section 8). Without an orchestrator binding this is

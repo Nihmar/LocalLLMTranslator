@@ -31,6 +31,9 @@ from typing import NoReturn, TextIO, cast
 from . import __version__, chunker, extractors, pandoc, parse, placeholders, qa
 from .blocks import Block
 
+#: Module logger; the root logger is configured once in :func:`run_stdio`.
+logger = logging.getLogger(__name__)
+
 #: JSON-RPC protocol version carried on every frame.
 JSONRPC_VERSION = "2.0"
 
@@ -398,7 +401,9 @@ def dispatch(method: str, params: JsonObject, notify: ProgressSink = _noop_progr
         raise
     except Exception as exc:
         # The transport must translate every failure: an unmapped exception would kill
-        # the loop and leave the client waiting until its timeout.
+        # the loop and leave the client waiting until its timeout. The traceback goes to
+        # stderr so the control plane can put it in the diagnostics log.
+        logger.exception("method %s failed", method)
         raise _translate(exc) from exc
 
 
@@ -489,6 +494,7 @@ def serve(reader: TextIO, writer: TextIO) -> int:
     while True:
         line = reader.readline()
         if line == "":
+            logger.info("sidecar stdin closed; exiting")
             return 0
         stripped = line.strip()
         if stripped == "":
@@ -521,6 +527,12 @@ def _protocol_stream() -> TextIO:
 def run_stdio() -> int:
     """Serve JSON-RPC on stdio until EOF, then return the exit code."""
     logging.basicConfig(level=logging.INFO, stream=sys.stderr)
+    logger.info(
+        "sidecar starting (version %s, python %s, pid %s)",
+        __version__,
+        platform.python_version(),
+        os.getpid(),
+    )
     original = sys.stdout
     protocol = _protocol_stream()
     # From here on a stray `print` in the pure modules or their libraries hits stderr

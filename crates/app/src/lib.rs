@@ -6,9 +6,11 @@
 pub mod commands;
 pub mod context;
 pub mod db;
+pub mod diagnostics;
 pub mod error;
 pub mod events;
 pub mod llm;
+pub mod logging;
 pub mod pandoc;
 pub mod pipeline;
 pub mod resources;
@@ -163,14 +165,16 @@ impl JobDispatcher for PipelineDispatcher {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    init_tracing();
-
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let handle = app.handle().clone();
-            let state = tauri::async_runtime::block_on(build_state(&handle))?;
+            // The data dir is known here, so file logging starts before any state is built
+            // and every boot message lands in the log a user can hand over.
+            let data_dir = resolve_data_dir(&handle)?;
+            logging::init(&data_dir);
+            let state = tauri::async_runtime::block_on(build_state(&handle, data_dir))?;
             app.manage(state);
             Ok(())
         })
@@ -230,6 +234,9 @@ pub fn run() {
             commands::export::export_preview,
             commands::export::export_history,
             commands::misc::open_path,
+            commands::misc::log_frontend_error,
+            commands::misc::diagnostics_paths,
+            commands::misc::diagnostics_export,
         ])
         .build(tauri::generate_context!())
         .expect("error while building LocalLLMTranslator");
@@ -256,17 +263,13 @@ fn shutdown(app: &tauri::AppHandle) {
     }
 }
 
-fn init_tracing() {
-    use tracing_subscriber::EnvFilter;
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-    let _ = tracing_subscriber::fmt().with_env_filter(filter).try_init();
+fn resolve_data_dir(app: &tauri::AppHandle) -> Result<PathBuf> {
+    app.path()
+        .app_data_dir()
+        .map_err(|error| AppError::Other(anyhow::anyhow!("no app data dir: {error}")))
 }
 
-async fn build_state(app: &tauri::AppHandle) -> Result<AppState> {
-    let data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|error| AppError::Other(anyhow::anyhow!("no app data dir: {error}")))?;
+async fn build_state(app: &tauri::AppHandle, data_dir: PathBuf) -> Result<AppState> {
     tokio::fs::create_dir_all(&data_dir).await?;
 
     let pool = db::connect(&data_dir.join("app.sqlite")).await?;
