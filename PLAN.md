@@ -668,8 +668,8 @@ Rules that make it safe to inject into every prompt:
 - The injected block carries an explicit "context only — do not add content from it" clause,
   alongside rule 6 of the translator prompt.
 - Confirmed values land where the builder already reads them: `style_guide` and `synopsis` in
-  `project_memory`, the rest as a `book_meta` JSON document, proper nouns as `glossary_term`
-  candidates and `do_not_translate` entries. The provenance travels with the value.
+  `project_memory`, the rest as a `book_meta` JSON document, accepted proper nouns as approved
+  `glossary_term` rows (or `do_not_translate` entries). The provenance travels with the value.
 - Reproducible like everything else: seeded, audited in `llm_call`, and snapshotted into the
   project.
 - Degrades cleanly: with no orchestrator model bound the step is skipped and the fields stay

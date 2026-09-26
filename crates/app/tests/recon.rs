@@ -11,22 +11,26 @@
 //! persistence, glossary reuse) without a child process.
 
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
-use anyhow::Result;
-use serde_json::Value;
+use anyhow::{bail, Context, Result};
+use async_trait::async_trait;
+use serde_json::{json, Value};
 use sqlx::SqlitePool;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use app_lib::context::budget::HeuristicCounter;
 use app_lib::context::builder::{ContextBuilder, ContextInputs};
-use app_lib::db::models::{Block, Chapter, Document, LlmEndpoint, Project, RoleBinding};
+use app_lib::db::models::{Block, Chapter, Document, Job, LlmEndpoint, Project, RoleBinding};
 use app_lib::db::{self, new_id, now, repo};
-use app_lib::error::AppError;
+use app_lib::error::{AppError, Result as AppResult};
 use app_lib::events::{sidecar_event_sink, EventEmitter, NullEmitter};
 use app_lib::pipeline::recon::{self, ConfirmRequest, ConfirmedTerm, MEMORY_KEY, META_KEY};
 use app_lib::pipeline::PipelineDeps;
 use app_lib::resources::ResourceGovernor;
+use app_lib::scheduler::queue::{self, NewJob};
+use app_lib::scheduler::{JobDispatcher, WorkerPool};
 use app_lib::sidecar::{SidecarClient, SpawnSpec, Supervisor};
 
 /// The deterministic candidate the mock model returns, shaped like
@@ -346,5 +350,82 @@ async fn without_orchestrator_binding_the_step_fails_cleanly() -> Result<()> {
     let snapshot = recon::snapshot(&pool, &project_id).await?;
     assert!(!snapshot.orchestrator_bound);
     assert!(snapshot.profile.is_none());
+    Ok(())
+}
+
+/// Dispatch `book_recon` exactly the way the production dispatcher does, so the
+/// job payload (`pasted_text`) and the job lifecycle are covered too.
+#[tokio::test]
+async fn the_book_recon_job_reaches_the_pipeline() -> Result<()> {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(sse_body()),
+        )
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir()?;
+    let (pool, deps) = deps_for(dir.path()).await?;
+    let project_id = seed_project(&pool, &server.uri(), true).await?;
+
+    let job = NewJob::new(
+        &project_id,
+        recon::JOB_KIND,
+        json!({ "pasted_text": "A page the user pasted." }),
+    );
+    let job_id = queue::enqueue(&pool, &job).await?;
+
+    struct Dispatcher {
+        deps: PipelineDeps,
+    }
+
+    #[async_trait]
+    impl JobDispatcher for Dispatcher {
+        async fn dispatch(&self, job: &Job) -> AppResult<()> {
+            assert_eq!(job.kind, recon::JOB_KIND);
+            let payload: Value = serde_json::from_str(&job.payload_json)?;
+            let pasted = payload.get("pasted_text").and_then(Value::as_str);
+            recon::run_recon(&self.deps, Some(&job.id), &job.project_id, pasted).await?;
+            Ok(())
+        }
+    }
+
+    let emitter: Arc<dyn EventEmitter> = Arc::new(NullEmitter);
+    let worker = WorkerPool::new(
+        pool.clone(),
+        Arc::new(Dispatcher { deps: deps.clone() }),
+        emitter,
+        1,
+        1,
+    );
+    worker.start();
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let state = loop {
+        let job = queue::get_job(&pool, &job_id)
+            .await?
+            .context("the job disappeared")?;
+        if matches!(job.state.as_str(), "done" | "failed" | "cancelled") {
+            break job.state;
+        }
+        if Instant::now() >= deadline {
+            worker.cancel();
+            bail!("the book_recon job did not finish in time");
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+    worker.cancel();
+    assert_eq!(state, "done", "the book_recon job failed");
+
+    let snapshot = recon::snapshot(&pool, &project_id).await?;
+    assert!(
+        snapshot.profile.is_some(),
+        "the job left no candidate profile"
+    );
+    assert!(snapshot.running_job.is_none());
     Ok(())
 }

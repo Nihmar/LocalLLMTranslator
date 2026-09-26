@@ -143,7 +143,7 @@ Commands: `project_list`, `project_create`, `project_get`, `project_delete`,
 
 `recon_start` runs the `book_recon` job (candidate book profile, PLAN.md §9.4); `recon_get`
 reads it back together with the confirmed memory values and the glossary; `recon_confirm` writes
-the confirmed fields into `project_memory` and the proper-noun candidates into `glossary_term`.
+the confirmed fields into `project_memory` and the accepted proper nouns into `glossary_term`.
 No new event: the job lifecycle is announced on `job://progress`.
 
 Events: `job://progress`, `log://line`, `metrics://tick`, `sidecar://status`,
