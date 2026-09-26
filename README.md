@@ -7,12 +7,13 @@ review → typesetting.
 Everything works **offline**. No telemetry, no analytics, no network calls other than the
 `llama-server` endpoints you configure.
 
-> **Status: M0 and M1 complete.** The skeleton runs end to end: a real EPUB goes through the
-> Python sidecar (extract → blocks → chunks → placeholders), is translated against a
-> `llama-server` endpoint, persisted, resumed after a crash and exported to EPUB and PDF. An
-> end-to-end test drives exactly that path with the deterministic fake model and fails unless
-> the structure survives and the output is free of placeholder tokens. The desktop app is wired
-> but has not been exercised by hand. See [Milestones](#milestones).
+> **Status: M0, M1 and M2 complete, M3 underway.** The skeleton runs end to end: a real EPUB
+> goes through the Python sidecar (extract → blocks → chunks → placeholders), is translated
+> against a `llama-server` endpoint, persisted, resumed after a crash and exported to EPUB and
+> PDF with its images, footnotes and tables intact. Book reconnaissance (PLAN.md §9.4) is
+> implemented: the orchestrator role proposes a candidate profile from local evidence only, the
+> user confirms it field by field, and the confirmed style guide and synopsis become the stable
+> head of every translation prompt. See [Milestones](#milestones).
 
 ---
 
@@ -51,6 +52,17 @@ Plain text never travels through the pipeline: an indexed structure always does.
   placeholders" is built on.
 - **Stable prefix**: the system message is byte-identical for every chunk of the same book, so
   `llama-server` reuses its KV cache and from the second chunk on the prefill is almost free.
+
+### Book profile
+
+An empty "style guide" box is a bad interface, so M3 opens with *book reconnaissance*. The
+`orchestrator` role receives local evidence only — the extractor metadata, the incipit and the
+opening paragraphs of the chapters, and optionally text you pasted yourself — and returns a
+**candidate** profile (genre, audience, era, narrative voice, register, style notes, themes,
+synopsis, proper nouns) with the basis of every field. Nothing enters the translation prompts
+until you confirm the fields: then the style guide and synopsis land in the project memory the
+context builder already reads, and the accepted names become glossary terms. With no
+orchestrator model bound the fields stay editable by hand. The app never fetches a page.
 
 The full architecture, the database schema and the IPC contract are in [`PLAN.md`](./PLAN.md).
 The development conventions are in [`AGENTS.md`](./AGENTS.md).
@@ -118,6 +130,7 @@ cd sidecar && uv run pytest tests/test_chunker.py -v       # chunker invariants
 cd sidecar && uv run pytest tests/test_extractors.py -v    # epub/pdf/markdown ingestion
 cd sidecar && uv run pytest tests/test_rpc.py -v           # json-rpc transport over stdio
 cargo test                                                 # queue, leases, budget, SSE, RPC
+cargo test --test recon -- --nocapture                     # book reconnaissance end to end
 cargo test --test walking_skeleton -- --nocapture          # end-to-end, real sidecar
 cd ui && npm run test                                      # optional IPC unit tests
 ```
@@ -167,16 +180,18 @@ tools/          Fake llama-server and fixture generator
 |---|---|---|
 | **M0** | Repo, CI, Tauri window, sidecar, SQLite migrations | ✅ |
 | **M1** | Walking skeleton: EPUB → Markdown → blocks → chunks → translation → Pandoc | ✅ |
-| M2 | Robust EPUB/PDF ingestion, footnotes, tables, images | ⬜ |
-| M3 | Glossary, synopsis, rolling summaries, two-level cache | ⬜ |
+| M2 | Robust EPUB/PDF ingestion, footnotes, tables, images | ✅ |
+| M3 | Glossary, synopsis, rolling summaries, two-level cache | 🟡 reconnaissance, glossary context and the two-level cache are in; rolling chapter summaries and `/tokenize` are next |
 | M4 | Bilingual review (editor + proofreader), diff, QA report | ⬜ |
 | M5 | Export and typesetting with templates and Lua filters | ⬜ |
 | M6 | Parallel sub-agents with VRAM budget and serial degradation | ⬜ |
 | M7 | Packaging (PyInstaller + Tauri bundle) | ⬜ |
 
-Known gaps, next up: `estimate_tokens` and `qa_check` exist on both sides of the wire but are
-not wired into the pipeline yet (milestones M3 and M4), the bilingual review UI is still a
-placeholder, and PDF extraction is only as good as `pymupdf4llm` on a given document (M2).
+Known gaps, next up: rolling chapter summaries are not generated yet and `/tokenize` is not
+wired into the budget (the chunk budget is still the documented 6000-token default), `qa_check`
+exists on both sides of the wire but is not wired into the pipeline (M4), the bilingual review
+UI is still a placeholder, and PDF extraction is only as good as `pymupdf4llm` on a given
+document.
 
 ## Product constraints
 
