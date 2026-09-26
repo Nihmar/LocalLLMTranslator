@@ -139,6 +139,11 @@ Commands: `project_list`, `project_create`, `project_get`, `project_delete`,
 `role_binding_list`, `role_binding_set`, `ingest_start`, `translation_start`, `translation_pause`,
 `translation_cancel`, `recon_start`, `recon_get`, `recon_confirm`,
 `glossary_list`, `glossary_upsert`, `glossary_delete`,
+`series_list`, `series_create`, `series_get`, `series_update`, `series_delete`,
+`project_set_series`,
+`series_glossary_list`, `series_glossary_upsert`, `series_glossary_delete`,
+`series_variant_upsert`, `series_variant_delete`, `series_promote_term`,
+`series_export`, `series_import`,
 `review_start`, `suggestion_list`, `suggestion_accept`, `suggestion_reject`, `qa_report`,
 `job_list`, `chunk_list`, `chunk_get`, `metrics_get`, `sidecar_status`,
 `export_build`, `export_preview`, `export_history`, `open_path`.
@@ -151,6 +156,19 @@ takes `{project_id}`. Candidates proposed by the reconnaissance and the summariz
 edited or rejected here; the translator prompt only ever sees non-rejected terms, and a proposal
 that conflicts with an existing rendering surfaces as `status='conflict'` plus a
 `qa_finding(kind='glossary_conflict')`.
+
+A project may belong to a `series`: the translator prompt sees the **effective glossary**, i.e.
+the project's own terms first and then the series terms, with a project term overriding the
+series rendering for the same source (aliases of a series term are matched too).
+`project_set_series` takes `{project_id, series_id?, series_order?}`; a series pins the
+source/target language pair its books share. Series terms live in `series_glossary_term`:
+`series_glossary_upsert` takes the same shape as `glossary_upsert` with `series_id` instead of
+`project_id` and returns the persisted row, `series_variant_upsert` takes `{term_id, text}` and
+adds a surface form, `series_promote_term` copies a project term into its series (a different
+existing rendering is kept and flagged, never overwritten). Any series term change opens a
+`glossary_conflict` finding for every member book that renders the same source differently.
+`series_export`/`series_import` move a series between machines and merge on import by revision:
+a differing rendering becomes `status='conflict'`, never a silent drop.
 
 `review_start` takes `{req: {project_id, chunk_ids?, chapter_id?, pass?, with_qa?}}`, where `pass`
 is `editor` (default `both`, also `proofreader`), and enqueues the matching `edit_chunk` /

@@ -260,6 +260,8 @@ CREATE TABLE project (
   source_path TEXT NOT NULL, source_hash TEXT NOT NULL,
   source_format TEXT NOT NULL, source_lang TEXT, target_lang TEXT NOT NULL,
   doc_title TEXT, doc_author TEXT,
+  series_id TEXT REFERENCES series(id) ON DELETE SET NULL,
+  series_order INTEGER,
   prompts_snapshot_dir TEXT,            -- copy of the prompts used → reproducibility
   settings_json TEXT NOT NULL DEFAULT '{}',
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL
@@ -341,6 +343,40 @@ CREATE TABLE glossary_term (
   UNIQUE(project_id, source_lang, target_lang, source)
 );
 
+-- ---- series: the shared canon (PLAN.md §9.5) --------------------------------
+
+CREATE TABLE series (
+  id TEXT PRIMARY KEY, name TEXT NOT NULL,
+  source_lang TEXT, target_lang TEXT,       -- pinned pair every member book shares
+  settings_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+
+CREATE TABLE series_glossary_term (
+  id TEXT PRIMARY KEY, series_id TEXT NOT NULL REFERENCES series(id) ON DELETE CASCADE,
+  source_lang TEXT, target_lang TEXT,
+  source TEXT NOT NULL, target TEXT NOT NULL, note TEXT,
+  kind TEXT NOT NULL DEFAULT 'term',        -- term|proper_noun|do_not_translate
+  origin TEXT NOT NULL DEFAULT 'manual',    -- manual|proposed|imported|promoted
+  revision INTEGER NOT NULL DEFAULT 1,      -- optimistic lock
+  status TEXT NOT NULL DEFAULT 'approved',  -- approved|candidate|conflict|rejected
+  UNIQUE(series_id, source_lang, target_lang, source)
+);
+
+CREATE TABLE series_glossary_variant (      -- surface forms: "the Keeper", "Keeper's"
+  id TEXT PRIMARY KEY,
+  term_id TEXT NOT NULL REFERENCES series_glossary_term(id) ON DELETE CASCADE,
+  text TEXT NOT NULL,
+  UNIQUE(term_id, text)
+);
+
+CREATE TABLE series_memory (
+  series_id TEXT NOT NULL REFERENCES series(id) ON DELETE CASCADE,
+  key TEXT NOT NULL, value TEXT NOT NULL,
+  revision INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL,
+  PRIMARY KEY (series_id, key)              -- style_guide, synopsis, canon
+);
+
 CREATE TABLE project_memory (
   project_id TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL,
   revision INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL,
@@ -394,8 +430,9 @@ CREATE TABLE translation_cache (
 
 CREATE TABLE translation_memory (           -- reuse of identical blocks
   content_hash TEXT NOT NULL, model TEXT NOT NULL, target_lang TEXT NOT NULL,
+  glossary_hash TEXT NOT NULL DEFAULT '',   -- effective glossary the block was made with
   text_md TEXT NOT NULL, hits INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL,
-  PRIMARY KEY (content_hash, model, target_lang)
+  PRIMARY KEY (content_hash, model, target_lang, glossary_hash)
 );
 ```
 
@@ -719,6 +756,49 @@ Rules that make it safe to inject into every prompt:
   prompts until `recon_confirm` runs. Progress and failures travel on the existing `job://progress`
   and `log://line` events — no new sidecar method and no new event.
 
+### 9.5 Series — a shared canon across books
+
+A series (a fantasy saga, a trilogy, a collection with recurring characters) needs one
+terminology that outlives a single book. The project glossary stays authoritative for its own
+book, and a series adds a shared layer that **evolves after the books are translated**:
+
+- **`series`** owns the pinned language pair (`source_lang`, `target_lang`) every member book
+  shares, a name and free-form settings. `project.series_id` + `project.series_order` place a
+  book in the saga; the series is optional (a standalone book is exactly what exists today).
+- **Glossary resolution, no copies.** The prompt sees the *effective* glossary: project terms
+  first, then series terms, with a project term **overriding** the series rendering for the same
+  source. Nothing is copied at creation time, so editing a series term immediately reaches every
+  book, and an override stays an explicit, per-book decision.
+- **Aliases and variants.** `series_glossary_variant` lists the surface forms of a term
+  (`Keeper`, `the Keeper`, `Keeper's`). Filtering for "the terms present in this chunk" matches
+  the main source **or any variant** with the same word-boundary rule; the prompt still renders
+  the canonical `source => target` pair, so the model is not asked to infer anything.
+- **Series memory.** `series_memory` holds `style_guide`, `synopsis` and any canon document.
+  They are budgeted below the book-level ones (a book's own style guide wins; the series
+  synopsis sits under the book synopsis) and are visible to the reconnaissance as evidence to
+  promote into.
+- **Consistency when the canon changes.** Adding or editing a series term opens a
+  `qa_finding(kind='glossary_conflict')` for every member book whose own glossary renders the
+  same source differently, deduplicated per term; the book override keeps winning until the
+  user resolves it. `translation_memory` rows carry the hash of the effective glossary they
+  were produced with, so a glossary change stops reusing blocks translated under the old
+  canon (the exact `translation_cache` already keys on `prompt_hash`, which includes the
+  glossary text).
+- **Bundles.** A `.llmtz` stays self-contained: it snapshots the resolved series glossary in
+  the archive. Series export/import (`series_export`/`series_import`) moves the canon between
+  machines and **merges** on import by revision — same rendering updates the row, a different
+  rendering is kept with `status='conflict'` and a finding, never silently dropped.
+- No sidecar change: the series is control-plane state (DB + prompt assembly), and the sidecar
+  keeps receiving the already-filtered glossary.
+
+IPC: `series_list`, `series_create`, `series_get`, `series_update`, `series_delete`,
+`project_set_series`, `series_glossary_list`, `series_glossary_upsert`,
+`series_glossary_delete`, `series_variant_upsert`, `series_variant_delete`,
+`series_export`, `series_import`. Events: none new — the existing `job://progress` and
+`log://line` cover the work, and conflicts are read through `qa_report`.
+
+Milestones (S1–S5) are in §13.
+
 ---
 
 ## 10. Concurrency and sub-agents
@@ -819,6 +899,10 @@ what makes it safe to restart it and re-send the in-flight requests.
 
 - Commands: `project_*`, `endpoint_*`, `role_binding_*`, `ingest_start`, `translation_start/pause/resume/cancel`,
   `recon_start`, `recon_get`, `recon_confirm`, `glossary_list`, `glossary_upsert`, `glossary_delete`,
+  `series_list`, `series_create`, `series_get`, `series_update`, `series_delete`, `project_set_series`,
+  `series_glossary_list`, `series_glossary_upsert`, `series_glossary_delete`,
+  `series_variant_upsert`, `series_variant_delete`, `series_promote_term`,
+  `series_export`, `series_import`,
   `job_list`, `chunk_get`, `review_start`, `suggestion_list/accept/reject`, `qa_report`,
   `export_build`, `export_preview`, `export_history`, `metrics_get`.
 - Events: `job://progress`, `log://line`, `metrics://tick`, `sidecar://status`,
@@ -849,6 +933,11 @@ no-secrets-in-the-database rule already holds.
 | **M5** | Export and typesetting: per-chapter split, `metadata.yaml`, Pandoc/CSS/LaTeX templates, Lua filters for footnotes and tables, preview, selective rebuild | Readable PDF and EPUB with table of contents, footnotes and images |
 | **M6** | Concurrency and sub-agents: queue with lease, ResourceGovernor, serial degradation, glossary with optimistic lock and merge | The sub-agents activate only with sufficient VRAM/slots and degrade without errors |
 | **M7** | Packaging: PyInstaller onedir, Tauri bundle (deb/AppImage/dmg/msi), guided first launch, export/import `.llmtz`, docs | AppImage and bundle launchable on a clean machine |
+| **S1** | Series entity + glossary resolution: `series`, `series_glossary_term`, variants, `project.series_id`, effective glossary (project overrides series), glossary hash in `translation_memory` | Two books of the same series translate a recurring term identically; a book override wins and is documented |
+| **S2** | Series glossary lifecycle: promotion from a book, cross-book conflict findings, `series_glossary_*`/`series_promote_term` commands, Series UI (list, glossary, conflicts) | Changing a series term after two books are translated surfaces a resolvable conflict on the old book |
+| **S3** | Series memory: `series_memory` style guide and synopsis injected below the book-level ones; merge from `book_recon` into the series | Both books of the series prompt with the shared profile without losing their own |
+| **S4** | Consistency at scale: alias/variant matching in the filter, cross-book QA scan, series export/import with merge-by-revision | A term rename is auditable across every member book, and importing a series bundle never drops a differing rendering |
+| **S5** | Optional `series_recon` job on the orchestrator role: series synopsis and canonical character sheet | — |
 
 Dependencies: M1 unblocks everything; M3 comes before M4 (the editor uses the glossary and
 context); M6 after M3 (concurrency requires the versioned glossary).
