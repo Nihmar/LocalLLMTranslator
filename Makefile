@@ -58,5 +58,6 @@ build: ## Build release bundle (sidecar onedir + Tauri)
 clean: ## Remove build artifacts
 	rm -rf $(SIDECAR)/.venv $(SIDECAR)/.pytest_cache $(SIDECAR)/.ruff_cache
 	rm -rf $(SIDECAR)/build $(SIDECAR)/dist
+	find $(SIDECAR)/packaging -mindepth 2 ! -name .gitkeep -delete 2>/dev/null || true
 	rm -rf $(UI)/node_modules $(UI)/dist
 	rm -rf $(RUST)/target

@@ -49,3 +49,7 @@ tools/fixtures/
 *.swp
 .DS_Store
 Thumbs.db
+
+# --- Packaged sidecar (built by sidecar/build_sidecar.py) ---
+sidecar/packaging/llmtranslator_sidecar/*
+!sidecar/packaging/llmtranslator_sidecar/.gitkeep

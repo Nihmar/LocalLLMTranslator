@@ -21,7 +21,9 @@ Everything works **offline**. No telemetry, no analytics, no network calls other
 > and a build history, with unchanged builds skipped and single chapters buildable standalone.
 > Concurrency is per endpoint: the scheduler claims a job only when its role has a free slot,
 > degrades to serial with an explicit reason when VRAM or slots are unknown, retries sink behind
-> fresh work, and concurrent glossary proposals never overwrite a rendering. See
+> fresh work, and concurrent glossary proposals never overwrite a rendering. Packaging ships the
+> sidecar as a PyInstaller `onedir` executable, bundles it with the prompts and the pandoc assets
+> as a Tauri resource, and lets a project travel as a `.llmtz` archive. See
 > [Milestones](#milestones).
 
 ---
@@ -208,14 +210,43 @@ tools/          Fake llama-server and fixture generator
 | M4 | Bilingual review (editor + proofreader), diff, QA report | ✅ |
 | M5 | Export and typesetting with templates and Lua filters | ✅ |
 | M6 | Parallel sub-agents with VRAM budget and serial degradation | ✅ |
-| M7 | Packaging (PyInstaller + Tauri bundle) | ⬜ |
+| M7 | Packaging (PyInstaller + Tauri bundle) | ✅ |
 
-Known gaps, next up: M7 owns the packaging — PyInstaller `onedir`, the Tauri bundle, the guided
-first launch and the `.llmtz` export/import — and a bundle must declare the pandoc assets as
-resources (they resolve from `LLMTRANSLATOR_PANDOC_DIR`, the Tauri resource directory or the
-repository); the sidecar's `estimate_tokens` route is intentionally unused because the control
-plane counts exactly via `/tokenize` with a built-in heuristic fallback; PDF extraction is only
-as good as `pymupdf4llm` on a given document.
+Known gaps, worth knowing rather than blocking: the sidecar's `estimate_tokens` route is
+intentionally unused because the control plane counts exactly via `/tokenize` with a built-in
+heuristic fallback; PDF extraction is only as good as `pymupdf4llm` on a given document; the
+bundled sidecar is large (~190 MB compressed) because PyMuPDF, NumPy and ONNX Runtime travel
+with it; and the release bundle has only been built and inspected on Linux, so the macOS and
+Windows packaging still needs a real run on those machines.
+
+## Packaging
+
+```sh
+make build    # sidecar onedir (PyInstaller) + Tauri bundle
+```
+
+`make build` runs `uv run --extra package python -m build_sidecar`, which produces
+`sidecar/packaging/llmtranslator_sidecar/` (onedir: faster start-up and fewer antivirus false
+positives than `onefile`), then `cargo tauri build`. The directory is tracked through a
+`.gitkeep`, so `cargo check` works before the sidecar was ever built. The Tauri resources declared
+in `crates/app/tauri.conf.json` ship that directory, `prompts/` and the `pandoc/` template/
+filter/style directories, so a packaged app finds the sidecar, the prompt defaults and the
+typesetting assets without any environment variable. Verified on Linux: a debug `deb` bundle
+contains all three and the packaged sidecar answers a JSON-RPC `ping`. macOS and Windows still
+need a real bundling run on those machines.
+
+On a development machine the app falls back to `python -m llmtranslator_sidecar`
+(`LLMTRANSLATOR_SIDECAR` overrides the path) and resolves the pandoc assets from the repository,
+so `make dev` needs no packaging step.
+
+### Project bundles (`.llmtz`)
+
+Each project card offers **Esporta .llmtz**, and the header offers **Importa .llmtz**. The archive
+is a ZIP with `manifest.json` (format version, app version, export time), a `VACUUM INTO` snapshot
+of the database, the project's `work/` (Markdown and extracted media), its `output/` and the
+`prompts/` snapshot. Import extracts it under the data directory, copies the project-owned rows
+and rewrites the absolute paths to the local ones; the transient queue and the export cache do
+not travel, and an existing project id is rejected instead of overwritten.
 
 ## Product constraints
 

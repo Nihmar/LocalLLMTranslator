@@ -32,7 +32,7 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "../../sidecar/dist/llmtranslator_sidecar": "llmtranslator_sidecar",
+      "../../sidecar/packaging/llmtranslator_sidecar": "llmtranslator_sidecar",
       "../../prompts": "prompts",
       "../../pandoc/templates": "pandoc/templates",
       "../../pandoc/filters": "pandoc/filters",
