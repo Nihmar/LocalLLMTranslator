@@ -12,29 +12,24 @@ import {
   formatDuration,
   formatEta,
   formatNumber,
-  formatRelative,
   formatThroughput,
-  formatTokens,
   shortId,
   truncate,
 } from "../lib/format";
 import { jobList, metricsGet, toErrorMessage } from "../lib/ipc";
-import type { Job, JobKind, JobState, Metrics, Project } from "../lib/types";
+import type { Job, Metrics, Project } from "../lib/types";
 import type { ViewId } from "../App";
 
 /**
  * Job dashboard: queue progress, ETA, resources and the live log (`PLAN.md` §11, "Dashboard job").
  *
- * The ETA is never a constant. It is derived from observed throughput only:
+ * The ETA is never a constant. It is derived from observed throughput only: distinct
+ * `translate_chunk` chunks that this page has watched reach a terminal state, over the
+ * wall-clock time since the first `job://progress` event. When nothing has completed yet, the
+ * page says the estimate is not available instead of inventing a number.
  *
- * 1. preferred source — the scheduler's own counters (`metrics_get` / `metrics://tick`):
- *    `elapsed_ms / chunks_done * chunks_remaining`;
- * 2. fallback for the window between the start of a run and the first metrics tick — what this
- *    page has actually watched: distinct chunks reaching a terminal state since the first
- *    `job://progress` event, over the wall-clock time since that event.
- *
- * When neither source has a completed chunk yet, the page says the estimate is not available
- * instead of inventing a number.
+ * `job://progress` carries one job row, so it is still treated as an invalidation trigger: the
+ * queue is refetched through `job_list` rather than patched from a single transition.
  */
 
 export interface JobsViewProps {
@@ -43,9 +38,23 @@ export interface JobsViewProps {
 }
 
 const JOB_LIMIT = 1000;
-const TERMINAL_STATES: ReadonlySet<JobState> = new Set(["done", "failed", "cancelled"]);
+const TERMINAL_STATES: ReadonlySet<string> = new Set(["done", "failed", "cancelled"]);
 
-const KIND_LABELS: Readonly<Record<JobKind, string>> = {
+/** The chunk a translate job belongs to lives in its payload, not on the job row. */
+function payloadChunkId(payloadJson: string): string | null {
+  try {
+    const parsed: unknown = JSON.parse(payloadJson);
+    if (typeof parsed === "object" && parsed !== null) {
+      const value = (parsed as { chunk_id?: unknown }).chunk_id;
+      return typeof value === "string" ? value : null;
+    }
+  } catch {
+    // A malformed payload must not break the progress trigger.
+  }
+  return null;
+}
+
+const KIND_LABELS: Readonly<Record<string, string>> = {
   ingest: "Ingestione",
   translate_chunk: "Traduzione chunk",
   summarize: "Riassunto",
@@ -55,7 +64,7 @@ const KIND_LABELS: Readonly<Record<JobKind, string>> = {
   export_unit: "Export",
 };
 
-const STATE_FILTERS: ReadonlyArray<{ value: JobState | "all"; label: string }> = [
+const STATE_FILTERS: ReadonlyArray<{ value: string; label: string }> = [
   { value: "all", label: "Tutti gli stati" },
   { value: "pending", label: "In attesa" },
   { value: "leased", label: "Assegnati" },
@@ -65,16 +74,14 @@ const STATE_FILTERS: ReadonlyArray<{ value: JobState | "all"; label: string }> =
   { value: "cancelled", label: "Annullati" },
 ];
 
-const KIND_FILTERS: ReadonlyArray<{ value: JobKind | "all"; label: string }> = [
+const KIND_FILTERS: ReadonlyArray<{ value: string; label: string }> = [
   { value: "all", label: "Tutti i tipi" },
-  { value: "ingest", label: KIND_LABELS.ingest },
-  { value: "translate_chunk", label: KIND_LABELS.translate_chunk },
-  { value: "summarize", label: KIND_LABELS.summarize },
-  { value: "edit_chunk", label: KIND_LABELS.edit_chunk },
-  { value: "proofread_chunk", label: KIND_LABELS.proofread_chunk },
-  { value: "qa_scan", label: KIND_LABELS.qa_scan },
-  { value: "export_unit", label: KIND_LABELS.export_unit },
+  ...Object.entries(KIND_LABELS).map(([value, label]) => ({ value, label })),
 ];
+
+function kindLabel(kind: string): string {
+  return KIND_LABELS[kind] ?? kind;
+}
 
 /** Re-renders on an interval while `active`, so elapsed time and ETA keep moving. */
 function useTicker(active: boolean, intervalMs = 1000): number {
@@ -105,8 +112,8 @@ export function JobsView({ project, onNavigate }: JobsViewProps) {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [stateFilter, setStateFilter] = useState<JobState | "all">("all");
-  const [kindFilter, setKindFilter] = useState<JobKind | "all">("all");
+  const [stateFilter, setStateFilter] = useState("all");
+  const [kindFilter, setKindFilter] = useState("all");
   const [metrics, setMetrics] = useState<Metrics | null>(null);
   const [metricsError, setMetricsError] = useState<string | null>(null);
 
@@ -139,12 +146,11 @@ export function JobsView({ project, onNavigate }: JobsViewProps) {
   const loadMetrics = useCallback(async () => {
     setMetricsError(null);
     try {
-      const snapshot = await metricsGet(projectId);
-      setMetrics(snapshot);
+      setMetrics(await metricsGet());
     } catch (loadError) {
       setMetricsError(toErrorMessage(loadError));
     }
-  }, [projectId]);
+  }, []);
 
   useEffect(() => {
     void load();
@@ -154,52 +160,31 @@ export function JobsView({ project, onNavigate }: JobsViewProps) {
     void loadMetrics();
   }, [loadMetrics]);
 
-  useEffect(
-    () =>
-      onMetricsTick((snapshot) => {
-        if (projectId !== null && snapshot.project_id !== null && snapshot.project_id !== projectId) {
-          return;
-        }
-        setMetrics(snapshot);
-      }),
-    [projectId],
-  );
+  useEffect(() => onMetricsTick(() => {
+    void loadMetrics();
+  }), [loadMetrics]);
 
-  // Live job state: one event patches exactly one row.
+  // Live queue state: the event is a trigger, so the queue is refetched rather than patched.
   useEffect(
     () =>
       onJobProgress((event) => {
-        if (projectId === null || event.project_id !== projectId) {
-          return;
-        }
-
         setSessionStartedAt((current) => current ?? Date.now());
 
-        setJobs((current) =>
-          current.map((job) =>
-            job.id === event.job_id
-              ? {
-                  ...job,
-                  state: event.state,
-                  attempts: event.attempts,
-                  last_error: event.error,
-                  finished_at: TERMINAL_STATES.has(event.state)
-                    ? (job.finished_at ?? event.updated_at)
-                    : job.finished_at,
-                }
-              : job,
-          ),
-        );
-
-        if (event.kind === "translate_chunk" && TERMINAL_STATES.has(event.state)) {
-          const key = event.chunk_id ?? event.job_id;
-          if (!finishedIds.current.has(key)) {
-            finishedIds.current.add(key);
-            setSessionFinished(finishedIds.current.size);
-          }
+        const chunkId = payloadChunkId(event.payload_json);
+        if (
+          event.kind === "translate_chunk" &&
+          chunkId !== null &&
+          TERMINAL_STATES.has(event.state) &&
+          !finishedIds.current.has(chunkId)
+        ) {
+          finishedIds.current.add(chunkId);
+          setSessionFinished(finishedIds.current.size);
         }
+
+        void load();
+        void loadMetrics();
       }),
-    [projectId],
+    [load, loadMetrics],
   );
 
   // The observation window belongs to one project only.
@@ -210,16 +195,9 @@ export function JobsView({ project, onNavigate }: JobsViewProps) {
   }, [projectId]);
 
   const counts = useMemo(() => {
-    const result: Record<JobState, number> = {
-      pending: 0,
-      leased: 0,
-      running: 0,
-      done: 0,
-      failed: 0,
-      cancelled: 0,
-    };
+    const result: Record<string, number> = {};
     for (const job of jobs) {
-      result[job.state] += 1;
+      result[job.state] = (result[job.state] ?? 0) + 1;
     }
     return result;
   }, [jobs]);
@@ -234,28 +212,13 @@ export function JobsView({ project, onNavigate }: JobsViewProps) {
     [translateJobs],
   );
 
-  const activeJobs = counts.pending + counts.leased + counts.running;
+  const activeJobs =
+    (counts.pending ?? 0) + (counts.leased ?? 0) + (counts.running ?? 0);
   const now = useTicker(activeJobs > 0);
 
-  const throughput = metrics?.throughput ?? null;
-  const sessionElapsedMs =
-    sessionStartedAt === null ? 0 : Math.max(0, now - sessionStartedAt);
+  const sessionElapsedMs = sessionStartedAt === null ? 0 : Math.max(0, now - sessionStartedAt);
 
   const eta = useMemo((): EtaView => {
-    if (throughput !== null && throughput.chunks_done > 0 && throughput.elapsed_ms > 0) {
-      const total = throughput.chunks_total > 0 ? throughput.chunks_total : translateTotal;
-      const etaMs = estimateRemainingMs(throughput.chunks_done, total, throughput.elapsed_ms);
-      return {
-        etaMs,
-        source:
-          etaMs === null
-            ? "Stima non disponibile: la coda risulta già conclusa."
-            : `Stima dal throughput reale del scheduler: ${formatNumber(
-                throughput.chunks_done,
-              )} chunk in ${formatDuration(throughput.elapsed_ms)}.`,
-      };
-    }
-
     if (sessionFinished > 0 && sessionElapsedMs > 0) {
       const total = translateTotal > 0 ? translateTotal : sessionFinished;
       const etaMs = estimateRemainingMs(sessionFinished, total, sessionElapsedMs);
@@ -275,21 +238,11 @@ export function JobsView({ project, onNavigate }: JobsViewProps) {
       source:
         "Stima non disponibile: nessun chunk è ancora stato completato, quindi non esiste un throughput da cui derivarla.",
     };
-  }, [throughput, sessionFinished, sessionElapsedMs, translateTotal]);
+  }, [sessionFinished, sessionElapsedMs, translateTotal]);
 
   const observedThroughput =
-    throughput !== null && throughput.chunks_done > 0
-      ? formatThroughput(throughput.chunks_done, throughput.elapsed_ms)
-      : sessionFinished > 0
-        ? formatThroughput(sessionFinished, sessionElapsedMs)
-        : "—";
-
-  const observedElapsed =
-    throughput !== null && throughput.elapsed_ms > 0
-      ? formatDuration(throughput.elapsed_ms)
-      : sessionElapsedMs > 0
-        ? formatDuration(sessionElapsedMs)
-        : "—";
+    sessionFinished > 0 ? formatThroughput(sessionFinished, sessionElapsedMs) : "—";
+  const observedElapsed = sessionElapsedMs > 0 ? formatDuration(sessionElapsedMs) : "—";
 
   const filteredJobs = useMemo(
     () =>
@@ -375,23 +328,25 @@ export function JobsView({ project, onNavigate }: JobsViewProps) {
             <div className="grid grid-cols-3 gap-2 xl:grid-cols-6">
               <div className="stat-tile">
                 <div className="stat-label">In attesa</div>
-                <div className="stat-value">{formatNumber(counts.pending)}</div>
+                <div className="stat-value">{formatNumber(counts.pending ?? 0)}</div>
               </div>
               <div className="stat-tile">
                 <div className="stat-label">In corso</div>
-                <div className="stat-value">{formatNumber(counts.running + counts.leased)}</div>
+                <div className="stat-value">
+                  {formatNumber((counts.running ?? 0) + (counts.leased ?? 0))}
+                </div>
               </div>
               <div className="stat-tile">
                 <div className="stat-label">Completati</div>
-                <div className="stat-value">{formatNumber(counts.done)}</div>
+                <div className="stat-value">{formatNumber(counts.done ?? 0)}</div>
               </div>
               <div className="stat-tile">
                 <div className="stat-label">Falliti</div>
-                <div className="stat-value">{formatNumber(counts.failed)}</div>
+                <div className="stat-value">{formatNumber(counts.failed ?? 0)}</div>
               </div>
               <div className="stat-tile">
                 <div className="stat-label">Annullati</div>
-                <div className="stat-value">{formatNumber(counts.cancelled)}</div>
+                <div className="stat-value">{formatNumber(counts.cancelled ?? 0)}</div>
               </div>
               <div className="stat-tile">
                 <div className="stat-label">Tempo stimato</div>
@@ -415,23 +370,14 @@ export function JobsView({ project, onNavigate }: JobsViewProps) {
                 </div>
               </div>
               <div className="stat-tile">
-                <div className="stat-label">Latenza media</div>
+                <div className="stat-label">Parallelismo</div>
                 <div className="stat-value" style={{ fontSize: "0.85rem" }}>
-                  {throughput === null || throughput.avg_latency_ms === null
-                    ? "—"
-                    : formatDuration(throughput.avg_latency_ms)}
+                  {metrics === null ? "—" : formatNumber(metrics.suggested_parallel)}
                 </div>
               </div>
             </div>
 
-            <p className="text-[0.72rem] text-faint">
-              {eta.source}
-              {throughput === null
-                ? ""
-                : ` Token: ${formatTokens(throughput.tokens_prompt)} in ingresso, ${formatTokens(
-                    throughput.tokens_completion,
-                  )} generati.`}
-            </p>
+            <p className="text-[0.72rem] text-faint">{eta.source}</p>
           </div>
 
           <div className="panel flex min-h-0 flex-col" style={{ maxHeight: "34rem" }}>
@@ -445,12 +391,7 @@ export function JobsView({ project, onNavigate }: JobsViewProps) {
                     style={{ width: "auto" }}
                     value={stateFilter}
                     onChange={(event) => {
-                      const matched = STATE_FILTERS.find(
-                        (entry) => entry.value === event.target.value,
-                      );
-                      if (matched !== undefined) {
-                        setStateFilter(matched.value);
-                      }
+                      setStateFilter(event.target.value);
                     }}
                   >
                     {STATE_FILTERS.map((entry) => (
@@ -468,12 +409,7 @@ export function JobsView({ project, onNavigate }: JobsViewProps) {
                     style={{ width: "auto" }}
                     value={kindFilter}
                     onChange={(event) => {
-                      const matched = KIND_FILTERS.find(
-                        (entry) => entry.value === event.target.value,
-                      );
-                      if (matched !== undefined) {
-                        setKindFilter(matched.value);
-                      }
+                      setKindFilter(event.target.value);
                     }}
                   >
                     {KIND_FILTERS.map((entry) => (
@@ -543,7 +479,7 @@ export function JobsView({ project, onNavigate }: JobsViewProps) {
                         <td className="num" title={job.id}>
                           {shortId(job.id, 8)}
                         </td>
-                        <td className="text-ink-soft">{KIND_LABELS[job.kind]}</td>
+                        <td className="text-ink-soft">{kindLabel(job.kind)}</td>
                         <td>
                           <StatusBadge
                             status={job.state}
@@ -584,7 +520,7 @@ export function JobsView({ project, onNavigate }: JobsViewProps) {
         </div>
 
         <div className="section-stack">
-          <ResourceGauge resources={metrics?.resources ?? null} loading={metrics === null} compact />
+          <ResourceGauge metrics={metrics} loading={metrics === null} compact />
 
           {metricsError !== null ? (
             <div className="banner banner-error" role="alert">
@@ -596,9 +532,7 @@ export function JobsView({ project, onNavigate }: JobsViewProps) {
           <LogView projectId={projectId} limit={600} title="Log di esecuzione" heightClass="h-80" />
 
           <p className="text-[0.72rem] text-faint">
-            Ultimo campione di risorse:{" "}
-            {metrics === null ? "—" : formatRelative(metrics.updated_at, now)}.
-            {activeJobs > 0 ? " L'ETA si aggiorna ogni secondo." : ""}
+            {activeJobs > 0 ? "L'ETA si aggiorna ogni secondo." : "Nessun job attivo."}
           </p>
         </div>
       </div>

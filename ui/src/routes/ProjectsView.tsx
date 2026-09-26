@@ -3,8 +3,9 @@ import { EmptyState } from "../components/EmptyState";
 import { FormField } from "../components/FormField";
 import { StatusBadge } from "../components/StatusBadge";
 import { basename, fileExtension, formatDateTime, formatRelative } from "../lib/format";
+import { pickDocumentFile } from "../lib/dialog";
 import { projectCreate, projectDelete, projectGet, projectList, toErrorMessage } from "../lib/ipc";
-import type { Project, ProjectCreateRequest, SourceFormat } from "../lib/types";
+import type { CreateProjectRequest, Project, SourceFormat } from "../lib/types";
 import type { ViewId } from "../App";
 
 /**
@@ -64,7 +65,7 @@ function looksAbsolute(path: string): boolean {
   return path.startsWith("/") || /^[A-Za-z]:[\\/]/.test(path) || path.startsWith("\\\\");
 }
 
-function formatLabel(format: SourceFormat): string {
+function formatLabel(format: string): string {
   return FORMAT_OPTIONS.find((option) => option.value === format)?.label ?? format;
 }
 
@@ -126,6 +127,14 @@ export function ProjectsView({ currentProjectId, onOpenProject, onNavigate }: Pr
     });
   }
 
+  async function handlePickSource() {
+    const picked = await pickDocumentFile();
+    if (picked !== null) {
+      updatePath(picked);
+      setFormErrors((current) => ({ ...current, source_path: undefined }));
+    }
+  }
+
   function validate(state: FormState): FormErrors {
     const errors: FormErrors = {};
     if (state.name.trim().length === 0) {
@@ -152,7 +161,7 @@ export function ProjectsView({ currentProjectId, onOpenProject, onNavigate }: Pr
 
     setSubmitting(true);
     try {
-      const request: ProjectCreateRequest = {
+      const request: CreateProjectRequest = {
         name: form.name.trim(),
         source_path: form.source_path.trim(),
         source_format: form.source_format,
@@ -177,7 +186,7 @@ export function ProjectsView({ currentProjectId, onOpenProject, onNavigate }: Pr
     setActionError(null);
     try {
       const fresh = await projectGet(projectId);
-      onOpenProject(fresh);
+      onOpenProject(fresh.project);
       onNavigate("ingest");
     } catch (openError) {
       setActionError(toErrorMessage(openError));
@@ -295,19 +304,30 @@ export function ProjectsView({ currentProjectId, onOpenProject, onNavigate }: Pr
               label="Documento sorgente"
               htmlFor="project-source"
               required
-              hint="Percorso assoluto del file EPUB, PDF o Markdown."
+              hint="Percorso assoluto del file EPUB, PDF o Markdown. Usa «Sfoglia» oppure incollalo."
               error={formErrors.source_path}
             >
-              <input
-                id="project-source"
-                className="input"
-                value={form.source_path}
-                onChange={(event) => {
-                  updatePath(event.target.value);
-                }}
-                placeholder="/home/utente/libri/il-nome-della-rosa.epub"
-                spellCheck={false}
-              />
+              <div className="flex items-center gap-2">
+                <input
+                  id="project-source"
+                  className="input"
+                  value={form.source_path}
+                  onChange={(event) => {
+                    updatePath(event.target.value);
+                  }}
+                  placeholder="/home/utente/libri/il-nome-della-rosa.epub"
+                  spellCheck={false}
+                />
+                <button
+                  type="button"
+                  className="btn shrink-0"
+                  onClick={() => {
+                    void handlePickSource();
+                  }}
+                >
+                  Sfoglia…
+                </button>
+              </div>
             </FormField>
 
             <div className="grid grid-cols-2 gap-3">

@@ -4,7 +4,7 @@ import { FormField } from "../components/FormField";
 import { ResourceGauge } from "../components/ResourceGauge";
 import { StatusBadge } from "../components/StatusBadge";
 import { onMetricsTick } from "../lib/events";
-import { formatDateTime, formatDecimal, formatNumber, formatRelative, truncate } from "../lib/format";
+import { formatDateTime, formatNumber, formatRelative, truncate } from "../lib/format";
 import {
   endpointDelete,
   endpointList,
@@ -18,11 +18,11 @@ import {
 } from "../lib/ipc";
 import type {
   Endpoint,
-  EndpointModel,
   EndpointTestResult,
   JsonObject,
   JsonValue,
   Metrics,
+  ModelInfo,
   Project,
   Role,
   RoleBinding,
@@ -30,7 +30,7 @@ import type {
 
 /**
  * Step 2 of the wizard: endpoint CRUD, health test, model list and role assignment
- * (`PLAN.md` §11.2), plus the VRAM/slot indicator.
+ * (`PLAN.md` §11.2), plus the VRAM/queue indicator.
  *
  * The secret never reaches this page: `api_key_ref` is the *name* of the entry in the OS keyring
  * (`PLAN.md` §5, "Nessun segreto nel database").
@@ -125,7 +125,7 @@ function parseJsonObject(text: string): { value: JsonObject | null; error: strin
   return { value: parsed, error: null };
 }
 
-function roleLabel(role: Role): string {
+function roleLabel(role: string): string {
   return ROLES.find((entry) => entry.value === role)?.label ?? role;
 }
 
@@ -136,11 +136,7 @@ function healthStatus(endpoint: Endpoint): string {
   return endpoint.last_health_ok ? "ok" : "unreachable";
 }
 
-function sameSeconds(value: number | null): string {
-  return value === null ? "—" : formatDecimal(value / 1000, 2).concat(" s");
-}
-
-export function ModelsView({ project }: ModelsViewProps) {
+export function ModelsView(_props: ModelsViewProps) {
   const [endpoints, setEndpoints] = useState<Endpoint[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -155,7 +151,7 @@ export function ModelsView({ project }: ModelsViewProps) {
   const [detailsId, setDetailsId] = useState<string | null>(null);
   const [testing, setTesting] = useState<string | null>(null);
   const [testResults, setTestResults] = useState<Record<string, EndpointTestResult>>({});
-  const [models, setModels] = useState<Record<string, EndpointModel[]>>({});
+  const [models, setModels] = useState<Record<string, ModelInfo[]>>({});
   const [modelsLoading, setModelsLoading] = useState<string | null>(null);
   const [modelsError, setModelsError] = useState<string | null>(null);
 
@@ -200,17 +196,17 @@ export function ModelsView({ project }: ModelsViewProps) {
     }
   }, []);
 
-  const loadMetrics = useCallback(async () => {
-    setMetricsError(null);
+  const refreshMetrics = useCallback(async () => {
     try {
-      const snapshot = await metricsGet(project?.id ?? null);
+      const snapshot = await metricsGet();
       setMetrics(snapshot);
+      setMetricsError(null);
     } catch (loadError) {
       setMetricsError(toErrorMessage(loadError));
     } finally {
       setMetricsLoading(false);
     }
-  }, [project?.id]);
+  }, []);
 
   useEffect(() => {
     void load();
@@ -219,13 +215,13 @@ export function ModelsView({ project }: ModelsViewProps) {
 
   useEffect(() => {
     setMetricsLoading(true);
-    void loadMetrics();
-  }, [loadMetrics]);
+    void refreshMetrics();
+  }, [refreshMetrics]);
 
-  useEffect(() => onMetricsTick((snapshot) => {
-    setMetrics(snapshot);
-    setMetricsLoading(false);
-  }), []);
+  // `metrics://tick` is a trigger, not the full snapshot: refetch through `metrics_get`.
+  useEffect(() => onMetricsTick(() => {
+    void refreshMetrics();
+  }), [refreshMetrics]);
 
   const detailsEndpoint = useMemo(
     () => endpoints.find((endpoint) => endpoint.id === detailsId) ?? null,
@@ -239,7 +235,7 @@ export function ModelsView({ project }: ModelsViewProps) {
     setModelsLoading(endpointId);
     setModelsError(null);
     try {
-      const rows = await endpointModels(endpointId);
+      const rows = await endpointModels({ endpoint_id: endpointId });
       setModels((current) => ({ ...current, [endpointId]: rows }));
     } catch (loadError) {
       setModelsError(toErrorMessage(loadError));
@@ -268,9 +264,9 @@ export function ModelsView({ project }: ModelsViewProps) {
           endpoint.id === endpointId
             ? {
                 ...endpoint,
-                last_health_at: new Date().toISOString(),
-                last_health_ok: result.ok,
-                props: result.props?.raw ?? endpoint.props,
+                last_health_at: result.health.checked_at,
+                last_health_ok: result.health.ok,
+                props_json: result.props === null ? endpoint.props_json : JSON.stringify(result.props),
               }
             : endpoint,
         ),
@@ -279,10 +275,9 @@ export function ModelsView({ project }: ModelsViewProps) {
       setTestResults((current) => ({
         ...current,
         [endpointId]: {
-          ok: false,
-          latency_ms: null,
-          message: toErrorMessage(testError),
+          health: { ok: false, status: toErrorMessage(testError), code: 0, checked_at: new Date().toISOString() },
           props: null,
+          models: [],
         },
       }));
     } finally {
@@ -624,6 +619,8 @@ export function ModelsView({ project }: ModelsViewProps) {
                     {endpoints.map((endpoint) => {
                       const result = testResults[endpoint.id];
                       const isTesting = testing === endpoint.id;
+                      const slots =
+                        result === undefined || result.props === null ? null : result.props.total_slots;
 
                       return (
                         <tr key={endpoint.id} data-selected={detailsId === endpoint.id ? "true" : "false"}>
@@ -658,15 +655,14 @@ export function ModelsView({ project }: ModelsViewProps) {
                               {endpoint.last_health_at === null
                                 ? "mai verificato"
                                 : formatRelative(endpoint.last_health_at)}
-                              {result !== undefined && result.ok && result.latency_ms !== null
-                                ? ` · ${sameSeconds(result.latency_ms)}`
-                                : ""}
                             </span>
                           </td>
                           <td className="num">
-                            {endpoint.max_concurrency === null
-                              ? "auto"
-                              : formatNumber(endpoint.max_concurrency)}
+                            {slots !== null
+                              ? formatNumber(slots)
+                              : endpoint.max_concurrency === null
+                                ? "auto"
+                                : formatNumber(endpoint.max_concurrency)}
                           </td>
                           <td>
                             <span className="flex flex-wrap gap-1">
@@ -782,11 +778,14 @@ export function ModelsView({ project }: ModelsViewProps) {
                 ) : (
                   <>
                     <div
-                      className={detailsTest.ok ? "banner banner-ok" : "banner banner-error"}
+                      className={detailsTest.health.ok ? "banner banner-ok" : "banner banner-error"}
                       role="status"
                     >
-                      <span aria-hidden="true">{detailsTest.ok ? "✓" : "⚠"}</span>
-                      <span>{detailsTest.message}</span>
+                      <span aria-hidden="true">{detailsTest.health.ok ? "✓" : "⚠"}</span>
+                      <span>
+                        {detailsTest.health.status ??
+                          (detailsTest.health.ok ? "Raggiungibile" : "Non raggiungibile")}
+                      </span>
                     </div>
                     <div className="grid grid-cols-3 gap-2">
                       <div className="stat-tile">
@@ -806,8 +805,8 @@ export function ModelsView({ project }: ModelsViewProps) {
                         </div>
                       </div>
                       <div className="stat-tile">
-                        <div className="stat-label">Latenza</div>
-                        <div className="stat-value">{sameSeconds(detailsTest.latency_ms)}</div>
+                        <div className="stat-label">Codice HTTP</div>
+                        <div className="stat-value">{formatNumber(detailsTest.health.code)}</div>
                       </div>
                     </div>
                     {detailsTest.props !== null && detailsTest.props.model_path !== null ? (
@@ -841,13 +840,10 @@ export function ModelsView({ project }: ModelsViewProps) {
                     </p>
                   ) : (
                     <ul className="flex flex-wrap gap-1">
-                      {detailsModels.map((model: EndpointModel) => (
+                      {detailsModels.map((model: ModelInfo) => (
                         <li key={model.id}>
-                          <span className="mono-chip" title={model.label ?? model.id}>
+                          <span className="mono-chip" title={model.owned_by ?? model.id}>
                             {truncate(model.id, 42)}
-                            {model.context_length === null
-                              ? ""
-                              : ` · ${formatNumber(model.context_length)} tok`}
                           </span>
                         </li>
                       ))}
@@ -1047,7 +1043,7 @@ export function ModelsView({ project }: ModelsViewProps) {
         </div>
 
         <div className="section-stack">
-          <ResourceGauge resources={metrics?.resources ?? null} loading={metricsLoading} />
+          <ResourceGauge metrics={metrics} loading={metricsLoading} />
 
           {metricsError !== null ? (
             <div className="banner banner-error" role="alert">

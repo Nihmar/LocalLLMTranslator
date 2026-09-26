@@ -3,26 +3,21 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { EmptyState } from "../components/EmptyState";
 import { FormField } from "../components/FormField";
 import { StatusBadge } from "../components/StatusBadge";
-import { basename, fileExtension, formatNumber, joinParts } from "../lib/format";
-import { chunkList, ingestStart, isTauriRuntime, toErrorMessage } from "../lib/ipc";
-import type {
-  Chapter,
-  IngestResult,
-  JsonObject,
-  JsonValue,
-  PdfBackend,
-  Project,
-  SourceFormat,
-} from "../lib/types";
+import { basename, fileExtension, formatNumber } from "../lib/format";
+import { pickDocumentFile } from "../lib/dialog";
+import { onJobProgress } from "../lib/events";
+import { ingestStart, isTauriRuntime, jobList, projectGet, toErrorMessage } from "../lib/ipc";
+import type { Chapter, Job, PdfBackend, Project, ProjectDetail, SourceFormat } from "../lib/types";
 import type { ViewId } from "../App";
 
 /**
- * Step 1 of the wizard: drop a file, see what was recognised, run the ingestion, inspect the
- * chapters and the warnings (`PLAN.md` §11.1).
+ * Step 1 of the wizard: drop or pick a file, see what was recognised, run the ingestion, inspect
+ * the chapters that were produced (`PLAN.md` §11.1).
  *
- * Format detection is shown from the file extension as soon as a path is known, and the
- * authoritative value is the one `ingest_start` reports back: the sidecar owns
- * `detect_format` (`PLAN.md` §12.1) and there is no separate command for it.
+ * `ingest_start` only enqueues the `ingest` job and returns its id: format detection, extraction
+ * and chunk building run on the worker pool. This page therefore follows the job through
+ * `job_list` / `job://progress` and reads the result back from `project_get` (chapters and chunk
+ * counters), instead of expecting an ingestion payload inline.
  */
 
 export interface IngestViewProps {
@@ -54,36 +49,35 @@ function detectFormatFromExtension(path: string): SourceFormat | null {
   return null;
 }
 
-function jsonText(value: JsonValue): string {
-  if (typeof value === "string") {
-    return value;
-  }
-  if (value === null) {
-    return "—";
-  }
-  if (typeof value === "boolean" || typeof value === "number") {
-    return String(value);
-  }
-  const serialised = JSON.stringify(value);
-  return serialised === undefined ? String(value) : serialised;
-}
-
-function metadataRows(metadata: JsonObject): ReadonlyArray<{ key: string; value: string }> {
-  return Object.entries(metadata).map(([key, value]) => ({ key, value: jsonText(value) }));
-}
-
 export function IngestView({ project, onNavigate }: IngestViewProps) {
   const [path, setPath] = useState("");
   const [dragging, setDragging] = useState(false);
   const [pdfBackend, setPdfBackend] = useState<PdfBackend>("auto");
   const [starting, setStarting] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<IngestResult | null>(null);
-  const [liveChunkCount, setLiveChunkCount] = useState<number | null>(null);
-  const [refreshingCount, setRefreshingCount] = useState(false);
+  const [jobId, setJobId] = useState<string | null>(null);
+  const [job, setJob] = useState<Job | null>(null);
+  const [detail, setDetail] = useState<ProjectDetail | null>(null);
 
   const detectedFormat = useMemo(() => detectFormatFromExtension(path), [path]);
   const isPdf = detectedFormat === "pdf";
+
+  const refreshOutcome = useCallback(async (projectId: string, watchedJobId: string | null) => {
+    setRefreshing(true);
+    try {
+      const loaded = await projectGet(projectId);
+      setDetail(loaded);
+      if (watchedJobId !== null) {
+        const jobs = await jobList({ project_id: projectId, limit: 200 });
+        setJob(jobs.find((entry) => entry.id === watchedJobId) ?? null);
+      }
+    } catch (refreshError) {
+      setError(toErrorMessage(refreshError));
+    } finally {
+      setRefreshing(false);
+    }
+  }, []);
 
   // Native file drop. Tauri intercepts the OS drag-and-drop, so this is the only way to learn
   // the absolute path of a dropped file; the browser dataTransfer fallback below cannot.
@@ -133,25 +127,27 @@ export function IngestView({ project, onNavigate }: IngestViewProps) {
     };
   }, []);
 
+  // Reload the stored result whenever the project changes, and drop the previous run's state.
   useEffect(() => {
-    setResult(null);
-    setLiveChunkCount(null);
+    setJobId(null);
+    setJob(null);
+    setDetail(null);
     setError(null);
-  }, [project?.id]);
+    if (project !== null) {
+      void refreshOutcome(project.id, null);
+    }
+  }, [project, refreshOutcome]);
 
-  const refreshChunkCount = useCallback(
-    async (projectId: string) => {
-      setRefreshingCount(true);
-      try {
-        const chunks = await chunkList({ project_id: projectId, limit: 5000 });
-        setLiveChunkCount(chunks.length);
-      } catch (countError) {
-        setError(toErrorMessage(countError));
-      } finally {
-        setRefreshingCount(false);
-      }
-    },
-    [],
+  // The ingest job is a trigger to refetch: its ack carries no chapters or counters, so the page
+  // reads them back through `project_get`.
+  useEffect(
+    () =>
+      onJobProgress(() => {
+        if (project !== null) {
+          void refreshOutcome(project.id, jobId);
+        }
+      }),
+    [project, jobId, refreshOutcome],
   );
 
   async function handleStart() {
@@ -165,17 +161,18 @@ export function IngestView({ project, onNavigate }: IngestViewProps) {
 
     setStarting(true);
     setError(null);
+    setJob(null);
     try {
-      const ingested = await ingestStart({
+      const started = await ingestStart({
         project_id: project.id,
-        path: path.trim(),
-        pdf_backend: isPdf ? pdfBackend : undefined,
+        source_path: path.trim(),
+        pdf_backend: isPdf ? pdfBackend : null,
       });
-      setResult(ingested);
-      setLiveChunkCount(ingested.chunk_count);
+      setJobId(started.job_id);
+      await refreshOutcome(project.id, started.job_id);
     } catch (startError) {
       setError(toErrorMessage(startError));
-      setResult(null);
+      setJobId(null);
     } finally {
       setStarting(false);
     }
@@ -196,6 +193,8 @@ export function IngestView({ project, onNavigate }: IngestViewProps) {
       </div>
     );
   }
+
+  const chapters: Chapter[] = detail?.chapters ?? [];
 
   return (
     <div className="section-stack">
@@ -256,6 +255,21 @@ export function IngestView({ project, onNavigate }: IngestViewProps) {
             </span>
             <p className="text-sm font-medium text-ink">Trascina qui il documento</p>
             <p className="text-xs text-muted">EPUB, PDF o Markdown</p>
+            <button
+              type="button"
+              className="btn btn-sm"
+              disabled={starting}
+              onClick={() => {
+                void pickDocumentFile().then((picked) => {
+                  if (picked !== null) {
+                    setPath(picked);
+                    setError(null);
+                  }
+                });
+              }}
+            >
+              Sfoglia…
+            </button>
             {!isTauriRuntime() ? (
               <p className="text-[0.72rem] text-warn">
                 Fuori dall&apos;app desktop il trascinamento non può fornire un percorso: usa il
@@ -335,7 +349,8 @@ export function IngestView({ project, onNavigate }: IngestViewProps) {
               disabled={starting}
               onClick={() => {
                 setPath("");
-                setResult(null);
+                setJobId(null);
+                setJob(null);
                 setError(null);
               }}
             >
@@ -349,89 +364,67 @@ export function IngestView({ project, onNavigate }: IngestViewProps) {
         <EmptyState
           tone="loading"
           compact
-          title="Estrazione in corso"
-          description="Conversione in Markdown, segmentazione in blocchi e costruzione dei chunk."
+          title="Estrazione accodata"
+          description="Conversione in Markdown, segmentazione in blocchi e costruzione dei chunk sulla coda di lavoro."
         />
       ) : null}
 
-      {result !== null ? (
+      {jobId !== null ? (
         <>
           <div className="panel">
             <div className="panel-head">
               <span className="panel-title">Esito dell&apos;estrazione</span>
               <span className="flex items-center gap-2">
-                <StatusBadge status="done" />
-                <span className="mono-chip">{result.format.toUpperCase()}</span>
+                <StatusBadge status={job?.state ?? "pending"} pulse={job?.state === "running" || job?.state === "leased"} />
+                <span className="mono-chip">{detectedFormat?.toUpperCase() ?? "—"}</span>
               </span>
             </div>
 
             <div className="panel-pad section-stack">
               <div className="grid grid-cols-4 gap-2">
                 <div className="stat-tile">
-                  <div className="stat-label">Blocchi</div>
-                  <div className="stat-value">{formatNumber(result.block_count)}</div>
+                  <div className="stat-label">Capitoli</div>
+                  <div className="stat-value">{formatNumber(chapters.length)}</div>
                 </div>
                 <div className="stat-tile">
                   <div className="stat-label">Chunk</div>
-                  <div className="stat-value">{formatNumber(result.chunk_count)}</div>
+                  <div className="stat-value">{formatNumber(detail?.chunks_total ?? 0)}</div>
                 </div>
                 <div className="stat-tile">
-                  <div className="stat-label">Capitoli</div>
-                  <div className="stat-value">{formatNumber(result.chapters.length)}</div>
+                  <div className="stat-label">Chunk completati</div>
+                  <div className="stat-value">{formatNumber(detail?.chunks_done ?? 0)}</div>
                 </div>
                 <div className="stat-tile">
-                  <div className="stat-label">Job accodati</div>
-                  <div className="stat-value">{formatNumber(result.job_ids.length)}</div>
+                  <div className="stat-label">Job di ingestione</div>
+                  <div className="stat-value" style={{ fontSize: "0.72rem" }}>
+                    <span className="mono-chip" title={jobId}>
+                      {jobId.slice(0, 10)}…
+                    </span>
+                  </div>
                 </div>
               </div>
 
               <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-[0.75rem]">
-                <dt className="text-faint">Estrattore</dt>
+                <dt className="text-faint">Stato del job</dt>
+                <dd className="font-mono text-ink-soft">{job?.state ?? "sconosciuto"}</dd>
+                <dt className="text-faint">Tentativi</dt>
                 <dd className="font-mono text-ink-soft">
-                  {joinParts([result.extractor, result.extractor_version], " ")}
-                </dd>
-                <dt className="text-faint">Markdown canonico</dt>
-                <dd className="truncate font-mono text-ink-soft" title={result.markdown_path}>
-                  {result.markdown_path}
+                  {job === null ? "—" : `${job.attempts} / ${job.max_attempts}`}
                 </dd>
               </dl>
 
-              {metadataRows(result.metadata).length > 0 ? (
-                <div>
-                  <div className="stat-label mb-1">Metadati del documento</div>
-                  <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-[0.75rem]">
-                    {metadataRows(result.metadata).map((row) => (
-                      <div key={row.key} className="contents">
-                        <dt className="truncate text-faint" title={row.key}>
-                          {row.key}
-                        </dt>
-                        <dd className="truncate text-ink-soft" title={row.value}>
-                          {row.value}
-                        </dd>
-                      </div>
-                    ))}
-                  </dl>
-                </div>
-              ) : null}
-
-              {result.warnings.length > 0 ? (
-                <div className="banner banner-warn" role="status">
+              {job?.last_error !== null && job?.last_error !== undefined ? (
+                <div className="banner banner-error" role="alert">
                   <span aria-hidden="true">⚠</span>
-                  <span>
-                    <strong className="font-semibold">
-                      {formatNumber(result.warnings.length)} avvisi dall&apos;estrazione.
-                    </strong>
-                    <ul className="mt-1 list-disc space-y-0.5 pl-4">
-                      {result.warnings.map((warning, index) => (
-                        <li key={`${String(index)}-${warning}`}>{warning}</li>
-                      ))}
-                    </ul>
-                  </span>
+                  <span>{job.last_error}</span>
                 </div>
               ) : (
                 <div className="banner banner-ok" role="status">
                   <span aria-hidden="true">✓</span>
-                  <span>Nessun avviso: l&apos;estrazione non ha segnalato problemi.</span>
+                  <span>
+                    L&apos;estrazione gira sulla coda: i capitoli e i chunk compaiono qui man mano
+                    che il job procede.
+                  </span>
                 </div>
               )}
 
@@ -448,17 +441,14 @@ export function IngestView({ project, onNavigate }: IngestViewProps) {
                 <button
                   type="button"
                   className="btn"
-                  disabled={refreshingCount}
+                  disabled={refreshing}
                   onClick={() => {
-                    void refreshChunkCount(result.project_id);
+                    void refreshOutcome(project.id, jobId);
                   }}
                 >
-                  {refreshingCount ? <span className="spinner" aria-hidden="true" /> : null}
-                  Conta i chunk salvati
+                  {refreshing ? <span className="spinner" aria-hidden="true" /> : null}
+                  Aggiorna esito
                 </button>
-                {liveChunkCount !== null ? (
-                  <span className="mono-chip">{formatNumber(liveChunkCount)} chunk nel database</span>
-                ) : null}
               </div>
             </div>
           </div>
@@ -466,15 +456,15 @@ export function IngestView({ project, onNavigate }: IngestViewProps) {
           <div className="panel">
             <div className="panel-head">
               <span className="panel-title">Anteprima capitoli</span>
-              <span className="mono-chip">{formatNumber(result.chapters.length)} capitoli</span>
+              <span className="mono-chip">{formatNumber(chapters.length)} capitoli</span>
             </div>
 
-            {result.chapters.length === 0 ? (
+            {chapters.length === 0 ? (
               <div className="panel-pad">
                 <EmptyState
                   compact
-                  title="Nessun capitolo riconosciuto"
-                  description="Il documento non contiene heading utilizzabili come capitoli: i chunk verranno comunque costruiti sull'intero flusso di blocchi."
+                  title="Nessun capitolo ancora"
+                  description="Il documento non è ancora stato segmentato, oppure non contiene heading utilizzabili come capitoli: i chunk vengono comunque costruiti sull'intero flusso di blocchi."
                 />
               </div>
             ) : (
@@ -491,9 +481,9 @@ export function IngestView({ project, onNavigate }: IngestViewProps) {
                     </tr>
                   </thead>
                   <tbody>
-                    {result.chapters.map((chapter: Chapter) => (
+                    {chapters.map((chapter) => (
                       <tr key={chapter.id}>
-                        <td className="num">{formatNumber(chapter.order)}</td>
+                        <td className="num">{formatNumber(chapter.order_index)}</td>
                         <td>
                           <span className="mono-chip">H{formatNumber(chapter.level)}</span>
                         </td>
@@ -507,9 +497,7 @@ export function IngestView({ project, onNavigate }: IngestViewProps) {
                           </span>
                         </td>
                         <td className="font-mono text-[0.72rem] text-muted">
-                          {chapter.block_first === null || chapter.block_last === null
-                            ? "—"
-                            : `${formatNumber(chapter.block_first)} – ${formatNumber(chapter.block_last)}`}
+                          {`${formatNumber(chapter.block_first)} – ${formatNumber(chapter.block_last)}`}
                         </td>
                       </tr>
                     ))}
@@ -521,7 +509,7 @@ export function IngestView({ project, onNavigate }: IngestViewProps) {
         </>
       ) : null}
 
-      {!starting && result === null ? (
+      {!starting && jobId === null ? (
         <p className="text-[0.72rem] text-faint">
           Riferimento: gli stessi dati sono mostrati da{" "}
           <span className="mono-chip">{basename(project.source_path)}</span> — l&apos;ingestione non

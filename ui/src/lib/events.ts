@@ -19,7 +19,7 @@ import type {
   ExportProgressEvent,
   JobProgressEvent,
   LogLineEvent,
-  Metrics,
+  MetricsTickEvent,
   SidecarStatus,
 } from "./types";
 
@@ -75,8 +75,9 @@ export function subscribe<TPayload>(
 }
 
 /**
- * `job://progress` — per-job progress with the affected chunk, so the chunk table can be
- * patched in place instead of refetched.
+ * `job://progress` — per-job progress. The payload is not a stable row (the pipeline dispatcher
+ * and the sidecar supervisor emit different shapes), so consumers treat it as an invalidation
+ * trigger and refetch through `job_list` / `chunk_list`.
  */
 export function onJobProgress(handler: (payload: JobProgressEvent) => void): Unsubscribe {
   return subscribe<JobProgressEvent>(EVENTS.jobProgress, handler);
@@ -87,9 +88,9 @@ export function onLogLine(handler: (payload: LogLineEvent) => void): Unsubscribe
   return subscribe<LogLineEvent>(EVENTS.logLine, handler);
 }
 
-/** `metrics://tick` — periodic resource and throughput snapshot. */
-export function onMetricsTick(handler: (payload: Metrics) => void): Unsubscribe {
-  return subscribe<Metrics>(EVENTS.metricsTick, handler);
+/** `metrics://tick` — periodic resource and queue snapshot (see `MetricsTickEvent`). */
+export function onMetricsTick(handler: (payload: MetricsTickEvent) => void): Unsubscribe {
+  return subscribe<MetricsTickEvent>(EVENTS.metricsTick, handler);
 }
 
 /** `sidecar://status` — sidecar supervisor state changes. */

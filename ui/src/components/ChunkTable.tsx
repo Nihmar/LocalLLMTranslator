@@ -1,22 +1,32 @@
 import { useMemo, useState } from "react";
 import { formatNumber, truncate } from "../lib/format";
-import type { ChunkStatus, ChunkSummary } from "../lib/types";
 import { StatusBadge } from "./StatusBadge";
 
 /**
  * Chunk table for the translation page.
  *
- * Columns: order, chapter, kind/flags, token estimate, status, model, attempts, row actions.
- * The chunk entity has no `kind` column (`PLAN.md` §4.3): the structural information lives in
- * `flags`, so that column renders the flags themselves and falls back to "testo".
+ * `chunk_list` returns raw `chunk` rows: `block_ids_json` / `flags_json` are strings and there is
+ * no chapter title or attempt counter on the row. Those are derived one level up (in
+ * `TranslateView`, from `project_get` chapters and `job_list`) and passed here as `ChunkRow`, so
+ * the table keeps its original columns without a per-row backend call.
  */
 
+/** Presentation view of one chunk, assembled by `TranslateView` from `chunk_list`. */
+export interface ChunkRow {
+  id: string;
+  chapter_title: string | null;
+  order_index: number;
+  flags: string[];
+  block_count: number;
+  token_estimate: number;
+  status: string;
+  model_id: string | null;
+  attempts: number;
+  error: string | null;
+}
+
 export interface ChunkTableProps {
-  chunks: readonly ChunkSummary[];
-  selection: ReadonlySet<string>;
-  onSelectionChange: (next: ReadonlySet<string>) => void;
-  onRetry: (chunkId: string) => void;
-  onSkip: (chunkId: string) => void;
+  chunks: readonly ChunkRow[];
   /** Opens the read-only original/target drawer. */
   onOpenDetails?: ((chunkId: string) => void) | undefined;
   /** Rows with a command in flight: their actions are disabled. */
@@ -33,7 +43,7 @@ interface SortState {
 }
 
 /** Order in which statuses are worth looking at: what needs attention comes first. */
-const STATUS_RANK: Readonly<Record<ChunkStatus, number>> = {
+const STATUS_RANK: Readonly<Record<string, number>> = {
   running: 0,
   pending: 1,
   failed: 2,
@@ -58,7 +68,7 @@ export function describeFlag(flag: string): string {
   return flag;
 }
 
-function compareChunks(left: ChunkSummary, right: ChunkSummary, key: SortKey): number {
+function compareChunks(left: ChunkRow, right: ChunkRow, key: SortKey): number {
   switch (key) {
     case "order":
       return left.order_index - right.order_index;
@@ -114,16 +124,7 @@ function SortButton({ label, sortKey, sort, onChange, align = "left" }: SortButt
   );
 }
 
-export function ChunkTable({
-  chunks,
-  selection,
-  onSelectionChange,
-  onRetry,
-  onSkip,
-  onOpenDetails,
-  busyIds,
-  highlightedIds,
-}: ChunkTableProps) {
+export function ChunkTable({ chunks, onOpenDetails, busyIds, highlightedIds }: ChunkTableProps) {
   const [sort, setSort] = useState<SortState>({ key: "order", direction: "asc" });
 
   const rows = useMemo(() => {
@@ -135,45 +136,11 @@ export function ChunkTable({
     return sorted;
   }, [chunks, sort]);
 
-  const allSelected = rows.length > 0 && rows.every((row) => selection.has(row.id));
-
-  function toggleAll(checked: boolean) {
-    const next = new Set(selection);
-    for (const row of rows) {
-      if (checked) {
-        next.add(row.id);
-      } else {
-        next.delete(row.id);
-      }
-    }
-    onSelectionChange(next);
-  }
-
-  function toggleOne(chunkId: string, checked: boolean) {
-    const next = new Set(selection);
-    if (checked) {
-      next.add(chunkId);
-    } else {
-      next.delete(chunkId);
-    }
-    onSelectionChange(next);
-  }
-
   return (
     <div className="table-scroll">
       <table className="data-table">
         <thead>
           <tr>
-            <th style={{ width: "2.2rem" }}>
-              <input
-                type="checkbox"
-                checked={allSelected}
-                onChange={(event) => {
-                  toggleAll(event.target.checked);
-                }}
-                aria-label="Seleziona tutti i chunk visibili"
-              />
-            </th>
             <th style={{ width: "5.5rem" }}>
               <SortButton label="#" sortKey="order" sort={sort} onChange={setSort} />
             </th>
@@ -205,14 +172,14 @@ export function ChunkTable({
                 align="right"
               />
             </th>
-            <th style={{ width: "11rem" }}>Azioni</th>
+            <th style={{ width: "7rem" }}>Azioni</th>
           </tr>
         </thead>
 
         <tbody>
           {rows.length === 0 ? (
             <tr>
-              <td colSpan={9} className="text-center text-xs text-muted">
+              <td colSpan={8} className="text-center text-xs text-muted">
                 Nessun chunk da mostrare.
               </td>
             </tr>
@@ -220,25 +187,12 @@ export function ChunkTable({
             rows.map((row) => {
               const busy = busyIds?.has(row.id) === true;
               const highlighted = highlightedIds?.has(row.id) === true;
-              const selected = selection.has(row.id);
 
               return (
                 <tr
                   key={row.id}
-                  data-selected={selected ? "true" : "false"}
                   style={highlighted ? { outline: "1px solid var(--color-accent)" } : undefined}
                 >
-                  <td>
-                    <input
-                      type="checkbox"
-                      checked={selected}
-                      onChange={(event) => {
-                        toggleOne(row.id, event.target.checked);
-                      }}
-                      aria-label={`Seleziona il chunk ${row.id}`}
-                    />
-                  </td>
-
                   <td className="num" title={row.id}>
                     {formatNumber(row.order_index)}
                   </td>
@@ -292,39 +246,18 @@ export function ChunkTable({
                   <td className="num">{formatNumber(row.attempts)}</td>
 
                   <td>
-                    <span className="flex flex-wrap gap-1">
-                      <button
-                        type="button"
-                        className="btn btn-sm"
-                        disabled={busy}
-                        onClick={() => {
-                          onRetry(row.id);
-                        }}
-                      >
-                        Riprova
-                      </button>
+                    {onOpenDetails !== undefined ? (
                       <button
                         type="button"
                         className="btn btn-sm btn-ghost"
                         disabled={busy}
                         onClick={() => {
-                          onSkip(row.id);
+                          onOpenDetails(row.id);
                         }}
                       >
-                        Salta
+                        Dettagli
                       </button>
-                      {onOpenDetails !== undefined ? (
-                        <button
-                          type="button"
-                          className="btn btn-sm btn-ghost"
-                          onClick={() => {
-                            onOpenDetails(row.id);
-                          }}
-                        >
-                          Dettagli
-                        </button>
-                      ) : null}
-                    </span>
+                    ) : null}
                   </td>
                 </tr>
               );

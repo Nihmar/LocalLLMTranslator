@@ -1,49 +1,50 @@
 import { formatBytes, formatNumber, formatPercent, percent } from "../lib/format";
-import type { ResourceMetrics } from "../lib/types";
+import type { Metrics, ParallelReason } from "../lib/types";
 import { StatusBadge } from "./StatusBadge";
 
 /**
- * VRAM + slot gauge driven by `metrics_get` / `metrics://tick` (`PLAN.md` §10).
+ * VRAM + queue gauge driven by `metrics_get` / `metrics://tick` (`PLAN.md` §10).
  *
- * The important behaviour is the degraded case: when the ResourceGovernor cannot schedule more
- * than one chunk at a time it says so *explicitly*, with the reason the backend reported, and
- * never as a silent slowdown.
+ * The backend reports a resource snapshot, not a scheduling decision: `suggested_parallel` is
+ * computed by the ResourceGovernor and `reason` says why it was capped. The degraded case is
+ * rendered *explicitly*, with the reported reason, and never as a silent slowdown.
  */
 
 export interface ResourceGaugeProps {
-  resources: ResourceMetrics | null;
+  metrics: Metrics | null;
   loading?: boolean | undefined;
   compact?: boolean | undefined;
 }
 
-const VRAM_SOURCE_LABEL: Readonly<Record<ResourceMetrics["vram"]["source"], string>> = {
-  sysfs: "sysfs",
-  "rocm-smi": "rocm-smi",
-  "nvidia-smi": "nvidia-smi",
-  unknown: "non rilevata",
+/** Italian explanation of each `ParallelReason` (`resources::vram::ParallelReason`). */
+const REASON_HINT: Readonly<Record<ParallelReason, string>> = {
+  ok: "",
+  vram_unknown: "VRAM non rilevata: nessuna GPU leggibile, il limite è dato dai soli slot.",
+  insufficient_headroom:
+    "VRAM libera insufficiente per un secondo slot: i chunk procedono uno alla volta.",
+  slot_limited:
+    "L'endpoint espone un solo slot (o il limite utente è 1): un chunk alla volta.",
 };
 
-export function ResourceGauge({ resources, loading = false, compact = false }: ResourceGaugeProps) {
-  if (loading || resources === null) {
+export function ResourceGauge({ metrics, loading = false, compact = false }: ResourceGaugeProps) {
+  if (loading || metrics === null) {
     return (
       <div className="panel panel-pad">
         <div className="panel-title mb-2">Risorse</div>
         <p className="flex items-center gap-2 text-xs text-muted">
           <span className="spinner" aria-hidden="true" />
-          Lettura di VRAM e slot…
+          Lettura di VRAM e coda…
         </p>
       </div>
     );
   }
 
-  const { vram, slots, max_parallel: maxParallel, degraded, degraded_reason: degradedReason } =
-    resources;
-
-  const vramKnown = vram.used_bytes !== null && vram.total_bytes !== null && vram.total_bytes > 0;
-  const vramRatio = vramKnown ? percent(vram.used_bytes ?? 0, vram.total_bytes ?? 0) : 0;
-  const slotsKnown = slots.total_slots !== null && slots.total_slots > 0;
-  const freeSlots = slots.free_slots;
-  const parallelLabel = maxParallel === 1 ? "1 chunk alla volta" : `${formatNumber(maxParallel)} chunk`;
+  const degraded = metrics.reason !== "ok";
+  const vram = metrics.vram;
+  const vramKnown = vram !== null && vram.total_bytes > 0;
+  const vramRatio = vramKnown ? percent(vram.used_bytes, vram.total_bytes) : 0;
+  const parallelLabel =
+    metrics.suggested_parallel === 1 ? "1 chunk alla volta" : `${formatNumber(metrics.suggested_parallel)} chunk`;
 
   return (
     <div className="panel">
@@ -51,6 +52,7 @@ export function ResourceGauge({ resources, loading = false, compact = false }: R
         <span className="panel-title">Risorse</span>
         <span className="flex items-center gap-2">
           <StatusBadge status={degraded ? "degraded" : "parallel"} />
+          {metrics.worker_paused ? <span className="badge badge-warning">In pausa</span> : null}
           <span className="mono-chip">{parallelLabel}</span>
         </span>
       </div>
@@ -61,9 +63,7 @@ export function ResourceGauge({ resources, loading = false, compact = false }: R
             <span aria-hidden="true">⚠</span>
             <span>
               <strong className="font-semibold">Modalità seriale.</strong>{" "}
-              {degradedReason !== null && degradedReason.length > 0
-                ? degradedReason
-                : "Il ResourceGovernor ha ridotto il parallelismo a un solo chunk per volta."}
+              {REASON_HINT[metrics.reason]}
             </span>
           </div>
         ) : null}
@@ -100,34 +100,46 @@ export function ResourceGauge({ resources, loading = false, compact = false }: R
             />
           </div>
           <p className="field-hint">
-            Sorgente: {VRAM_SOURCE_LABEL[vram.source]}
-            {vramKnown ? null : " — nessuna GPU leggibile, il limite è dato dai soli slot."}
+            {vramKnown
+              ? `Libera: ${formatBytes(metrics.free_bytes)}.`
+              : REASON_HINT.vram_unknown}
           </p>
         </div>
 
-        {/* Slots */}
+        {/* Queue */}
         <div className="grid grid-cols-3 gap-2">
           <div className="stat-tile">
-            <div className="stat-label">Slot liberi</div>
-            <div className="stat-value">
-              {slotsKnown ? `${formatNumber(freeSlots ?? 0)} / ${formatNumber(slots.total_slots)}` : "—"}
-            </div>
-          </div>
-          <div className="stat-tile">
-            <div className="stat-label">In volo</div>
-            <div className="stat-value">{formatNumber(slots.in_flight)}</div>
+            <div className="stat-label">In volo sul sidecar</div>
+            <div className="stat-value">{formatNumber(metrics.sidecar_in_flight)}</div>
           </div>
           <div className="stat-tile">
             <div className="stat-label">Parallelismo</div>
-            <div className="stat-value">{formatNumber(maxParallel)}</div>
+            <div className="stat-value">{formatNumber(metrics.suggested_parallel)}</div>
+          </div>
+          <div className="stat-tile">
+            <div className="stat-label">Esecutore</div>
+            <div className="stat-value" style={{ fontSize: "0.85rem" }}>
+              {metrics.worker_running ? "attivo" : "fermo"}
+            </div>
           </div>
         </div>
 
-        {slotsKnown ? null : (
-          <p className="field-hint">
-            Gli slot non sono dichiarati da nessun endpoint attivo: si usa il limite per endpoint.
-          </p>
-        )}
+        <div>
+          <div className="stat-label mb-1">Coda per stato</div>
+          {metrics.jobs.length === 0 ? (
+            <p className="text-[0.72rem] text-faint">Nessun job in coda.</p>
+          ) : (
+            <ul className="flex flex-wrap gap-1">
+              {metrics.jobs.map((job) => (
+                <li key={job.state}>
+                  <span className="mono-chip">
+                    {job.state}: {formatNumber(job.count)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
       </div>
     </div>
   );

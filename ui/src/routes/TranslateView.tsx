@@ -1,39 +1,38 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ChunkTable } from "../components/ChunkTable";
+import type { ChunkRow } from "../components/ChunkTable";
 import { EmptyState } from "../components/EmptyState";
 import { LogView } from "../components/LogView";
 import { ProgressBar } from "../components/ProgressBar";
 import { ResourceGauge } from "../components/ResourceGauge";
 import { StatusBadge } from "../components/StatusBadge";
 import { onJobProgress, onMetricsTick } from "../lib/events";
-import { countLabel, formatNumber, formatTokens } from "../lib/format";
+import { countLabel, formatNumber } from "../lib/format";
 import {
   chunkGet,
   chunkList,
+  jobList,
   metricsGet,
-  roleBindingList,
+  projectGet,
   toErrorMessage,
   translationCancel,
   translationPause,
   translationStart,
 } from "../lib/ipc";
-import type {
-  BlockTranslation,
-  ChunkDetail,
-  ChunkStatus,
-  ChunkSummary,
-  Metrics,
-  Project,
-} from "../lib/types";
+import type { Chunk, ChunkDetail, Chapter, Job, Metrics, Project } from "../lib/types";
 import type { ViewId } from "../App";
 
 /**
  * Step 3 of the wizard: the chunk table, the run controls and the resource gauge
  * (`PLAN.md` §11.3).
  *
- * The table is patched from `job://progress` events — one row at a time, keyed by `chunk_id` —
- * instead of re-querying `chunk_list` on every event. `chunk_list` is only called when the
- * filter, the page size or the project changes.
+ * The translation commands are **project-scoped**: `translation_start` takes a project and an
+ * `only_retry` flag, while `translation_pause` / `translation_cancel` take no argument at all and
+ * act on the whole worker pool. There is no per-chunk command, so the table offers a read-only
+ * detail drawer instead of per-row retry/skip controls.
+ *
+ * `job://progress` is treated as an invalidation trigger — its payload is not a stable chunk row —
+ * so the table is refetched rather than patched field by field.
  */
 
 export interface TranslateViewProps {
@@ -41,7 +40,7 @@ export interface TranslateViewProps {
   onNavigate: (view: ViewId) => void;
 }
 
-const STATUS_FILTERS: ReadonlyArray<{ value: ChunkStatus | "all"; label: string }> = [
+const STATUS_FILTERS: ReadonlyArray<{ value: string; label: string }> = [
   { value: "all", label: "Tutti gli stati" },
   { value: "pending", label: "In attesa" },
   { value: "running", label: "In corso" },
@@ -51,7 +50,6 @@ const STATUS_FILTERS: ReadonlyArray<{ value: ChunkStatus | "all"; label: string 
 ];
 
 const PAGE_SIZE = 200;
-const HIGHLIGHT_MS = 900;
 
 interface Counts {
   pending: number;
@@ -61,15 +59,52 @@ interface Counts {
   needs_review: number;
 }
 
-function countStatuses(chunks: readonly ChunkSummary[]): Counts {
+function countStatuses(chunks: readonly Chunk[]): Counts {
   const counts: Counts = { pending: 0, running: 0, done: 0, failed: 0, needs_review: 0 };
   for (const chunk of chunks) {
-    counts[chunk.status] += 1;
+    if (chunk.status === "pending") {
+      counts.pending += 1;
+    } else if (chunk.status === "running") {
+      counts.running += 1;
+    } else if (chunk.status === "done") {
+      counts.done += 1;
+    } else if (chunk.status === "failed") {
+      counts.failed += 1;
+    } else if (chunk.status === "needs_review") {
+      counts.needs_review += 1;
+    }
   }
   return counts;
 }
 
-function blockOriginLabel(origin: BlockTranslation["origin"]): string {
+/** Parses a `*_json` column that holds a JSON array of strings; `[]` on anything unexpected. */
+function parseStringArray(json: string): string[] {
+  try {
+    const parsed: unknown = JSON.parse(json);
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return parsed.filter((item): item is string => typeof item === "string");
+  } catch {
+    return [];
+  }
+}
+
+/** Reads `chunk_id` out of a job `payload_json`; `null` when the payload has no such field. */
+function parseChunkId(payloadJson: string): string | null {
+  try {
+    const parsed: unknown = JSON.parse(payloadJson);
+    if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const value = (parsed as Record<string, unknown>)["chunk_id"];
+      return typeof value === "string" ? value : null;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function blockOriginLabel(origin: string): string {
   switch (origin) {
     case "translator":
       return "traduttore";
@@ -79,25 +114,22 @@ function blockOriginLabel(origin: BlockTranslation["origin"]): string {
       return "proofreader";
     case "user":
       return "utente";
+    default:
+      return origin;
   }
 }
 
 export function TranslateView({ project, onNavigate }: TranslateViewProps) {
-  const [chunks, setChunks] = useState<ChunkSummary[]>([]);
+  const [chunks, setChunks] = useState<Chunk[]>([]);
+  const [chapters, setChapters] = useState<Chapter[]>([]);
+  const [jobs, setJobs] = useState<Job[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [statusFilter, setStatusFilter] = useState<ChunkStatus | "all">("all");
+  const [statusFilter, setStatusFilter] = useState("all");
   const [limit, setLimit] = useState(PAGE_SIZE);
-
-  const [selection, setSelection] = useState<ReadonlySet<string>>(new Set());
-  const [busyIds, setBusyIds] = useState<ReadonlySet<string>>(new Set());
-  const [highlightedIds, setHighlightedIds] = useState<ReadonlySet<string>>(new Set());
 
   const [metrics, setMetrics] = useState<Metrics | null>(null);
   const [metricsLoading, setMetricsLoading] = useState(true);
-
-  const [translatorModels, setTranslatorModels] = useState<string[]>([]);
-  const [modelOverride, setModelOverride] = useState("");
 
   const [control, setControl] = useState<"idle" | "starting" | "pausing" | "cancelling">("idle");
   const [actionError, setActionError] = useState<string | null>(null);
@@ -108,7 +140,6 @@ export function TranslateView({ project, onNavigate }: TranslateViewProps) {
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
 
-  const highlightTimer = useRef<number | null>(null);
   const projectId = project?.id ?? null;
 
   const loadChunks = useCallback(async () => {
@@ -120,130 +151,123 @@ export function TranslateView({ project, onNavigate }: TranslateViewProps) {
     try {
       const rows = await chunkList({
         project_id: projectId,
-        status: statusFilter === "all" ? undefined : statusFilter,
-        limit,
-        offset: 0,
+        status: statusFilter === "all" ? null : statusFilter,
       });
       setChunks(rows);
-      setSelection((current) => {
-        const visible = new Set(rows.map((row) => row.id));
-        return new Set([...current].filter((id) => visible.has(id)));
-      });
     } catch (loadError) {
       setError(toErrorMessage(loadError));
       setChunks([]);
     } finally {
       setLoading(false);
     }
-  }, [projectId, statusFilter, limit]);
-
-  useEffect(() => {
-    setLimit(PAGE_SIZE);
   }, [projectId, statusFilter]);
+
+  const loadContext = useCallback(async () => {
+    if (projectId === null) {
+      setChapters([]);
+      setJobs([]);
+      return;
+    }
+    try {
+      const [detailRow, jobRows] = await Promise.all([
+        projectGet(projectId),
+        jobListSafe(projectId),
+      ]);
+      setChapters(detailRow.chapters);
+      setJobs(jobRows);
+    } catch (loadError) {
+      setError(toErrorMessage(loadError));
+    }
+  }, [projectId]);
+
+  const loadMetrics = useCallback(async () => {
+    try {
+      setMetrics(await metricsGet());
+    } catch {
+      // The gauge degrades to "unknown"; it never blocks the table.
+      setMetrics(null);
+    }
+  }, []);
 
   useEffect(() => {
     void loadChunks();
   }, [loadChunks]);
 
-  const loadMetrics = useCallback(async () => {
-    setMetricsLoading(true);
-    try {
-      const snapshot = await metricsGet(projectId);
-      setMetrics(snapshot);
-    } catch {
-      // The gauge degrades to "unknown"; it never blocks the table.
-      setMetrics(null);
-    } finally {
-      setMetricsLoading(false);
-    }
-  }, [projectId]);
+  useEffect(() => {
+    void loadContext();
+  }, [loadContext]);
 
   useEffect(() => {
-    void loadMetrics();
+    setMetricsLoading(true);
+    void loadMetrics().finally(() => {
+      setMetricsLoading(false);
+    });
   }, [loadMetrics]);
 
-  useEffect(
-    () =>
-      onMetricsTick((snapshot) => {
-        if (projectId !== null && snapshot.project_id !== null && snapshot.project_id !== projectId) {
-          return;
-        }
-        setMetrics(snapshot);
-        setMetricsLoading(false);
-      }),
-    [projectId],
-  );
-
-  // Incremental row updates: one event patches exactly one row.
-  useEffect(
-    () =>
-      onJobProgress((event) => {
-        const chunkId = event.chunk_id;
-        const status = event.chunk_status;
-        if (projectId === null || event.project_id !== projectId || chunkId === null || status === null) {
-          return;
-        }
-
-        setChunks((current) => {
-          let found = false;
-          const next = current.map((row) => {
-            if (row.id !== chunkId) {
-              return row;
-            }
-            found = true;
-            return {
-              ...row,
-              status,
-              attempts: event.attempts,
-              model_id: event.model ?? row.model_id,
-              error: event.error,
-              updated_at: event.updated_at,
-            };
-          });
-          // The chunk is outside the loaded page/filter: nothing to patch, not worth a refetch.
-          return found ? next : current;
-        });
-
-        setHighlightedIds((current) => new Set([...current, chunkId]));
-        if (highlightTimer.current !== null) {
-          window.clearTimeout(highlightTimer.current);
-        }
-        highlightTimer.current = window.setTimeout(() => {
-          setHighlightedIds(new Set());
-          highlightTimer.current = null;
-        }, HIGHLIGHT_MS);
-      }),
-    [projectId],
-  );
-
-  useEffect(
-    () => () => {
-      if (highlightTimer.current !== null) {
-        window.clearTimeout(highlightTimer.current);
-      }
-    },
-    [],
-  );
-
   useEffect(() => {
-    let cancelled = false;
-    void roleBindingList({ role: "translator" })
-      .then((bindings) => {
-        if (cancelled) {
-          return;
-        }
-        const models = [...new Set(bindings.map((binding) => binding.model))];
-        setTranslatorModels(models);
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setTranslatorModels([]);
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    setLimit(PAGE_SIZE);
+  }, [projectId, statusFilter]);
+
+  // Any progress event invalidates the queue and the table; refetch instead of trusting the
+  // heterogeneous payload.
+  useEffect(
+    () =>
+      onJobProgress(() => {
+        void loadChunks();
+        void loadContext();
+        void loadMetrics();
+      }),
+    [loadChunks, loadContext, loadMetrics],
+  );
+
+  useEffect(
+    () =>
+      onMetricsTick(() => {
+        void loadMetrics();
+      }),
+    [loadMetrics],
+  );
+
+  const chapterTitle = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const chapter of chapters) {
+      map.set(chapter.id, chapter.title);
+    }
+    return map;
+  }, [chapters]);
+
+  const attemptsByChunk = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const job of jobs) {
+      if (job.kind !== "translate_chunk") {
+        continue;
+      }
+      const chunkId = parseChunkId(job.payload_json);
+      if (chunkId === null) {
+        continue;
+      }
+      map.set(chunkId, Math.max(map.get(chunkId) ?? 0, job.attempts));
+    }
+    return map;
+  }, [jobs]);
+
+  const rows: ChunkRow[] = useMemo(
+    () =>
+      chunks.map((chunk) => ({
+        id: chunk.id,
+        chapter_title:
+          chunk.chapter_id === null ? null : (chapterTitle.get(chunk.chapter_id) ?? null),
+        order_index: chunk.order_index,
+        flags: parseStringArray(chunk.flags_json),
+        block_count: parseStringArray(chunk.block_ids_json).length,
+        token_estimate: chunk.token_estimate,
+        status: chunk.status,
+        model_id: chunk.model_id,
+        attempts: attemptsByChunk.get(chunk.id) ?? 0,
+        error: chunk.error,
+      })),
+    [chunks, chapterTitle, attemptsByChunk],
+  );
 
   const counts = useMemo(() => countStatuses(chunks), [chunks]);
   const totalTokens = useMemo(
@@ -251,63 +275,36 @@ export function TranslateView({ project, onNavigate }: TranslateViewProps) {
     [chunks],
   );
 
-  const throughput = metrics?.throughput ?? null;
-  const overallTotal = throughput === null ? chunks.length : throughput.chunks_total;
-  const overallDone = throughput === null ? counts.done : throughput.chunks_done;
-
-  function markBusy(ids: readonly string[], busy: boolean) {
-    setBusyIds((current) => {
-      const next = new Set(current);
-      for (const id of ids) {
-        if (busy) {
-          next.add(id);
-        } else {
-          next.delete(id);
-        }
-      }
-      return next;
-    });
-  }
-
-  async function runStart(chunkIds: readonly string[], label: string, useModelOverride: boolean) {
+  async function runStart(onlyRetry: boolean) {
     if (projectId === null) {
       return;
     }
     setControl("starting");
     setActionError(null);
     setActionNotice(null);
-    markBusy(chunkIds, true);
     try {
-      const ack = await translationStart({
-        project_id: projectId,
-        chunk_ids: chunkIds.length > 0 ? [...chunkIds] : undefined,
-        model: useModelOverride && modelOverride.length > 0 ? modelOverride : null,
-      });
+      const result = await translationStart({ project_id: projectId, only_retry: onlyRetry });
       setActionNotice(
-        `${label}: ${countLabel(ack.accepted, "job accodato", "job accodati")}${
-          ack.message === null ? "." : ` — ${ack.message}`
-        }`,
+        `${countLabel(result.enqueued, "job accodato", "job accodati")}. L'esecutore è ${
+          result.running ? "in esecuzione" : "fermo"
+        }.`,
       );
+      await loadChunks();
+      await loadMetrics();
     } catch (startError) {
       setActionError(toErrorMessage(startError));
     } finally {
-      markBusy(chunkIds, false);
       setControl("idle");
     }
   }
 
   async function runPause() {
-    if (projectId === null) {
-      return;
-    }
     setControl("pausing");
     setActionError(null);
     setActionNotice(null);
     try {
-      const ack = await translationPause({ project_id: projectId });
-      setActionNotice(
-        `Esecuzione sospesa: ${countLabel(ack.accepted, "job rilasciato", "job rilasciati")}. Riprendi con «Avvia».`,
-      );
+      await translationPause();
+      setActionNotice("Esecuzione sospesa: i lease sono rilasciati, la coda resta. Riprendi con «Avvia».");
       await loadMetrics();
     } catch (pauseError) {
       setActionError(toErrorMessage(pauseError));
@@ -316,24 +313,19 @@ export function TranslateView({ project, onNavigate }: TranslateViewProps) {
     }
   }
 
-  async function runSkip(chunkIds: readonly string[]) {
-    if (projectId === null || chunkIds.length === 0) {
-      return;
-    }
+  async function runCancel() {
     setControl("cancelling");
     setActionError(null);
     setActionNotice(null);
-    markBusy(chunkIds, true);
     try {
-      const ack = await translationCancel({ project_id: projectId, chunk_ids: [...chunkIds] });
-      setActionNotice(
-        `${countLabel(ack.accepted, "job annullato", "job annullati")}. Il chunk resta nello stato attuale e viene ripreso solo con un nuovo avvio esplicito.`,
-      );
-      setSelection(new Set());
+      await translationCancel();
+      setActionNotice("Esecuzione annullata: i job in attesa sono stati annullati.");
+      await loadChunks();
+      await loadContext();
+      await loadMetrics();
     } catch (cancelError) {
       setActionError(toErrorMessage(cancelError));
     } finally {
-      markBusy(chunkIds, false);
       setControl("idle");
     }
   }
@@ -344,16 +336,13 @@ export function TranslateView({ project, onNavigate }: TranslateViewProps) {
     setDetailError(null);
     setDetailLoading(true);
     try {
-      const loaded = await chunkGet(chunkId);
-      setDetail(loaded);
+      setDetail(await chunkGet(chunkId));
     } catch (loadError) {
       setDetailError(toErrorMessage(loadError));
     } finally {
       setDetailLoading(false);
     }
   }
-
-  const selectedIds = useMemo(() => [...selection], [selection]);
 
   const detailRows = useMemo(() => {
     if (detail === null) {
@@ -393,7 +382,7 @@ export function TranslateView({ project, onNavigate }: TranslateViewProps) {
           <p className="mt-0.5 text-xs text-muted">
             Progetto <span className="font-semibold text-ink-soft">{project.name}</span> —{" "}
             {countLabel(chunks.length, "chunk caricato", "chunk caricati")}
-            {chunks.length === limit ? ` (limite di pagina ${formatNumber(limit)})` : ""}.
+            {chunks.length >= limit ? ` (limite di pagina ${formatNumber(limit)})` : ""}.
           </p>
         </div>
 
@@ -405,15 +394,7 @@ export function TranslateView({ project, onNavigate }: TranslateViewProps) {
               style={{ width: "auto" }}
               value={statusFilter}
               onChange={(event) => {
-                const value = event.target.value;
-                if (value === "all") {
-                  setStatusFilter("all");
-                  return;
-                }
-                const matched = STATUS_FILTERS.find((filter) => filter.value === value);
-                if (matched !== undefined && matched.value !== "all") {
-                  setStatusFilter(matched.value);
-                }
+                setStatusFilter(event.target.value);
               }}
             >
               {STATUS_FILTERS.map((filter) => (
@@ -424,41 +405,16 @@ export function TranslateView({ project, onNavigate }: TranslateViewProps) {
             </select>
           </label>
 
-          <label className="flex items-center gap-1 text-xs text-muted">
-            Modello
-            <select
-              className="select"
-              style={{ width: "auto" }}
-              value={modelOverride}
-              onChange={(event) => {
-                setModelOverride(event.target.value);
-              }}
-              title="Sovrascrive il modello del ruolo traduttore per i prossimi avvii"
-            >
-              <option value="">dal ruolo traduttore</option>
-              {translatorModels.map((model) => (
-                <option key={model} value={model}>
-                  {model}
-                </option>
-              ))}
-            </select>
-          </label>
-
           <button
             type="button"
             className="btn btn-primary"
             disabled={busy}
             onClick={() => {
-              void runStart([], "Traduzione avviata", true);
+              void runStart(false);
             }}
           >
             {control === "starting" ? <span className="spinner" aria-hidden="true" /> : null}
             Avvia / Riprendi
-          </button>
-
-          <button type="button" className="btn" disabled={busy} onClick={() => void runPause()}>
-            {control === "pausing" ? <span className="spinner" aria-hidden="true" /> : null}
-            Pausa
           </button>
 
           <button
@@ -466,7 +422,30 @@ export function TranslateView({ project, onNavigate }: TranslateViewProps) {
             className="btn"
             disabled={busy}
             onClick={() => {
+              void runStart(true);
+            }}
+            title="Rimette in coda solo i chunk falliti o da rivedere"
+          >
+            Riprova falliti
+          </button>
+
+          <button type="button" className="btn" disabled={busy} onClick={() => void runPause()}>
+            {control === "pausing" ? <span className="spinner" aria-hidden="true" /> : null}
+            Pausa
+          </button>
+
+          <button type="button" className="btn" disabled={busy} onClick={() => void runCancel()}>
+            {control === "cancelling" ? <span className="spinner" aria-hidden="true" /> : null}
+            Annulla
+          </button>
+
+          <button
+            type="button"
+            className="btn"
+            disabled={loading}
+            onClick={() => {
               void loadChunks();
+              void loadMetrics();
             }}
             title="Rilegge la tabella dal database"
           >
@@ -493,16 +472,11 @@ export function TranslateView({ project, onNavigate }: TranslateViewProps) {
         <div className="section-stack min-w-0">
           <div className="panel panel-pad section-stack">
             <ProgressBar
-              value={overallDone}
-              total={overallTotal}
+              value={counts.done}
+              total={chunks.length}
               label="Avanzamento complessivo"
               tone="accent"
               showCounts
-              hint={
-                throughput === null
-                  ? undefined
-                  : `${formatTokens(throughput.tokens_completion)} generati`
-              }
             />
 
             <div className="grid grid-cols-6 gap-2">
@@ -533,64 +507,12 @@ export function TranslateView({ project, onNavigate }: TranslateViewProps) {
             </div>
           </div>
 
-          {selection.size > 0 ? (
-            <div className="panel panel-pad flex flex-wrap items-center gap-2">
-              <StatusBadge status="ok" tone="accent" label={`${formatNumber(selection.size)} selezionati`} />
-              <button
-                type="button"
-                className="btn btn-sm btn-primary"
-                disabled={busy}
-                onClick={() => {
-                  void runStart(selectedIds, "Riprova dei chunk selezionati", false);
-                }}
-                title="Rimette in coda i chunk selezionati con la configurazione del ruolo"
-              >
-                Riprova selezionati
-              </button>
-              <button
-                type="button"
-                className="btn btn-sm"
-                disabled={busy || modelOverride.length === 0}
-                onClick={() => {
-                  void runStart(selectedIds, "Ritraduzione con un altro modello", true);
-                }}
-                title={
-                  modelOverride.length === 0
-                    ? "Scegli prima un modello nel selettore in alto"
-                    : `Ritraduce i chunk selezionati con ${modelOverride}`
-                }
-              >
-                Ritraduci con il modello scelto
-              </button>
-              <button
-                type="button"
-                className="btn btn-sm btn-ghost"
-                disabled={busy}
-                onClick={() => {
-                  void runSkip(selectedIds);
-                }}
-                title="Annulla i job in attesa dei chunk selezionati"
-              >
-                Salta selezionati
-              </button>
-              <button
-                type="button"
-                className="btn btn-sm btn-ghost"
-                onClick={() => {
-                  setSelection(new Set());
-                }}
-              >
-                Deseleziona
-              </button>
-            </div>
-          ) : null}
-
           <div className="panel flex min-h-0 flex-col" style={{ maxHeight: "34rem" }}>
             <div className="panel-head">
               <span className="panel-title">Chunk</span>
               <span className="flex items-center gap-2">
                 <span className="mono-chip">{formatNumber(chunks.length)} righe</span>
-                {chunks.length === limit ? (
+                {chunks.length >= limit ? (
                   <button
                     type="button"
                     className="btn btn-sm"
@@ -648,20 +570,10 @@ export function TranslateView({ project, onNavigate }: TranslateViewProps) {
               </div>
             ) : (
               <ChunkTable
-                chunks={chunks}
-                selection={selection}
-                onSelectionChange={setSelection}
-                onRetry={(chunkId) => {
-                  void runStart([chunkId], "Riprova del chunk", false);
-                }}
-                onSkip={(chunkId) => {
-                  void runSkip([chunkId]);
-                }}
+                chunks={rows}
                 onOpenDetails={(chunkId) => {
                   void openDetail(chunkId);
                 }}
-                busyIds={busyIds}
-                highlightedIds={highlightedIds}
               />
             )}
           </div>
@@ -715,7 +627,9 @@ export function TranslateView({ project, onNavigate }: TranslateViewProps) {
                     <div className="stat-tile">
                       <div className="stat-label">Capitolo</div>
                       <div className="truncate text-xs text-ink-soft">
-                        {detail.chunk.chapter_id ?? "—"}
+                        {detail.chunk.chapter_id === null
+                          ? "—"
+                          : (chapterTitle.get(detail.chunk.chapter_id) ?? detail.chunk.chapter_id)}
                       </div>
                     </div>
                     <div className="stat-tile">
@@ -814,19 +728,19 @@ export function TranslateView({ project, onNavigate }: TranslateViewProps) {
         </div>
 
         <div className="section-stack">
-          <ResourceGauge resources={metrics?.resources ?? null} loading={metricsLoading} compact />
+          <ResourceGauge metrics={metrics} loading={metricsLoading} compact />
 
           <div className="panel panel-pad">
             <div className="panel-title mb-2">Come si comporta la coda</div>
             <ul className="list-disc space-y-1 pl-4 text-xs text-muted">
               <li>Un chunk è l&apos;unità di lavoro e di checkpoint: ogni chunk completato è salvato.</li>
               <li>
-                «Pausa» rilascia i lease; «Avvia / Riprendi» rimette in coda ciò che non è ancora
-                completato.
+                «Pausa» e «Annulla» agiscono sull&apos;intero esecutore: <span className="mono-chip">translation_pause</span>{" "}
+                e <span className="mono-chip">translation_cancel</span> non prendono argomenti.
               </li>
               <li>
-                «Salta» annulla i job in attesa del chunk: non marca il chunk come tradotto e non
-                esiste un comando per uno scarto permanente nel contratto attuale.
+                «Avvia / Riprendi» rimette in coda i chunk non completati; «Riprova falliti» solo
+                quelli falliti o da rivedere.
               </li>
               <li>I retry automatici rispettano il limite di tentativi del job.</li>
             </ul>
@@ -837,4 +751,13 @@ export function TranslateView({ project, onNavigate }: TranslateViewProps) {
       </div>
     </div>
   );
+}
+
+/** `job_list` for a project, tolerating a failure (the table can render without attempts). */
+async function jobListSafe(projectId: string): Promise<Job[]> {
+  try {
+    return await jobList({ project_id: projectId, limit: 1000 });
+  } catch {
+    return [];
+  }
 }

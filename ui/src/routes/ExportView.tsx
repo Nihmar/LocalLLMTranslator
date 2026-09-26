@@ -1,42 +1,30 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { EmptyState } from "../components/EmptyState";
 import { FormField } from "../components/FormField";
-import { ProgressBar } from "../components/ProgressBar";
 import { StatusBadge } from "../components/StatusBadge";
 import { onExportProgress } from "../lib/events";
-import { basename, countLabel, formatDuration, formatNumber, truncate } from "../lib/format";
-import { chunkList, exportBuild, openPath, toErrorMessage } from "../lib/ipc";
-import type {
-  ExportBuildResult,
-  ExportFormat,
-  ExportProgressEvent,
-  ExportUnit,
-  Project,
-} from "../lib/types";
+import { basename, countLabel, formatDuration, formatNumber } from "../lib/format";
+import { exportBuild, openPath, projectGet, toErrorMessage } from "../lib/ipc";
+import type { Chapter, ExportFormat, ExportOutcome, ExportProgressEvent, Project } from "../lib/types";
 import type { ViewId } from "../App";
 
 /**
- * Step 5 of the wizard: format, template and CSS selection, per-chapter units, build and open
- * the result (`PLAN.md` §11.5).
+ * Step 5 of the wizard: format, template and CSS selection, build and open the result
+ * (`PLAN.md` §11.5).
  *
- * This page is functional for what the frozen contract allows: it triggers `export_build`,
- * follows `export://progress` and reveals the artefact with `open_path`. Two things PLAN.md
- * mentions but the frozen table cannot express are absent by design — a live preview of the
- * rendered page (`export_preview` is not in the table) and the build history (no such command).
- * Chapter units are derived from `chunk_list`, the only command that reports chapter titles.
+ * `export_build` takes only a project and the rendering options: the backend splits the document
+ * into per-chapter units itself, so there is no `units` argument and no per-chapter selection to
+ * send — the chapter list is read-only context from `project_get`. The build is followed through
+ * `export://progress` and the artefact is revealed with `open_path`.
+ *
+ * Two things PLAN.md mentions but the frozen table cannot express are absent by design — a live
+ * preview of the rendered page (`export_preview` is not in the table) and the build history (no
+ * such command).
  */
 
 export interface ExportViewProps {
   project: Project | null;
   onNavigate: (view: ViewId) => void;
-}
-
-interface ChapterOption {
-  id: string;
-  title: string;
-  order: number;
-  chunks: number;
-  tokens: number;
 }
 
 const FORMATS: ReadonlyArray<{
@@ -73,8 +61,6 @@ const FORMATS: ReadonlyArray<{
   },
 ];
 
-const PROGRESS_BUFFER = 12;
-
 function parentDirectory(path: string): string {
   const trimmed = path.replace(/[\\/]+$/, "");
   const index = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
@@ -88,26 +74,21 @@ function looksAbsolute(path: string): boolean {
   return path.startsWith("/") || /^[A-Za-z]:[\\/]/.test(path) || path.startsWith("\\\\");
 }
 
-function phaseLabel(phase: ExportProgressEvent["phase"]): string {
-  switch (phase) {
-    case "prepare":
-      return "Preparazione delle unità";
-    case "render":
-      return "Composizione del Markdown per capitolo";
-    case "pandoc":
-      return "Esecuzione di Pandoc";
-    case "done":
-      return "Completato";
-    case "failed":
-      return "Fallito";
+/** Italian description of the last `export://progress` state. */
+function progressLabel(event: ExportProgressEvent): string {
+  if (event.state === "started") {
+    return `Build avviata${event.format === undefined ? "" : ` (${event.format.toUpperCase()})`}.`;
   }
+  if (event.state === "done") {
+    return `Build conclusa${event.output_path === undefined ? "" : `: ${event.output_path}`}.`;
+  }
+  return `Stato: ${event.state}.`;
 }
 
 export function ExportView({ project, onNavigate }: ExportViewProps) {
-  const [chapters, setChapters] = useState<ChapterOption[]>([]);
+  const [chapters, setChapters] = useState<Chapter[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [selectedChapters, setSelectedChapters] = useState<ReadonlySet<string>>(new Set());
 
   const [format, setFormat] = useState<ExportFormat>("epub");
   const [template, setTemplate] = useState("pandoc/templates/book.html");
@@ -116,8 +97,8 @@ export function ExportView({ project, onNavigate }: ExportViewProps) {
 
   const [building, setBuilding] = useState(false);
   const [buildError, setBuildError] = useState<string | null>(null);
-  const [result, setResult] = useState<ExportBuildResult | null>(null);
-  const [progress, setProgress] = useState<readonly ExportProgressEvent[]>([]);
+  const [result, setResult] = useState<ExportOutcome | null>(null);
+  const [progress, setProgress] = useState<ExportProgressEvent | null>(null);
   const [openError, setOpenError] = useState<string | null>(null);
 
   const projectId = project?.id ?? null;
@@ -135,28 +116,8 @@ export function ExportView({ project, onNavigate }: ExportViewProps) {
     setLoading(true);
     setError(null);
     try {
-      const chunks = await chunkList({ project_id: projectId, limit: 5000 });
-      const byChapter = new Map<string, ChapterOption>();
-      for (const chunk of chunks) {
-        const id = chunk.chapter_id ?? "__none__";
-        const existing = byChapter.get(id);
-        if (existing === undefined) {
-          byChapter.set(id, {
-            id,
-            title: chunk.chapter_title ?? "Senza capitolo",
-            order: chunk.order_index,
-            chunks: 1,
-            tokens: chunk.token_estimate,
-          });
-        } else {
-          existing.chunks += 1;
-          existing.tokens += chunk.token_estimate;
-          existing.order = Math.min(existing.order, chunk.order_index);
-        }
-      }
-      const ordered = [...byChapter.values()].sort((left, right) => left.order - right.order);
-      setChapters(ordered);
-      setSelectedChapters(new Set(ordered.map((chapter) => chapter.id)));
+      const detail = await projectGet(projectId);
+      setChapters(detail.chapters);
     } catch (loadError) {
       setError(toErrorMessage(loadError));
       setChapters([]);
@@ -171,7 +132,7 @@ export function ExportView({ project, onNavigate }: ExportViewProps) {
 
   useEffect(() => {
     setResult(null);
-    setProgress([]);
+    setProgress(null);
     setBuildError(null);
     setOpenError(null);
   }, [projectId]);
@@ -179,15 +140,9 @@ export function ExportView({ project, onNavigate }: ExportViewProps) {
   useEffect(
     () =>
       onExportProgress((event) => {
-        if (projectId === null || event.project_id !== projectId) {
-          return;
-        }
-        setProgress((current) => {
-          const next = [event, ...current];
-          return next.length > PROGRESS_BUFFER ? next.slice(0, PROGRESS_BUFFER) : next;
-        });
+        setProgress(event);
       }),
-    [projectId],
+    [],
   );
 
   // Keep the template/CSS fields aligned with the chosen format.
@@ -199,19 +154,6 @@ export function ExportView({ project, onNavigate }: ExportViewProps) {
     setTemplate(spec.templates[0] ?? "");
     setCss(spec.css[0] ?? "");
   }, [formatSpec]);
-
-  const latest = progress[0];
-  const totalChunks = useMemo(
-    () => chapters.reduce((sum, chapter) => sum + chapter.chunks, 0),
-    [chapters],
-  );
-  const selectedUnits = useMemo<ExportUnit[]>(
-    () =>
-      chapters
-        .filter((chapter) => selectedChapters.has(chapter.id))
-        .map((chapter) => ({ path: chapter.id, title: chapter.title })),
-    [chapters, selectedChapters],
-  );
 
   async function handleBuild() {
     if (projectId === null || formatSpec === undefined) {
@@ -226,15 +168,13 @@ export function ExportView({ project, onNavigate }: ExportViewProps) {
     setBuildError(null);
     setOpenError(null);
     setResult(null);
-    setProgress([]);
+    setProgress(null);
     try {
       const built = await exportBuild({
         project_id: projectId,
         output_format: formatSpec.value,
         template: template.trim().length > 0 ? template.trim() : null,
         css: formatSpec.css.length > 0 && css.trim().length > 0 ? css.trim() : null,
-        // An empty selection means "every chapter": the driver splits the document itself.
-        units: selectedUnits.length === chapters.length ? [] : selectedUnits,
         output_path: outputPath.trim().length > 0 ? outputPath.trim() : null,
       });
       setResult(built);
@@ -311,7 +251,7 @@ export function ExportView({ project, onNavigate }: ExportViewProps) {
         <EmptyState
           tone="error"
           title="Impossibile leggere i capitoli"
-          description="L'elenco delle unità esportabili viene ricavato dai chunk del progetto."
+          description="L'elenco delle unità esportabili viene ricavato dai capitoli del progetto."
           details={error}
           actionLabel="Riprova"
           onAction={() => {
@@ -320,7 +260,7 @@ export function ExportView({ project, onNavigate }: ExportViewProps) {
         />
       ) : chapters.length === 0 ? (
         <EmptyState
-          title="Nessun chunk da esportare"
+          title="Nessun capitolo da esportare"
           description="Non c'è ancora nulla da impaginare: importa il documento e avvia la traduzione."
           actionLabel="Vai all'ingestione"
           onAction={() => {
@@ -333,88 +273,50 @@ export function ExportView({ project, onNavigate }: ExportViewProps) {
             <div className="panel">
               <div className="panel-head">
                 <span className="panel-title">Unità da esportare</span>
-                <span className="flex items-center gap-2">
-                  <span className="mono-chip">
-                    {formatNumber(selectedChapters.size)} / {formatNumber(chapters.length)} capitoli
-                  </span>
-                  <button
-                    type="button"
-                    className="btn btn-sm btn-ghost"
-                    onClick={() => {
-                      setSelectedChapters(new Set(chapters.map((chapter) => chapter.id)));
-                    }}
-                  >
-                    Tutti
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-sm btn-ghost"
-                    onClick={() => {
-                      setSelectedChapters(new Set());
-                    }}
-                  >
-                    Nessuno
-                  </button>
-                </span>
+                <span className="mono-chip">{formatNumber(chapters.length)} capitoli</span>
               </div>
 
               <div className="table-scroll" style={{ maxHeight: "22rem" }}>
                 <table className="data-table">
                   <thead>
                     <tr>
-                      <th style={{ width: "2.2rem" }} />
-                      <th style={{ minWidth: "14rem" }}>Capitolo</th>
-                      <th style={{ width: "6rem" }} className="num">
-                        Chunk
+                      <th style={{ width: "4.5rem" }} className="num">
+                        Ordine
                       </th>
-                      <th style={{ width: "7rem" }} className="num">
-                        Token
+                      <th style={{ minWidth: "14rem" }}>Capitolo</th>
+                      <th style={{ width: "5rem" }}>Livello</th>
+                      <th style={{ width: "9rem" }} className="num">
+                        Blocchi
                       </th>
                     </tr>
                   </thead>
                   <tbody>
-                    {chapters.map((chapter) => {
-                      const checked = selectedChapters.has(chapter.id);
-                      return (
-                        <tr key={chapter.id} data-selected={checked ? "true" : "false"}>
-                          <td>
-                            <input
-                              type="checkbox"
-                              checked={checked}
-                              onChange={(event) => {
-                                setSelectedChapters((current) => {
-                                  const next = new Set(current);
-                                  if (event.target.checked) {
-                                    next.add(chapter.id);
-                                  } else {
-                                    next.delete(chapter.id);
-                                  }
-                                  return next;
-                                });
-                              }}
-                              aria-label={`Esporta ${chapter.title}`}
-                            />
-                          </td>
-                          <td>
-                            <span className="block truncate text-ink-soft" title={chapter.title}>
-                              {chapter.title}
-                            </span>
-                            <span className="font-mono text-[0.68rem] text-faint">{chapter.id}</span>
-                          </td>
-                          <td className="num">{formatNumber(chapter.chunks)}</td>
-                          <td className="num">{formatNumber(chapter.tokens)}</td>
-                        </tr>
-                      );
-                    })}
+                    {chapters.map((chapter) => (
+                      <tr key={chapter.id}>
+                        <td className="num">{formatNumber(chapter.order_index)}</td>
+                        <td>
+                          <span className="block truncate text-ink-soft" title={chapter.title}>
+                            {chapter.title}
+                          </span>
+                          <span className="font-mono text-[0.68rem] text-faint">{chapter.id}</span>
+                        </td>
+                        <td>
+                          <span className="mono-chip">H{formatNumber(chapter.level)}</span>
+                        </td>
+                        <td className="num font-mono text-[0.72rem] text-muted">
+                          {`${formatNumber(chapter.block_first)} – ${formatNumber(chapter.block_last)}`}
+                        </td>
+                      </tr>
+                    ))}
                   </tbody>
                 </table>
               </div>
 
               <div className="panel-pad">
                 <p className="text-[0.72rem] text-faint">
-                  Selezionando tutti i capitoli viene richiesta una build unica dell&apos;intero
-                  documento; selezionandone solo alcuni viene richiesta una build selettiva delle
-                  sole unità scelte (rebuild incrementale di PLAN.md §11.5).
+                  Il backend suddivide il documento in unità per capitolo e le impagina tutte in una
+                  sola build: il contratto attuale non espone una selezione parziale, quindi qui
+                  l&apos;elenco è di sola lettura.
                 </p>
               </div>
             </div>
@@ -427,59 +329,15 @@ export function ExportView({ project, onNavigate }: ExportViewProps) {
             ) : null}
 
             {building ? (
-              <div className="panel panel-pad section-stack">
-                <ProgressBar
-                  value={latest?.done ?? 0}
-                  total={latest?.total === undefined || latest.total === 0 ? 1 : latest.total}
-                  label={latest === undefined ? "Avvio della build" : phaseLabel(latest.phase)}
-                  indeterminate={latest === undefined}
-                  tone="accent"
-                  showCounts={latest !== undefined}
-                />
-                <p className="text-[0.72rem] text-faint">
-                  Pandoc lavora su file temporanei e rinomina il risultato solo a fine build.
+              <div className="panel panel-pad">
+                <p className="flex items-center gap-2 text-xs text-muted">
+                  <span className="spinner" aria-hidden="true" />
+                  {progress === null ? "Avvio della build…" : progressLabel(progress)}
                 </p>
               </div>
-            ) : null}
-
-            {progress.length > 0 ? (
-              <div className="panel">
-                <div className="panel-head">
-                  <span className="panel-title">Avanzamento ricevuto</span>
-                  <button
-                    type="button"
-                    className="btn btn-sm btn-ghost"
-                    onClick={() => {
-                      setProgress([]);
-                    }}
-                  >
-                    Svuota
-                  </button>
-                </div>
-                <ul className="panel-pad space-y-1 text-[0.72rem]">
-                  {progress.map((event, index) => (
-                    <li
-                      key={`${event.unit}-${event.phase}-${String(index)}`}
-                      className="flex items-baseline gap-2"
-                    >
-                      <StatusBadge
-                        status={event.phase === "failed" ? "failed" : event.phase === "done" ? "done" : "running"}
-                        label={phaseLabel(event.phase)}
-                      />
-                      <span className="font-mono text-muted">
-                        {formatNumber(event.done)}/{formatNumber(event.total)}
-                      </span>
-                      <span className="truncate text-ink-soft" title={event.unit}>
-                        {event.unit}
-                      </span>
-                      {event.message === null ? null : (
-                        <span className="truncate text-muted" title={event.message}>
-                          {truncate(event.message, 60)}
-                        </span>
-                      )}
-                    </li>
-                  ))}
-                </ul>
+            ) : progress !== null && result === null ? (
+              <div className="panel panel-pad">
+                <p className="text-xs text-muted">{progressLabel(progress)}</p>
               </div>
             ) : null}
 
@@ -497,7 +355,7 @@ export function ExportView({ project, onNavigate }: ExportViewProps) {
                   <div className="banner banner-ok" role="status">
                     <span aria-hidden="true">✓</span>
                     <span>
-                      File generato:{" "}
+                      File generato ({countLabel(result.units, "unità", "unità")}):{" "}
                       <span className="font-mono text-ink">{result.output_path}</span>
                     </span>
                   </div>
@@ -658,11 +516,6 @@ export function ExportView({ project, onNavigate }: ExportViewProps) {
                   {building ? <span className="spinner" aria-hidden="true" /> : null}
                   Genera output
                 </button>
-
-                <p className="text-[0.72rem] text-faint">
-                  Unità selezionate: {countLabel(selectedUnits.length, "capitolo", "capitoli")} su{" "}
-                  {formatNumber(chapters.length)} ({formatNumber(totalChunks)} chunk in totale).
-                </p>
               </div>
             </div>
 

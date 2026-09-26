@@ -495,7 +495,7 @@
     color: var(--color-faint);
   }
 
-  .log-target {
+  .log-source {
     flex: none;
     color: #7f8dab;
     max-width: 12rem;

@@ -103,7 +103,7 @@ export default function App() {
         if (cancelled) {
           return;
         }
-        setProject(restored);
+        setProject(restored.project);
       })
       .catch(() => {
         // The project was deleted or the backend is unreachable: forget the stale id.
@@ -139,7 +139,7 @@ export default function App() {
     [view],
   );
 
-  const sidecarReady = sidecar !== null && sidecar.state === "ready";
+  const sidecarReady = sidecar !== null && sidecar.state === "running";
 
   return (
     <div className="app-canvas">
@@ -192,25 +192,25 @@ export default function App() {
                   ? "Stato non leggibile"
                   : sidecar === null
                     ? "Interrogazione…"
-                    : undefined
+                    : sidecar.state === "running"
+                      ? "In esecuzione"
+                      : undefined
               }
             />
           </div>
 
           <dl className="grid grid-cols-2 gap-x-2 gap-y-0.5 font-mono text-[0.66rem] text-muted">
-            <dt className="text-faint">versione</dt>
-            <dd className="truncate">{sidecar?.version ?? "—"}</dd>
-            <dt className="text-faint">python</dt>
-            <dd className="truncate">{sidecar?.python ?? "—"}</dd>
+            <dt className="text-faint">stato</dt>
+            <dd className="truncate">{sidecar?.state ?? "—"}</dd>
             <dt className="text-faint">pid</dt>
             <dd className="truncate">{sidecar?.pid ?? "—"}</dd>
-            <dt className="text-faint">riavvii</dt>
-            <dd className="truncate">{sidecar?.restarts ?? "—"}</dd>
+            <dt className="text-faint">tentativi</dt>
+            <dd className="truncate">{sidecar?.attempts ?? "—"}</dd>
           </dl>
 
-          {sidecar?.last_error !== null && sidecar?.last_error !== undefined ? (
-            <p className="text-[0.66rem] text-danger" title={sidecar.last_error}>
-              {sidecar.last_error}
+          {sidecar?.message !== null && sidecar?.message !== undefined ? (
+            <p className="text-[0.66rem] text-danger" title={sidecar.message}>
+              {sidecar.message}
             </p>
           ) : null}
 
@@ -280,7 +280,7 @@ export default function App() {
               <span aria-hidden="true">⚠</span>
               <span>
                 <strong className="font-semibold">Sidecar non pronto.</strong>{" "}
-                {sidecarError ?? sidecar?.last_error ?? "Il supervisore lo sta avviando o lo sta riavviando."}{" "}
+                {sidecarError ?? sidecar?.message ?? "Il supervisore lo sta avviando o lo sta riavviando."}{" "}
                 L&apos;interfaccia resta navigabile, ma ingestione, chunking ed export richiedono il
                 sidecar attivo.
               </span>

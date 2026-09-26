@@ -117,7 +117,7 @@ export function LogView({
       if (LEVEL_ORDER[line.level] < threshold) {
         return false;
       }
-      if (onlyProject && projectId !== null && line.project_id !== null) {
+      if (onlyProject && projectId !== null && typeof line.project_id === "string") {
         return line.project_id === projectId;
       }
       return true;
@@ -219,14 +219,14 @@ export function LogView({
         ) : (
           visible.map((line, index) => (
             <div
-              key={`${line.ts}-${line.target}-${String(index)}`}
+              key={`${line.ts}-${line.source}-${String(index)}`}
               className="log-line"
               data-level={line.level}
             >
               <span className="log-ts">{formatClock(line.ts)}</span>
               <span className={`log-level-${line.level}`}>{line.level}</span>
-              <span className="log-target" title={line.target}>
-                {line.target}
+              <span className="log-source" title={line.source}>
+                {line.source}
               </span>
               <span className="log-message">{line.message}</span>
             </div>

@@ -1,11 +1,17 @@
 /**
  * Domain types for the `UI -> Tauri` boundary.
  *
- * The *names* of the commands and of the events consumed here are frozen by `AGENTS.md`
- * ("UI -> Tauri") and must not drift. The *payload shapes* are not spelled out there, so every
- * type below is our best-effort projection of the SQLite schema in `PLAN.md` §5 and of the
- * sidecar payloads in `PLAN.md` §12.1. Field names are intentionally `snake_case` so they match
- * the database columns and the sidecar JSON-RPC output one-to-one.
+ * Every shape here mirrors the Rust control plane one-to-one: the command signatures and
+ * the DTOs in `crates/app/src/commands/*.rs`, and the row types in
+ * `crates/app/src/db/models.rs`. Rust is the source of truth; when a shape and this file
+ * disagree, the file is wrong.
+ *
+ * Two conventions from the Rust side are reproduced faithfully:
+ *
+ * 1. Serde uses the **declared field names unchanged**: there is no `rename_all`, so every
+ *    field is `snake_case`, exactly as the database columns and the JSON-RPC payloads.
+ * 2. A Rust `Option<T>` serialises as `T | null`; `serde(default)` fields that are not
+ *    `skip_serializing_if` are still emitted, so the `| null` is real, not just "may be absent".
  *
  * `lib/ipc.ts` is the only module allowed to mention a command name; `lib/events.ts` the only
  * one allowed to mention an event name.
@@ -18,10 +24,13 @@ export type JsonObject = { readonly [key: string]: JsonValue };
 
 // --- enums shared with the backend ---------------------------------------------------------
 
-/** `PLAN.md` §12.1 `detect_format`. */
-export type SourceFormat = "epub" | "pdf" | "markdown";
+/**
+ * `source_format` is a free-form `String` column on the Rust side; the UI keeps this union for
+ * the extension-based estimate it shows before the sidecar reports the authoritative value.
+ */
+export type SourceFormat = "epub" | "pdf" | "markdown" | "unknown";
 
-/** PDF extraction backend; `auto` lets the sidecar pick `pymupdf4llm` (`PLAN.md` §1). */
+/** PDF extraction backend accepted by `ingest_start` (`PLAN.md` §1). */
 export type PdfBackend = "auto" | "pymupdf4llm" | "marker";
 
 /** `role_binding.role` (`PLAN.md` §5). */
@@ -56,71 +65,86 @@ export type BlockKind =
   | "hr"
   | "html";
 
-/** `qa_finding.kind` (`PLAN.md` §5). */
-export type QaFindingKind =
-  | "untranslated"
-  | "glossary_mismatch"
-  | "placeholder_broken"
-  | "markdown_malformed"
-  | "length_anomaly"
-  | "duplicate"
-  | "empty"
-  | "latin_leftover"
-  | "glossary_conflict";
-
-export type QaSeverity = "critical" | "major" | "minor" | "info";
-export type QaFindingStatus = "open" | "resolved" | "ignored";
-export type Severity = QaSeverity;
-
 /** Log levels emitted on `log://line`, matching the Rust `tracing` levels. */
 export type LogLevel = "trace" | "debug" | "info" | "warn" | "error";
 
-/** Sidecar supervisor state (`PLAN.md` §2, event `sidecar://status`). */
-export type SidecarState = "starting" | "ready" | "restarting" | "failed" | "stopped";
+/**
+ * Sidecar supervisor state (`crates/app/src/sidecar/supervisor.rs::SidecarState`, serde
+ * `snake_case`). Reported by `sidecar_status` and on `sidecar://status`.
+ */
+export type SidecarState = "stopped" | "starting" | "running" | "restarting" | "failed";
 
 /**
- * Where the VRAM figure came from (`PLAN.md` §10: sysfs -> rocm-smi -> nvidia-smi -> unknown).
- * The UI only displays it; the probe order is the backend's business.
+ * Why the resource governor capped the parallel degree
+ * (`crates/app/src/resources/vram.rs::ParallelReason`, serde `snake_case`).
  */
-export type VramSource = "sysfs" | "rocm-smi" | "nvidia-smi" | "unknown";
+export type ParallelReason = "ok" | "vram_unknown" | "insufficient_headroom" | "slot_limited";
 
 /** Output formats offered by the Pandoc driver. */
 export type ExportFormat = "pdf" | "epub" | "docx";
 
-/** Phases of a Pandoc build, reported on `export://progress`. */
-export type ExportPhase = "prepare" | "render" | "pandoc" | "done" | "failed";
+/** Generic acknowledgement returned by the mutating commands (`commands::Ack`). */
+export interface Ack {
+  ok: boolean;
+}
 
 // --- projects ------------------------------------------------------------------------------
 
-/** Row of `project` (`PLAN.md` §5). `settings` is the parsed `settings_json` column. */
+/** Row of `project` (`db::models::Project`); `settings_json` is the raw column. */
 export interface Project {
   id: string;
   name: string;
   source_path: string;
   source_hash: string;
-  source_format: SourceFormat;
+  source_format: string;
   source_lang: string | null;
   target_lang: string;
   doc_title: string | null;
   doc_author: string | null;
   prompts_snapshot_dir: string | null;
-  settings: JsonObject;
+  settings_json: string;
   created_at: string;
   updated_at: string;
 }
 
-/** Arguments of `project_create`. The backend fills id/hashes/timestamps. */
-export interface ProjectCreateRequest {
+/** Request body of `project_create` (`commands::CreateProjectRequest`). */
+export interface CreateProjectRequest {
   name: string;
   source_path: string;
-  source_format: SourceFormat;
-  source_lang: string | null;
   target_lang: string;
+  source_lang?: string | null;
+  source_format?: string | null;
+  doc_title?: string | null;
+  doc_author?: string | null;
+  settings?: JsonValue;
+}
+
+/** Row of `chapter` (`db::models::Chapter`). */
+export interface Chapter {
+  id: string;
+  document_id: string;
+  order_index: number;
+  title: string;
+  level: number;
+  block_first: number;
+  block_last: number;
+  summary: string | null;
+  summary_model: string | null;
+  summary_hash: string | null;
+  status: string;
+}
+
+/** Result of `project_get` (`commands::project::ProjectDetail`). */
+export interface ProjectDetail {
+  project: Project;
+  chapters: Chapter[];
+  chunks_total: number;
+  chunks_done: number;
 }
 
 // --- LLM endpoints -------------------------------------------------------------------------
 
-/** Row of `llm_endpoint` (`PLAN.md` §5). */
+/** Row of `llm_endpoint` (`db::models::LlmEndpoint`); `props_json` is the raw `/props` body. */
 export interface Endpoint {
   id: string;
   name: string;
@@ -130,185 +154,118 @@ export interface Endpoint {
   max_concurrency: number | null;
   notes: string | null;
   last_health_at: string | null;
-  /** `null` when the endpoint has never been probed. */
   last_health_ok: boolean | null;
-  props: JsonObject;
+  props_json: string | null;
 }
 
-/** Arguments of `endpoint_upsert`; `id` absent means "create". */
-export interface EndpointUpsertRequest {
-  id: string | null;
+/** Request body of `endpoint_upsert` (`commands::endpoint::EndpointUpsert`); `id` absent = create. */
+export interface EndpointUpsert {
+  id?: string | null;
   name: string;
   base_url: string;
-  api_key_ref: string | null;
-  max_concurrency: number | null;
-  notes: string | null;
+  api_key_ref?: string | null;
+  max_concurrency?: number | null;
+  notes?: string | null;
 }
 
-/** Subset of llama-server `/props` that the models page surfaces (`PLAN.md` §7.1). */
-export interface EndpointProps {
+/** Request body of `endpoint_models` (`commands::endpoint::EndpointModelsRequest`). */
+export interface EndpointModelsRequest {
+  endpoint_id?: string | null;
+  base_url?: string | null;
+}
+
+/** Result of a single `GET /health` probe (`llm::health::EndpointHealth`). */
+export interface EndpointHealth {
+  ok: boolean;
+  status: string | null;
+  code: number;
+  checked_at: string;
+}
+
+/** `GET /props` (`llm::types::Props`). */
+export interface Props {
   total_slots: number | null;
   n_ctx: number | null;
   model_path: string | null;
-  /** Raw `/props` body, kept for the "show details" disclosure. */
-  raw: JsonObject | null;
+  default_generation_settings: JsonValue | null;
 }
 
-/** Result of `endpoint_test` (`GET /health` + `GET /props`). */
-export interface EndpointTestResult {
-  ok: boolean;
-  latency_ms: number | null;
-  message: string;
-  props: EndpointProps | null;
-}
-
-/** One entry of `GET /v1/models`. */
-export interface EndpointModel {
+/** One entry of `GET /v1/models` (`llm::types::ModelInfo`). */
+export interface ModelInfo {
   id: string;
-  label: string | null;
-  context_length: number | null;
+  object: string | null;
+  owned_by: string | null;
 }
 
-/** Row of `role_binding` (`PLAN.md` §5). */
+/** Result of `endpoint_test` (`commands::endpoint::EndpointTestResult`). */
+export interface EndpointTestResult {
+  health: EndpointHealth;
+  props: Props | null;
+  models: ModelInfo[];
+}
+
+// --- role bindings -------------------------------------------------------------------------
+
+/** Row of `role_binding` (`db::models::RoleBinding`); `params_json` is the raw column. */
 export interface RoleBinding {
   id: string;
   endpoint_id: string;
-  role: Role;
+  role: string;
   model: string;
-  params: JsonObject;
+  params_json: string;
   priority: number;
 }
 
-/** Arguments of `role_binding_set`; upsert on `(endpoint_id, role)`. */
-export interface RoleBindingSetRequest {
+/** Request body of `role_binding_set` (`commands::role_binding::RoleBindingSet`). */
+export interface RoleBindingSet {
+  id?: string | null;
+  role: string;
   endpoint_id: string;
-  role: Role;
   model: string;
-  params: JsonObject;
-  priority: number;
+  params?: JsonValue;
+  priority?: number | null;
 }
 
-/** Arguments of `role_binding_list`. */
-export interface RoleBindingListRequest {
-  endpoint_id?: string | undefined;
-  role?: Role | undefined;
-}
+// --- ingestion -----------------------------------------------------------------------------
 
-// --- document model ------------------------------------------------------------------------
-
-/** `Block` from `PLAN.md` §4.1 / AGENTS.md. */
-export interface Block {
-  id: string;
-  chapter_id: string | null;
-  order: number;
-  kind: BlockKind;
-  level: number;
-  source_md: string;
-  source_text: string;
-  translatable: boolean;
-  attrs: JsonObject;
-  content_hash: string;
-}
-
-/**
- * `Chapter` from AGENTS.md. `block_first`/`block_last` are `null` right after ingestion, when
- * the block list has not been materialised yet.
- */
-export interface Chapter {
-  id: string;
-  order: number;
-  title: string;
-  level: number;
-  block_first: number | null;
-  block_last: number | null;
-}
-
-/** Full `Chunk` row (`PLAN.md` §4.3). Returned by `chunk_get`. */
-export interface Chunk {
-  id: string;
-  document_id: string;
-  chapter_id: string | null;
-  order_index: number;
-  block_ids: string[];
-  source_md: string;
-  token_estimate: number;
-  context_carrier: JsonObject;
-  flags: string[];
-  status: ChunkStatus;
-  prompt_hash: string | null;
-  model_id: string | null;
-  params_json: string | null;
-  context_manifest_json: string | null;
-  target_md: string | null;
-  error: string | null;
-  created_at: string;
-  updated_at: string;
-}
-
-/**
- * Row of the chunk table.
- *
- * The table needs the chapter title and the attempt counter, which live in other tables
- * (`chapter`, `job`). Rather than issuing N+1 queries from the UI, `chunk_list` is assumed to
- * return this denormalised projection.
- */
-export interface ChunkSummary {
-  id: string;
-  chapter_id: string | null;
-  chapter_title: string | null;
-  order_index: number;
-  block_count: number;
-  flags: string[];
-  token_estimate: number;
-  status: ChunkStatus;
-  model_id: string | null;
-  /** Attempts of the `translate_chunk` job that owns this chunk. */
-  attempts: number;
-  error: string | null;
-  updated_at: string;
-}
-
-/** Arguments of `chunk_list`. */
-export interface ChunkListRequest {
+/** Request body of `ingest_start` (`commands::ingest::IngestStartRequest`). */
+export interface IngestStartRequest {
   project_id: string;
-  chapter_id?: string | undefined;
-  status?: ChunkStatus | undefined;
-  limit?: number | undefined;
-  offset?: number | undefined;
+  /** Falls back to the project's `source_path` when omitted. */
+  source_path?: string | null;
+  pdf_backend?: string | null;
 }
 
-/** Row of `block_translation` (`PLAN.md` §5): the original <-> translated alignment. */
-export interface BlockTranslation {
-  block_id: string;
-  chunk_id: string;
-  text_md: string;
-  placeholders_ok: boolean;
-  origin: "translator" | "editor" | "proofreader" | "user";
-  edited_by_user: boolean;
-  updated_at: string;
+/** Result of `ingest_start` (`commands::ingest::JobStarted`). */
+export interface JobStarted {
+  job_id: string;
 }
 
-/**
- * Result of `chunk_get`: the chunk plus the blocks it covers and the block-level translations.
- * This is what lets the translation page show the aligned original/target text without a
- * block-listing command (there is none in the frozen `UI -> Tauri` table).
- */
-export interface ChunkDetail {
-  chunk: Chunk;
-  blocks: Block[];
-  translations: BlockTranslation[];
+// --- translation control -------------------------------------------------------------------
+
+/** Request body of `translation_start` (`commands::translation::TranslationStartRequest`). */
+export interface TranslationStartRequest {
+  project_id?: string | null;
+  /** Only re-enqueue chunks that previously failed or need review. */
+  only_retry?: boolean;
+}
+
+/** Result of `translation_start` (`commands::translation::TranslationStartResult`). */
+export interface TranslationStartResult {
+  enqueued: number;
+  running: boolean;
 }
 
 // --- jobs ----------------------------------------------------------------------------------
 
-/** Row of `job` (`PLAN.md` §5). */
+/** Row of `job` (`db::models::Job`); `payload_json` is the raw column. */
 export interface Job {
   id: string;
   project_id: string;
-  kind: JobKind;
-  payload: JsonObject;
+  kind: string;
+  payload_json: string;
   priority: number;
-  state: JobState;
+  state: string;
   attempts: number;
   max_attempts: number;
   lease_owner: string | null;
@@ -320,183 +277,162 @@ export interface Job {
   finished_at: string | null;
 }
 
-/** Arguments of `job_list`. */
+/** Request body of `job_list` (`commands::jobs::JobListRequest`). */
 export interface JobListRequest {
-  project_id?: string | undefined;
-  state?: JobState | undefined;
-  kind?: JobKind | undefined;
-  limit?: number | undefined;
+  project_id?: string | null;
+  state?: string | null;
+  limit?: number | null;
 }
 
-/** Common acknowledgement for the fire-and-forget queue commands. */
-export interface QueueAck {
-  accepted: number;
-  job_ids: string[];
-  message: string | null;
-}
+// --- chunks and blocks ---------------------------------------------------------------------
 
-// --- ingestion -----------------------------------------------------------------------------
-
-/** Arguments of `ingest_start`. */
-export interface IngestStartRequest {
-  project_id: string;
-  path: string;
-  pdf_backend?: PdfBackend | undefined;
-}
-
-/**
- * Result of `ingest_start`.
- *
- * `AGENTS.md` freezes only `ingest_start`; format detection, extraction and chapter preview are
- * therefore assumed to happen inside that call (sidecar `detect_format` + `ingest` +
- * `parse_document`, orchestrated by Rust) and to be reported back in one payload.
- */
-export interface IngestResult {
-  project_id: string;
+/** Row of `chunk` (`db::models::Chunk`); the `*_json` columns are raw strings. */
+export interface Chunk {
+  id: string;
   document_id: string;
-  markdown_path: string;
-  format: SourceFormat;
-  extractor: string;
-  extractor_version: string | null;
-  metadata: JsonObject;
-  chapters: Chapter[];
-  warnings: string[];
-  block_count: number;
-  chunk_count: number;
-  /** Jobs enqueued by the ingestion (chunk building, summaries). */
-  job_ids: string[];
-}
-
-// --- translation control -------------------------------------------------------------------
-
-/** Arguments of `translation_start`. Re-issuing it resumes a paused/cancelled run (`PLAN.md` §6). */
-export interface TranslationStartRequest {
-  project_id: string;
-  /** Restrict to specific chunks; omitted means "every chunk not yet done". */
-  chunk_ids?: string[] | undefined;
-  /** Override the translator model for this run ("ri-traduci con un altro modello"). */
-  model?: string | null | undefined;
-}
-
-/** Arguments of `translation_pause` / `translation_cancel`. */
-export interface TranslationControlRequest {
-  project_id: string;
-  /**
-   * Restricts the cancellation to these chunks. Used by the per-row "Salta" action: there is no
-   * dedicated skip command in the frozen table, so skipping is expressed as "cancel the pending
-   * translation jobs of this chunk".
-   */
-  chunk_ids?: string[] | undefined;
-}
-
-// --- metrics ------------------------------------------------------------------------------
-
-/** VRAM reading; all values are `null` when the source is `unknown`. */
-export interface VramInfo {
-  used_bytes: number | null;
-  total_bytes: number | null;
-  source: VramSource;
-}
-
-/** Slot occupancy as reported by llama-server `/props.total_slots` (`PLAN.md` §10). */
-export interface SlotInfo {
-  endpoint_id: string | null;
-  total_slots: number | null;
-  free_slots: number | null;
-  in_flight: number;
-}
-
-/** Resource governor view (`PLAN.md` §10). */
-export interface ResourceMetrics {
-  vram: VramInfo;
-  slots: SlotInfo;
-  /** `min(free slots, VRAM headroom / per-slot cost, user limit)`. */
-  max_parallel: number;
-  /** True when the governor fell back to serial execution. */
-  degraded: boolean;
-  /** Explicit, user-facing reason for the degradation; shown verbatim in the gauge. */
-  degraded_reason: string | null;
-}
-
-/** Real throughput observed by the scheduler — the only basis for the ETA in `JobsView`. */
-export interface ThroughputMetrics {
-  chunks_done: number;
-  chunks_total: number;
-  tokens_prompt: number;
-  tokens_completion: number;
-  /** Wall-clock elapsed since the run started. */
-  elapsed_ms: number;
-  avg_latency_ms: number | null;
-}
-
-/** Result of `metrics_get` and payload of `metrics://tick`. */
-export interface Metrics {
-  project_id: string | null;
-  resources: ResourceMetrics;
-  throughput: ThroughputMetrics;
+  chapter_id: string | null;
+  order_index: number;
+  block_ids_json: string;
+  source_md: string;
+  token_estimate: number;
+  context_json: string;
+  flags_json: string;
+  status: string;
+  prompt_hash: string | null;
+  model_id: string | null;
+  params_json: string | null;
+  context_manifest_json: string | null;
+  target_md: string | null;
+  error: string | null;
+  created_at: string;
   updated_at: string;
 }
 
-// --- sidecar ------------------------------------------------------------------------------
-
-/** Result of `sidecar_status` and payload of `sidecar://status`. */
-export interface SidecarStatus {
-  state: SidecarState;
-  version: string | null;
-  python: string | null;
-  platform: string | null;
-  pid: number | null;
-  restarts: number;
-  last_error: string | null;
+/** Request body of `chunk_list` (`commands::chunks::ChunkListRequest`). */
+export interface ChunkListRequest {
+  project_id: string;
+  status?: string | null;
 }
 
-// --- QA ------------------------------------------------------------------------------------
-
-/** Row of `qa_finding` (`PLAN.md` §5). `details` is the parsed `details_json` column. */
-export interface QaFinding {
+/** Row of `block` (`db::models::Block`); `attrs_json` is the raw column. */
+export interface Block {
   id: string;
-  project_id: string;
+  document_id: string;
+  chapter_id: string | null;
+  order_index: number;
+  kind: string;
+  level: number;
+  source_md: string;
+  source_text: string;
+  translatable: boolean;
+  attrs_json: string;
+  content_hash: string;
+}
+
+/** Row of `block_translation` (`db::models::BlockTranslation`). */
+export interface BlockTranslation {
+  block_id: string;
+  chunk_id: string;
+  text_md: string;
+  placeholders_ok: boolean;
+  origin: string;
+  edited_by_user: boolean;
+  updated_at: string;
+}
+
+/** Row of `llm_call` (`db::models::LlmCall`); `params_json` is the raw column. */
+export interface LlmCall {
+  id: string;
+  job_id: string | null;
   chunk_id: string | null;
-  block_id: string | null;
-  kind: QaFindingKind;
-  severity: QaSeverity;
-  details: JsonObject;
-  status: QaFindingStatus;
+  role: string;
+  endpoint_id: string | null;
+  model: string;
+  params_json: string;
+  seed: number | null;
+  prompt_hash: string;
+  prompt_text: string | null;
+  prompt_compressed: boolean | null;
+  response_text: string | null;
+  finish_reason: string | null;
+  prompt_tokens: number | null;
+  completion_tokens: number | null;
+  latency_ms: number | null;
+  attempt: number;
+  error: string | null;
   created_at: string;
+}
+
+/** Result of `chunk_get` (`commands::chunks::ChunkDetail`). */
+export interface ChunkDetail {
+  chunk: Chunk;
+  blocks: Block[];
+  translations: BlockTranslation[];
+  llm_calls: LlmCall[];
+}
+
+// --- metrics -------------------------------------------------------------------------------
+
+/** VRAM reading, in bytes (`resources::vram::VramInfo`). */
+export interface VramInfo {
+  used_bytes: number;
+  total_bytes: number;
+}
+
+/** One row of the queue-depth histogram (`commands::metrics::JobCount`). */
+export interface JobCount {
+  state: string;
+  count: number;
+}
+
+/**
+ * Result of `metrics_get` (`commands::metrics::Metrics`): a point-in-time snapshot of
+ * machine resources, queue depth and worker state. `metrics://tick` carries a closely related
+ * payload (see `MetricsTickEvent`).
+ */
+export interface Metrics {
+  vram: VramInfo | null;
+  free_bytes: number | null;
+  suggested_parallel: number;
+  reason: ParallelReason;
+  jobs: JobCount[];
+  sidecar_in_flight: number;
+  worker_running: boolean;
+  worker_paused: boolean;
+}
+
+// --- sidecar -------------------------------------------------------------------------------
+
+/** Result of `sidecar_status` and payload of `sidecar://status` (`sidecar::supervisor::SidecarStatus`). */
+export interface SidecarStatus {
+  state: SidecarState;
+  pid: number | null;
+  attempts: number;
+  message: string | null;
 }
 
 // --- export --------------------------------------------------------------------------------
 
-/** A buildable unit: one chapter, or the whole document split by chapter (`PLAN.md` §11.5). */
-export interface ExportUnit {
-  path: string;
-  title: string;
-}
-
-/** Arguments of `export_build`. */
-export interface ExportBuildRequest {
+/** Request body of `export_build` (`pipeline::export::ExportRequest`). */
+export interface ExportRequest {
   project_id: string;
-  output_format: ExportFormat;
-  /** Pandoc template path; `null` lets the driver use its bundled default. */
-  template: string | null;
-  /** CSS path, meaningful for HTML/EPUB only. */
-  css: string | null;
-  /** Empty array means "every chapter". */
-  units: ExportUnit[];
+  /** `pdf` | `epub` | `docx`. */
+  output_format: string;
   /** `null` lets the backend place the file under the project output directory. */
-  output_path: string | null;
+  output_path?: string | null;
+  /** Pandoc template path; `null` uses the driver default. */
+  template?: string | null;
+  /** CSS path, meaningful for HTML/EPUB only. */
+  css?: string | null;
 }
 
-/** Result of `export_build` (sidecar `pandoc_build`, `PLAN.md` §12.1). */
-export interface ExportBuildResult {
+/** Result of `export_build` (`pipeline::export::ExportOutcome`). */
+export interface ExportOutcome {
   output_path: string;
+  /** Number of Markdown units that were rendered. */
+  units: number;
   log: string;
-  duration_ms: number;
-}
-
-/** Arguments of `open_path`: reveals a file or directory with the OS handler. */
-export interface OpenPathRequest {
-  path: string;
+  duration_ms: number | null;
 }
 
 // --- event payloads ------------------------------------------------------------------------
@@ -504,40 +440,47 @@ export interface OpenPathRequest {
 /**
  * Payload of `job://progress`.
  *
- * Deliberately carries the affected `chunk_id` with its new status/model/attempts so
- * `TranslateView` can patch a single row in place instead of refetching the whole table.
+ * The control plane emits the serialized [`Job`] row — exactly the shape `job_list` returns —
+ * at every transition it owns: `pending` on enqueue, `leased`/`running` on claim, then `done`,
+ * `failed` or `cancelled`. Views still treat it as an **invalidation trigger** and refetch
+ * through commands, because a job event says nothing about the other rows.
  */
-export interface JobProgressEvent {
-  job_id: string;
-  project_id: string;
-  kind: JobKind;
-  state: JobState;
-  done: number;
-  total: number;
-  chunk_id: string | null;
-  chunk_status: ChunkStatus | null;
-  attempts: number;
-  model: string | null;
-  error: string | null;
-  updated_at: string;
+export type JobProgressEvent = Job;
+
+/**
+ * Payload of `metrics://tick` (`crates/app/src/lib.rs::spawn_metrics_ticker`). It is close to,
+ * but not identical to, the `metrics_get` result: it carries the sidecar status inline and no
+ * `vram` / `sidecar_in_flight` fields.
+ */
+export interface MetricsTickEvent {
+  free_bytes: number | null;
+  suggested_parallel: number;
+  reason: ParallelReason;
+  jobs: JobCount[];
+  worker_running: boolean;
+  worker_paused: boolean;
+  sidecar: SidecarStatus;
 }
 
-/** Payload of `log://line`. */
+/**
+ * Payload of `log://line` (`crates/app/src/events.rs::LogLine`).
+ *
+ * `source` is the emitter — `sidecar` for the sidecar's stderr, `worker` for job failures. The
+ * control plane does not populate `project_id` today, so the view treats a missing value as a
+ * global line rather than dropping it.
+ */
 export interface LogLineEvent {
   ts: string;
   level: LogLevel;
-  target: string;
+  source: string;
   message: string;
-  job_id: string | null;
-  project_id: string | null;
+  project_id?: string | null;
 }
 
-/** Payload of `export://progress`. */
+/** Payload of `export://progress` (`commands::export`, one of a `started` / `done` ack). */
 export interface ExportProgressEvent {
-  project_id: string;
-  unit: string;
-  done: number;
-  total: number;
-  phase: ExportPhase;
-  message: string | null;
+  state: string;
+  format?: string;
+  output_path?: string;
+  units?: number;
 }
