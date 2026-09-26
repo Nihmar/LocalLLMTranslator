@@ -88,7 +88,7 @@ async fn series_recon_produces_a_candidate_without_touching_the_canon() -> Resul
     repo::set_memory(&pool, &project_id, "synopsis", "A keeper guards the light.").await?;
     repo::set_memory(&pool, &project_id, "style_guide", "Formal register.").await?;
 
-    let outcome = series_recon::run_series_recon(&deps, None, &series.id).await?;
+    let outcome = series_recon::run_series_recon(&deps, None, &series.id, false).await?;
     assert_eq!(outcome.model, "fake-model");
     assert_eq!(outcome.books, 1);
     assert_eq!(outcome.characters, 2);
@@ -110,7 +110,7 @@ async fn series_recon_produces_a_candidate_without_touching_the_canon() -> Resul
         .is_none());
 
     // A second run replaces the candidate, it does not pile up.
-    series_recon::run_series_recon(&deps, None, &series.id).await?;
+    series_recon::run_series_recon(&deps, None, &series.id, false).await?;
     assert_eq!(
         repo::list_series_memory(&pool, &series.id)
             .await?
@@ -119,6 +119,81 @@ async fn series_recon_produces_a_candidate_without_touching_the_canon() -> Resul
             .count(),
         1
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn an_unchanged_series_is_not_re_synthesized() -> Result<()> {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(sse_body()),
+        )
+        // Exactly one model call across both runs: the second is served from the candidate.
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir()?;
+    let (pool, deps) = deps_for(dir.path()).await?;
+    let project_id = seed_project(&pool, "series", &server.uri(), true)
+        .await?
+        .project_id;
+    let series = seed_series(&pool, &project_id).await?;
+    repo::set_memory(&pool, &project_id, "synopsis", "A keeper guards the light.").await?;
+
+    let first = series_recon::run_series_recon(&deps, None, &series.id, false).await?;
+    assert!(!first.from_cache);
+    assert_eq!(first.fresh_books, 1);
+
+    let second = series_recon::run_series_recon(&deps, None, &series.id, false).await?;
+    assert!(
+        second.from_cache,
+        "an unchanged series must not call the model"
+    );
+    assert_eq!(second.fresh_books, 0);
+    assert_eq!(second.characters, first.characters);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_changed_book_invalidates_the_candidate() -> Result<()> {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(sse_body()),
+        )
+        .expect(2)
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir()?;
+    let (pool, deps) = deps_for(dir.path()).await?;
+    let project_id = seed_project(&pool, "series", &server.uri(), true)
+        .await?
+        .project_id;
+    let series = seed_series(&pool, &project_id).await?;
+    repo::set_memory(&pool, &project_id, "synopsis", "A keeper guards the light.").await?;
+
+    series_recon::run_series_recon(&deps, None, &series.id, false).await?;
+
+    // Editing the confirmed profile makes the book fresh again.
+    repo::set_memory(
+        &pool,
+        &project_id,
+        "synopsis",
+        "A keeper guards the light no more.",
+    )
+    .await?;
+    let second = series_recon::run_series_recon(&deps, None, &series.id, false).await?;
+    assert!(!second.from_cache);
+    assert_eq!(second.fresh_books, 1);
     Ok(())
 }
 
@@ -132,7 +207,7 @@ async fn series_recon_needs_confirmed_book_evidence() -> Result<()> {
         .project_id;
     let series = seed_series(&pool, &project_id).await?;
 
-    let error = series_recon::run_series_recon(&deps, None, &series.id)
+    let error = series_recon::run_series_recon(&deps, None, &series.id, false)
         .await
         .expect_err("an empty evidence set must be rejected");
     assert!(

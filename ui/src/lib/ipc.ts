@@ -409,8 +409,8 @@ export function seriesQaScan(seriesId: string): Promise<SeriesQaScanResult> {
 }
 
 /** Enqueues the `series_recon` job: a candidate series profile from the confirmed books. */
-export function seriesReconStart(seriesId: string): Promise<JobStarted> {
-  return call<JobStarted>(COMMANDS.seriesReconStart, { series_id: seriesId });
+export function seriesReconStart(seriesId: string, force = false): Promise<JobStarted> {
+  return call<JobStarted>(COMMANDS.seriesReconStart, { req: { series_id: seriesId, force } });
 }
 
 /** Applies the accepted candidate fields and remembers the rejected sources. */

@@ -176,6 +176,8 @@ export function SeriesView() {
   const [characterDrafts, setCharacterDrafts] = useState<
     Record<string, { checked?: boolean; target?: string }>
   >({});
+  // Re-synthesize the candidate even when no book profile or canon changed.
+  const [forceRecon, setForceRecon] = useState(false);
 
   const selected = useMemo(
     () => series.find((entry) => entry.id === selectedId) ?? null,
@@ -536,9 +538,9 @@ export function SeriesView() {
       return;
     }
     await run("recon", async () => {
-      await seriesReconStart(selected.id);
+      await seriesReconStart(selected.id, forceRecon);
       setNotice(
-        "Ricognizione di serie accodata: al termine il profilo candidato compare qui sotto.",
+        "Ricognizione di serie accodata: se profili e canone non sono cambiati il candidato resta quello attuale.",
       );
     });
   }
@@ -1298,8 +1300,19 @@ export function SeriesView() {
                     >
                       Genera profilo di serie
                     </button>
+                    <label className="flex items-center gap-1 text-xs text-muted">
+                      <input
+                        type="checkbox"
+                        checked={forceRecon}
+                        onChange={(event) => {
+                          setForceRecon(event.target.checked);
+                        }}
+                      />
+                      Forza rigenerazione
+                    </label>
                     <span className="field-hint">
-                      Usa il ruolo orchestrator sui profili confermati dei libri.
+                      Usa il ruolo orchestrator sui profili confermati dei libri; solo i libri
+                      cambiati vengono ritradotti in profilo.
                     </span>
                   </div>
 

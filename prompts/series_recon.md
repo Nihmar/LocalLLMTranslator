@@ -6,12 +6,14 @@ overwritten afterwards. The line `---USER---` alone separates the system and use
 
 Variables:
   SYSTEM: source_language, target_language
-  USER:   series_name, books, glossary, response_schema
+  USER:   series_name, previous_profile, books, glossary, response_schema
 
 Everything the model returns is a CANDIDATE stored under series_memory['series_profile']:
-nothing reaches a translation prompt until the user copies it into the series style guide
-or synopsis from the Series view. The evidence is local only — the confirmed profiles of
-the member books and the canon glossary; the app never fetches anything.
+nothing reaches a translation prompt until the user confirms it field by field from the
+Series view. The evidence is local only — the confirmed profiles of the member books and
+the canon glossary; the app never fetches anything. The run is incremental: only the books
+whose confirmed profile changed are sent, with the previous candidate as context, so
+`previous_profile` may be empty on the first run.
 -->
 You are the canon editor of a translated book series ({{ source_language }} → {{ target_language }}).
 You receive the confirmed profiles of the books already translated and the series glossary.
@@ -22,6 +24,9 @@ support; an empty list is a valid answer.
 ---USER---
 SERIES: {{ series_name }}
 
+{% if previous_profile %}PREVIOUS CANDIDATE PROFILE (update it; keep what is still valid):
+{{ previous_profile }}
+{% endif %}
 BOOKS (confirmed profiles):
 {{ books }}
 

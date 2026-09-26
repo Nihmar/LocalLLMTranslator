@@ -795,18 +795,21 @@ IPC: `series_list`, `series_create`, `series_get`, `series_update`, `series_dele
 `project_set_series`, `series_glossary_list`, `series_glossary_upsert`,
 `series_glossary_delete`, `series_variant_upsert`, `series_variant_delete`,
 `series_promote_term`, `series_export`, `series_import`, `series_qa_scan`,
-`series_recon_start`, `series_recon_confirm`. Events: none new — the existing
-`job://progress` and `log://line` cover the work, and conflicts are read through
-`qa_report`.
+`series_recon_start` (`{req: {series_id, force?}}`), `series_recon_confirm`. Events: none new —
+the existing `job://progress` and `log://line` cover the work, and conflicts are read
+through `qa_report`.
 
 Milestones (S1–S5) are in §13. All of them are implemented: the Series view authors the
 canon, the bundle merge and the cross-book QA scan exist, and `series_recon` produces a
 candidate profile from the member books' confirmed profiles (it is never injected into a
 prompt until the user confirms it). `series_recon_confirm` applies the user's decisions
 field by field: accepted values land in the series memory, accepted characters become
-approved canon terms and rejected sources are remembered so a later run skips them. The job
-runs on the `orchestrator` role and is attached to the first member book — the queue is
-project-scoped — with the `series_id` in its payload.
+approved canon terms and rejected sources are remembered so a later run skips them. The run
+is **incremental**: a book whose confirmed profile and the canon hash are unchanged does not
+reach the model, and the previous candidate is fed back as context so an update keeps what
+is still valid; `force` re-synthesizes everything. The job runs on the `orchestrator` role
+and is attached to the first member book — the queue is project-scoped — with the
+`series_id` in its payload.
 
 ---
 

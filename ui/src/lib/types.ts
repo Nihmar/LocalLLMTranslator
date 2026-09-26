@@ -914,6 +914,13 @@ export interface SeriesQaScanResult {
   enqueued: number;
 }
 
+/** Request body of `series_recon_start` (`commands::series::SeriesReconStart`). */
+export interface SeriesReconStartRequest {
+  series_id: string;
+  /** Re-synthesize even when no book profile or canon changed. */
+  force?: boolean;
+}
+
 /** One character/term of the candidate series profile (`pipeline::series_recon::SeriesCharacter`). */
 export interface SeriesReconCharacter {
   source: string;
@@ -927,6 +934,10 @@ export interface SeriesReconProvenance {
   model: string;
   prompt_hash: string;
   books: string[];
+  /** Identity of every book's evidence, so an unchanged book is not re-synthesized. */
+  sources: [{ project_id: string; hash: string }];
+  /** Hash of the canon the profile was built with. */
+  glossary_hash: string;
 }
 
 /**

@@ -101,10 +101,15 @@ impl JobDispatcher for PipelineDispatcher {
                 let series_id = commands::payload_str(&payload, "series_id").ok_or_else(|| {
                     AppError::Invalid("series_recon job is missing series_id".into())
                 })?;
+                let force = payload
+                    .get("force")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
                 crate::pipeline::series_recon::run_series_recon(
                     &self.deps,
                     Some(&job.id),
                     &series_id,
+                    force,
                 )
                 .await?;
                 Ok(())

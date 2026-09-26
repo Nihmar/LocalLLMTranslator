@@ -50,6 +50,9 @@ support; an empty list is a valid answer."#;
 
 pub const DEFAULT_SERIES_RECON_USER_TEMPLATE: &str = r#"SERIES: {{ series_name }}
 
+{% if previous_profile %}PREVIOUS CANDIDATE PROFILE (update it; keep what is still valid):
+{{ previous_profile }}
+{% endif %}
 BOOKS (confirmed profiles):
 {{ books }}
 
@@ -73,11 +76,28 @@ pub struct SeriesCharacter {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct SeriesProfileProvenance {
+    #[serde(default)]
     pub generated_at: String,
+    #[serde(default)]
     pub model: String,
+    #[serde(default)]
     pub prompt_hash: String,
     /// Names of the books the profile was derived from.
+    #[serde(default)]
     pub books: Vec<String>,
+    /// Identity of every book's evidence, so an unchanged book is not re-synthesized.
+    #[serde(default)]
+    pub sources: Vec<BookSource>,
+    /// Hash of the canon the profile was built with: a glossary change invalidates it.
+    #[serde(default)]
+    pub glossary_hash: String,
+}
+
+/// One book's evidence identity (`project_id` + hash of its confirmed profile).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct BookSource {
+    pub project_id: String,
+    pub hash: String,
 }
 
 /// The candidate profile stored under [`MEMORY_KEY`].
@@ -103,6 +123,10 @@ pub struct SeriesReconOutcome {
     pub model: String,
     pub books: usize,
     pub characters: usize,
+    /// Books whose evidence reached the model in this run.
+    pub fresh_books: usize,
+    /// True when nothing changed and the stored candidate was returned untouched.
+    pub from_cache: bool,
 }
 
 /// One character the user accepted from the candidate.
@@ -160,7 +184,6 @@ struct RawProfile {
 struct Evidence {
     books: String,
     glossary: String,
-    book_names: Vec<String>,
 }
 
 fn book_block(project: &Project, synopsis: &str, style_guide: &str) -> Option<String> {
@@ -181,18 +204,10 @@ fn book_block(project: &Project, synopsis: &str, style_guide: &str) -> Option<St
 
 fn render_evidence(books: Vec<String>, glossary: Vec<String>) -> Evidence {
     let mut evidence = Evidence {
-        book_names: Vec::new(),
         books: String::new(),
         glossary: String::new(),
     };
     for block in books {
-        let name = block
-            .lines()
-            .next()
-            .and_then(|line| line.strip_prefix("BOOK: "))
-            .unwrap_or_default()
-            .to_string();
-        evidence.book_names.push(name);
         if evidence.books.chars().count() + block.chars().count() > MAX_EVIDENCE_CHARS {
             break;
         }
@@ -272,11 +287,43 @@ fn read_first(dir: &Path, name: &str) -> Option<String> {
     std::fs::read_to_string(dir.join(name)).ok()
 }
 
+/// Hash of a book's confirmed evidence, so an unchanged book is not re-synthesized.
+fn book_hash(synopsis: &str, style_guide: &str) -> String {
+    sha256_hex_str(&format!("{}\u{0}{}", synopsis.trim(), style_guide.trim()))
+}
+
+/// The previous candidate as prompt context, so an update keeps what is still valid.
+fn previous_block(profile: &SeriesProfile) -> String {
+    let mut out = String::new();
+    if !profile.synopsis.trim().is_empty() {
+        out.push_str(&format!("SYNOPSIS: {}\n", profile.synopsis));
+    }
+    if !profile.style_notes.is_empty() {
+        out.push_str(&format!(
+            "STYLE NOTES:\n- {}\n",
+            profile.style_notes.join("\n- ")
+        ));
+    }
+    if !profile.characters.is_empty() {
+        out.push_str("CHARACTERS:\n");
+        for character in &profile.characters {
+            out.push_str(&format!("- {} => {}\n", character.source, character.target));
+        }
+    }
+    clamp_chars(&out, MAX_EVIDENCE_CHARS)
+}
+
 /// Run the series synthesis and persist the candidate profile.
+///
+/// Incremental: only the books whose confirmed profile changed (or every book when nothing is
+/// known yet, or `force` is set) are fed to the model, together with the previous candidate so
+/// it updates rather than restarts. With nothing changed and no force, the stored candidate is
+/// returned untouched and the model is not called.
 pub async fn run_series_recon(
     deps: &PipelineDeps,
     job_id: Option<&str>,
     series_id: &str,
+    force: bool,
 ) -> Result<SeriesReconOutcome> {
     let pool = &deps.pool;
     let series = repo::get_series(pool, series_id)
@@ -288,9 +335,27 @@ pub async fn run_series_recon(
             "the series has no member book: attach one first".into(),
         ));
     }
+    let previous = repo::get_series_memory(pool, series_id, MEMORY_KEY)
+        .await?
+        .and_then(|json| serde_json::from_str::<SeriesProfile>(&json).ok());
 
-    // Evidence: the confirmed profile of every member book, capped.
-    let mut blocks = Vec::new();
+    // Evidence: the confirmed profile of every member book, with the hash that decides
+    // whether it still needs to reach the model.
+    let mut all_blocks = Vec::new();
+    let mut fresh_blocks = Vec::new();
+    let mut sources: Vec<BookSource> = Vec::new();
+    let mut book_names: Vec<String> = Vec::new();
+    let previous_hashes: std::collections::HashMap<&str, &str> = previous
+        .as_ref()
+        .map(|profile| {
+            profile
+                .provenance
+                .sources
+                .iter()
+                .map(|source| (source.project_id.as_str(), source.hash.as_str()))
+                .collect()
+        })
+        .unwrap_or_default();
     for project in projects.iter().take(MAX_BOOKS) {
         let synopsis = repo::get_memory(pool, &project.id, "synopsis")
             .await?
@@ -298,27 +363,63 @@ pub async fn run_series_recon(
         let style_guide = repo::get_memory(pool, &project.id, "style_guide")
             .await?
             .unwrap_or_default();
-        if let Some(block) = book_block(project, &synopsis, &style_guide) {
-            blocks.push(block);
+        let Some(block) = book_block(project, &synopsis, &style_guide) else {
+            continue;
+        };
+        let hash = book_hash(&synopsis, &style_guide);
+        let changed = previous_hashes
+            .get(project.id.as_str())
+            .is_none_or(|known| *known != hash.as_str());
+        if changed {
+            fresh_blocks.push(block.clone());
         }
+        all_blocks.push(block);
+        sources.push(BookSource {
+            project_id: project.id.clone(),
+            hash,
+        });
+        book_names.push(project.name.clone());
     }
-    if blocks.is_empty() {
+    if all_blocks.is_empty() {
         return Err(AppError::Invalid(
             "no confirmed book profile: run the reconnaissance on at least one book".into(),
         ));
     }
 
-    // The canon as the translator sees it, deduplicated across the books.
+    // The canon as the translator sees it, deduplicated across the books. A canon change
+    // also invalidates a synthesis, even when no book profile moved.
     let mut glossary: BTreeSet<String> = BTreeSet::new();
     for project in &projects {
         for term in crate::pipeline::glossary::effective_terms(pool, &project.id).await? {
             glossary.insert(format!("{} => {}", term.source, term.target));
         }
     }
-    let evidence = render_evidence(
-        blocks,
-        glossary.into_iter().take(MAX_GLOSSARY_TERMS).collect(),
-    );
+    let glossary_lines: Vec<String> = glossary.into_iter().take(MAX_GLOSSARY_TERMS).collect();
+    let glossary_hash = sha256_hex_str(&glossary_lines.join("\n"));
+
+    let unchanged = fresh_blocks.is_empty()
+        && previous
+            .as_ref()
+            .is_some_and(|profile| profile.provenance.glossary_hash == glossary_hash);
+    if !force && unchanged {
+        let profile = previous.unwrap_or_default();
+        return Ok(SeriesReconOutcome {
+            series_id: series_id.to_string(),
+            model: profile.provenance.model.clone(),
+            books: sources.len(),
+            characters: profile.characters.len(),
+            fresh_books: 0,
+            from_cache: true,
+        });
+    }
+    // A forced run with nothing changed re-reads every book.
+    let blocks = if fresh_blocks.is_empty() {
+        all_blocks
+    } else {
+        fresh_blocks
+    };
+    let evidence = render_evidence(blocks, glossary_lines);
+    let previous_profile = previous.as_ref().map(previous_block).unwrap_or_default();
 
     let binding = repo::role_binding_for(pool, ROLE)
         .await?
@@ -352,6 +453,7 @@ pub async fn run_series_recon(
         &user_template,
         context! {
             series_name => &series.name,
+            previous_profile => &previous_profile,
             books => &evidence.books,
             glossary => &evidence.glossary,
             response_schema => serde_json::to_string_pretty(&schema)?,
@@ -379,13 +481,23 @@ pub async fn run_series_recon(
     )
     .await?;
 
+    let fresh_books = sources
+        .iter()
+        .filter(|source| {
+            previous_hashes
+                .get(source.project_id.as_str())
+                .is_none_or(|known| *known != source.hash.as_str())
+        })
+        .count();
     let profile = parse_profile(
         &response,
         SeriesProfileProvenance {
             generated_at: now(),
             model: binding.model.clone(),
             prompt_hash,
-            books: evidence.book_names.clone(),
+            books: book_names,
+            sources,
+            glossary_hash,
         },
     )?;
     // A source the user rejected earlier is never proposed again, and the rejection is
@@ -408,8 +520,10 @@ pub async fn run_series_recon(
     Ok(SeriesReconOutcome {
         series_id: series_id.to_string(),
         model: binding.model,
-        books: evidence.book_names.len(),
+        books: profile.provenance.sources.len(),
         characters: profile.characters.len(),
+        fresh_books,
+        from_cache: false,
     })
 }
 

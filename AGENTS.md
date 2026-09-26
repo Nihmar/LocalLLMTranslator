@@ -171,12 +171,16 @@ existing rendering is kept and flagged, never overwritten). Any series term chan
 Series bundles (`series_export`/`series_import`) move a series between machines and merge on
 import by revision: a differing rendering becomes `status='conflict'`, never a silent drop.
 `series_qa_scan` re-runs the QA heuristics on every translated chunk of every member book,
-and `series_recon_start` enqueues a `series_recon` job on the orchestrator role whose output
-is a **candidate** profile under `series_memory['series_profile']` — never injected into a
-prompt until the user confirms it. `series_recon_confirm` takes `{req: {series_id, synopsis?,
-style_guide?, characters[{source, target, note?}], rejected_characters[], discard?}}`: the
-accepted fields land in the series memory, accepted characters become approved canon terms
-and rejected sources stay on the candidate so a later run does not propose them again.
+and `series_recon_start` (`{req: {series_id, force?}}`) enqueues a `series_recon` job on the
+orchestrator role whose output is a **candidate** profile under
+`series_memory['series_profile']` — never injected into a prompt until the user confirms it.
+The job is incremental: a book whose confirmed profile did not change and a canon whose hash
+did not change are not re-sent to the model, and the previous candidate travels as context
+(the response says how many fresh books there were); `force` bypasses the check.
+`series_recon_confirm` takes `{req: {series_id, synopsis?, style_guide?, characters[{source,
+target, note?}], rejected_characters[], discard?}}`: the accepted fields land in the series
+memory, accepted characters become approved canon terms and rejected sources stay on the
+candidate so a later run does not propose them again.
 
 `review_start` takes `{req: {project_id, chunk_ids?, chapter_id?, pass?, with_qa?}}`, where `pass`
 is `editor` (default `both`, also `proofreader`), and enqueues the matching `edit_chunk` /

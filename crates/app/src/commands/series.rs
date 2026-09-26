@@ -480,18 +480,27 @@ pub async fn series_qa_scan(
     Ok(SeriesQaScanResult { enqueued })
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct SeriesReconStart {
+    pub series_id: String,
+    /// Re-synthesize even when no book profile or canon changed.
+    #[serde(default)]
+    pub force: bool,
+}
+
 /// Enqueue the `series_recon` job: a candidate series profile built from the member
 /// books' confirmed profiles and the canon glossary. The job belongs to the first member
-/// book (the queue is project-scoped) and carries the `series_id` in its payload.
+/// book (the queue is project-scoped) and carries the `series_id` in its payload. Without
+/// `force`, a run whose books and canon are unchanged completes without calling the model.
 #[tauri::command]
 pub async fn series_recon_start(
     state: State<'_, AppState>,
-    series_id: String,
+    req: SeriesReconStart,
 ) -> Result<super::ingest::JobStarted> {
-    let series = repo::get_series(&state.pool, &series_id)
+    let series = repo::get_series(&state.pool, &req.series_id)
         .await?
-        .ok_or_else(|| AppError::NotFound(format!("series {series_id}")))?;
-    let projects = repo::list_projects_for_series(&state.pool, &series_id).await?;
+        .ok_or_else(|| AppError::NotFound(format!("series {}", req.series_id)))?;
+    let projects = repo::list_projects_for_series(&state.pool, &req.series_id).await?;
     let first = projects.first().ok_or_else(|| {
         AppError::Invalid("the series has no member book: attach one first".into())
     })?;
@@ -505,7 +514,7 @@ pub async fn series_recon_start(
         ));
     }
 
-    let payload = serde_json::json!({ "series_id": series.id });
+    let payload = serde_json::json!({ "series_id": series.id, "force": req.force });
     let job =
         crate::scheduler::NewJob::new(&first.id, crate::pipeline::series_recon::JOB_KIND, payload)
             .with_priority(20);
