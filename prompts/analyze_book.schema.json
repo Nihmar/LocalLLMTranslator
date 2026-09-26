@@ -1,0 +1,63 @@
+{
+  "$comment": "Book reconnaissance schema (PLAN.md section 9.4). The length caps are the ones the model is asked to respect; the control plane clamps every value again before persisting it, and clamps the synopsis to 120 words and the assembled style guide to 200 words, because JSON Schema cannot express word counts.",
+  "type": "object",
+  "properties": {
+    "source_language": { "type": "string", "maxLength": 60 },
+    "genre": { "type": "string", "maxLength": 120 },
+    "audience": { "type": "string", "maxLength": 120 },
+    "era": { "type": "string", "maxLength": 120 },
+    "narrative_voice": { "type": "string", "maxLength": 300 },
+    "register": { "type": "string", "maxLength": 300 },
+    "style_notes": {
+      "type": "array",
+      "maxItems": 8,
+      "items": { "type": "string", "maxLength": 240 }
+    },
+    "themes": {
+      "type": "array",
+      "maxItems": 8,
+      "items": { "type": "string", "maxLength": 80 }
+    },
+    "synopsis": { "type": "string", "maxLength": 800 },
+    "proper_nouns": {
+      "type": "array",
+      "maxItems": 12,
+      "items": {
+        "type": "object",
+        "properties": {
+          "source": { "type": "string", "maxLength": 120 },
+          "kind": { "enum": ["proper_noun", "do_not_translate"] },
+          "note": { "type": "string", "maxLength": 200 }
+        },
+        "required": ["source", "kind"]
+      }
+    },
+    "field_basis": {
+      "type": "object",
+      "properties": {
+        "source_language": { "enum": ["from_text", "metadata", "inferred"] },
+        "genre": { "enum": ["from_text", "metadata", "inferred"] },
+        "audience": { "enum": ["from_text", "metadata", "inferred"] },
+        "era": { "enum": ["from_text", "metadata", "inferred"] },
+        "narrative_voice": { "enum": ["from_text", "metadata", "inferred"] },
+        "register": { "enum": ["from_text", "metadata", "inferred"] },
+        "style_notes": { "enum": ["from_text", "metadata", "inferred"] },
+        "themes": { "enum": ["from_text", "metadata", "inferred"] },
+        "synopsis": { "enum": ["from_text", "metadata", "inferred"] }
+      }
+    }
+  },
+  "required": [
+    "source_language",
+    "genre",
+    "audience",
+    "era",
+    "narrative_voice",
+    "register",
+    "style_notes",
+    "themes",
+    "synopsis",
+    "proper_nouns",
+    "field_basis"
+  ]
+}

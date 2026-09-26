@@ -636,6 +636,13 @@ REPRESENTATIVE_CONTEXTS: dict[str, dict[str, object]] = {
         "book_title": "The Lantern Keeper",
         "project_state": '{"pending_chunks": 12}',
     },
+    "analyze_book.md": {
+        "source_language": "English",
+        "target_language": "Italian",
+        "metadata": '{"title": "The Lantern Keeper", "author": "Fixture Author"}',
+        "excerpts": "The harbour was quiet that morning.",
+        "pasted_text": "",
+    },
 }
 
 
@@ -647,6 +654,7 @@ def test_prompt_templates_exist_and_have_headers():
         "proofreader.md",
         "summarizer.md",
         "orchestrator.md",
+        "analyze_book.md",
     }
     available = {path.name for path in PROMPTS_DIR.glob("*.md")}
     assert expected <= available, f"missing: {expected - available}"
@@ -704,6 +712,37 @@ def test_editor_schema_matches_plan():
         "placeholder",
     ]
     assert issue["required"] == ["block_index", "kind", "quote", "suggested", "reason"]
+
+
+def test_analyze_book_marker_and_schema_match_plan():
+    text = (PROMPTS_DIR / "analyze_book.md").read_text(encoding="utf-8")
+    system, _, user = text.partition(f"\n{USER_MARKER}\n")
+    assert system and user, "marker did not split the file"
+    # The evidence is volatile and belongs to the user half only.
+    assert "{{ metadata }}" in user and "{{ excerpts }}" in user and "{{ pasted_text }}" in user
+    assert "{{ excerpts }}" not in system and "{{ pasted_text }}" not in system
+
+    schema = json.loads((PROMPTS_DIR / "analyze_book.schema.json").read_text(encoding="utf-8"))
+    assert schema["type"] == "object"
+    assert schema["required"] == [
+        "source_language",
+        "genre",
+        "audience",
+        "era",
+        "narrative_voice",
+        "register",
+        "style_notes",
+        "themes",
+        "synopsis",
+        "proper_nouns",
+        "field_basis",
+    ]
+    proper_noun = schema["properties"]["proper_nouns"]["items"]
+    assert proper_noun["properties"]["kind"]["enum"] == ["proper_noun", "do_not_translate"]
+    assert proper_noun["required"] == ["source", "kind"]
+    # The caps exist in the schema; the control plane clamps again in Rust.
+    assert schema["properties"]["synopsis"]["maxLength"] > 0
+    assert schema["properties"]["style_notes"]["maxItems"] == 8
 
 
 # --------------------------------------------------------------------------- #
