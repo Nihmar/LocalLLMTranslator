@@ -575,6 +575,14 @@ The `new_terms` enter `glossary_term` as `status='candidate'`: confirmation is u
 (or automatic, if configured). It is the mechanism that satisfies "memory of the terminological
 choices already made".
 
+Mechanics: a `summarize` job runs on the `orchestrator` role after every 5 completed chunks of a
+chapter and once when the chapter has no unfinished chunk left. A rolling run writes
+`project_memory['rolling_summary']`; the final run writes `chapter.summary` (the value the
+context assembler reads for the next chapters) and clears the rolling one. `style_notes` are
+stored as candidates under `project_memory['style_notes']` and only reach the style guide when
+the user adds them. With no orchestrator binding the jobs are not enqueued at all and
+translation continues exactly as before.
+
 ---
 
 ## 9. Chunking and context management
@@ -752,8 +760,9 @@ what makes it safe to restart it and re-send the in-flight requests.
 ### 12.2 Tauri (commands + events)
 
 - Commands: `project_*`, `endpoint_*`, `role_binding_*`, `ingest_start`, `translation_start/pause/resume/cancel`,
+  `recon_start`, `recon_get`, `recon_confirm`, `glossary_list`, `glossary_upsert`, `glossary_delete`,
   `job_list`, `chunk_get`, `review_start`, `suggestion_list/accept/reject`, `qa_report`,
-  `export_build`, `export_preview`, `glossary_*`, `metrics_get`.
+  `export_build`, `export_preview`, `metrics_get`.
 - Events: `job://progress`, `log://line`, `metrics://tick`, `qa://finding`, `sidecar://status`,
   `sidecar://progress`, `export://progress`.
 

@@ -138,8 +138,14 @@ Commands: `project_list`, `project_create`, `project_get`, `project_delete`,
 `endpoint_list`, `endpoint_upsert`, `endpoint_delete`, `endpoint_test`, `endpoint_models`,
 `role_binding_list`, `role_binding_set`, `ingest_start`, `translation_start`, `translation_pause`,
 `translation_cancel`, `recon_start`, `recon_get`, `recon_confirm`,
+`glossary_list`, `glossary_upsert`, `glossary_delete`,
 `job_list`, `chunk_list`, `chunk_get`, `metrics_get`, `sidecar_status`,
 `export_build`, `open_path`.
+
+`glossary_upsert` takes `{req: {id?, project_id, source, target, kind, note?, status?, source_lang?,
+ target_lang?}}` and returns the persisted row; `glossary_delete` takes the row id; `glossary_list`
+takes `{project_id}`. Candidates proposed by the reconnaissance and the summarizer are approved,
+edited or rejected here; the translator prompt only ever sees non-rejected terms.
 
 `recon_start` runs the `book_recon` job (candidate book profile, PLAN.md §9.4); `recon_get`
 reads it back together with the confirmed memory values and the glossary; `recon_confirm` writes
