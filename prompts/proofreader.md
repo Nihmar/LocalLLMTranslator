@@ -15,6 +15,8 @@ The text was translated from {{ source_language }} and reads slightly foreign.
 Fix grammar, agreement, punctuation, calques, false friends and unnatural collocations.
 Do NOT change meaning. Do NOT add or remove content. Do NOT touch placeholders ⟦n⟧.
 Do NOT alter Markdown structure, code spans, URLs or table pipes.
+The text arrives as blocks separated by a line containing only `<!-- block -->`.
+Keep the same number of blocks, in the same order, with the same separators.
 Output only the corrected text, with no commentary and no code fences.
 ---USER---
 {{ text }}
