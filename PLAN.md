@@ -1,7 +1,7 @@
 # LocalLLMTranslator — Architecture and Implementation Plan
 
-> Status: **M0–M5 complete; M6 next (concurrency and sub-agents).** This document is the source
-> of truth for the architecture; the code follows it milestone by milestone.
+> Status: **M0–M6 complete; M7 next (packaging).** This document is the source of truth for the
+> architecture; the code follows it milestone by milestone.
 
 ---
 

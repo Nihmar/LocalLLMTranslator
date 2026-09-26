@@ -19,7 +19,10 @@ Everything works **offline**. No telemetry, no analytics, no network calls other
 > Export produces a readable PDF and EPUB with a table of contents, footnotes and images:
 > per-chapter units, `metadata.yaml`, the shipped templates and Lua filters, a content preview
 > and a build history, with unchanged builds skipped and single chapters buildable standalone.
-> See [Milestones](#milestones).
+> Concurrency is per endpoint: the scheduler claims a job only when its role has a free slot,
+> degrades to serial with an explicit reason when VRAM or slots are unknown, retries sink behind
+> fresh work, and concurrent glossary proposals never overwrite a rendering. See
+> [Milestones](#milestones).
 
 ---
 
@@ -204,15 +207,15 @@ tools/          Fake llama-server and fixture generator
 | M3 | Glossary, synopsis, rolling summaries, two-level cache, book reconnaissance | ✅ |
 | M4 | Bilingual review (editor + proofreader), diff, QA report | ✅ |
 | M5 | Export and typesetting with templates and Lua filters | ✅ |
-| M6 | Parallel sub-agents with VRAM budget and serial degradation | ⬜ |
+| M6 | Parallel sub-agents with VRAM budget and serial degradation | ✅ |
 | M7 | Packaging (PyInstaller + Tauri bundle) | ⬜ |
 
-Known gaps, next up: M6 owns the resource governor's scheduling decisions and the parallel
-sub-agents with the serial degradation, and M7 the packaging (the pandoc assets resolve from
-`LLMTRANSLATOR_PANDOC_DIR`, the Tauri resource directory or the repository, so a bundle still
-needs them declared as resources); the sidecar's `estimate_tokens` route is intentionally unused
-because the control plane counts exactly via `/tokenize` with a built-in heuristic fallback;
-PDF extraction is only as good as `pymupdf4llm` on a given document.
+Known gaps, next up: M7 owns the packaging — PyInstaller `onedir`, the Tauri bundle, the guided
+first launch and the `.llmtz` export/import — and a bundle must declare the pandoc assets as
+resources (they resolve from `LLMTRANSLATOR_PANDOC_DIR`, the Tauri resource directory or the
+repository); the sidecar's `estimate_tokens` route is intentionally unused because the control
+plane counts exactly via `/tokenize` with a built-in heuristic fallback; PDF extraction is only
+as good as `pymupdf4llm` on a given document.
 
 ## Product constraints
 
