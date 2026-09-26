@@ -35,10 +35,17 @@ test-py: ## Run sidecar tests
 test-rust: ## Run Rust tests
 	cd $(RUST) && cargo test
 
+test-ui: ## Run the optional frontend unit tests
+	cd $(UI) && npm run test
+
 build-ui: ## Build the frontend (required before cargo build)
 	cd $(UI) && npm run build
 
-check: lint typecheck test build-ui ## Full gate: lint + type + test + ui build
+# The frontend bundle is a COMPILE-time input: `tauri::generate_context!` reads
+# `ui/dist` while the crate is built, so clippy and test fail on a clean tree if the
+# UI has not been built yet. build-ui must therefore come first, and a stale `dist`
+# left over from an earlier run must not be what makes this target pass.
+check: build-ui lint typecheck test ## Full gate: ui build + lint + type + test
 	cd $(RUST) && cargo check
 
 dev: ## Run the desktop app in dev mode (requires llama-server running)
