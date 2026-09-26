@@ -143,7 +143,7 @@ Commands: `project_list`, `project_create`, `project_get`, `project_delete`,
 `project_set_series`,
 `series_glossary_list`, `series_glossary_upsert`, `series_glossary_delete`,
 `series_variant_upsert`, `series_variant_delete`, `series_promote_term`,
-`series_export`, `series_import`, `series_qa_scan`,
+`series_export`, `series_import`, `series_qa_scan`, `series_recon_start`,
 `review_start`, `suggestion_list`, `suggestion_accept`, `suggestion_reject`, `qa_report`,
 `job_list`, `chunk_list`, `chunk_get`, `metrics_get`, `sidecar_status`,
 `export_build`, `export_preview`, `export_history`, `open_path`.
@@ -169,7 +169,10 @@ existing rendering is kept and flagged, never overwritten). Any series term chan
 `glossary_conflict` finding for every member book that renders the same source differently.
 Series bundles (`series_export`/`series_import`) move a series between machines and merge on
 import by revision: a differing rendering becomes `status='conflict'`, never a silent drop.
-`series_qa_scan` re-runs the QA heuristics on every translated chunk of every member book.
+`series_qa_scan` re-runs the QA heuristics on every translated chunk of every member book,
+and `series_recon_start` enqueues a `series_recon` job on the orchestrator role whose output
+is a **candidate** profile under `series_memory['series_profile']` — never injected into a
+prompt until the user copies it into the series memory.
 
 `review_start` takes `{req: {project_id, chunk_ids?, chapter_id?, pass?, with_qa?}}`, where `pass`
 is `editor` (default `both`, also `proofreader`), and enqueues the matching `edit_chunk` /

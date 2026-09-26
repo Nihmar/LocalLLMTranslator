@@ -399,8 +399,8 @@ CREATE TABLE role_binding (
 
 CREATE TABLE job (
   id TEXT PRIMARY KEY, project_id TEXT NOT NULL,
-  kind TEXT NOT NULL,                       -- ingest|translate_chunk|summarize|edit_chunk|
-                                            -- proofread_chunk|qa_scan|export_unit
+  kind TEXT NOT NULL,                       -- ingest|translate_chunk|book_recon|series_recon|
+                                            -- summarize|edit_chunk|proofread_chunk|qa_scan|export_unit
   payload_json TEXT NOT NULL, priority INTEGER NOT NULL DEFAULT 100,
   state TEXT NOT NULL DEFAULT 'pending',    -- pending|leased|running|done|failed|cancelled
   attempts INTEGER NOT NULL DEFAULT 0, max_attempts INTEGER NOT NULL DEFAULT 3,
@@ -794,12 +794,16 @@ book, and a series adds a shared layer that **evolves after the books are transl
 IPC: `series_list`, `series_create`, `series_get`, `series_update`, `series_delete`,
 `project_set_series`, `series_glossary_list`, `series_glossary_upsert`,
 `series_glossary_delete`, `series_variant_upsert`, `series_variant_delete`,
-`series_promote_term`, `series_export`, `series_import`, `series_qa_scan`. Events: none new —
-the existing `job://progress` and `log://line` cover the work, and conflicts are read through
-`qa_report`.
+`series_promote_term`, `series_export`, `series_import`, `series_qa_scan`,
+`series_recon_start`. Events: none new — the existing `job://progress` and `log://line` cover
+the work, and conflicts are read through `qa_report`.
 
-Milestones (S1–S5) are in §13. S1–S4 are implemented: the Series view authors the canon, the
-bundle merge and the cross-book QA scan exist, and `series_recon` (S5) is future work.
+Milestones (S1–S5) are in §13. All of them are implemented: the Series view authors the
+canon, the bundle merge and the cross-book QA scan exist, and `series_recon` produces a
+candidate profile from the member books' confirmed profiles (it is never injected into a
+prompt until the user copies it into the series memory). The job runs on the `orchestrator`
+role and is attached to the first member book — the queue is project-scoped — with the
+`series_id` in its payload.
 
 ---
 
@@ -904,7 +908,7 @@ what makes it safe to restart it and re-send the in-flight requests.
   `series_list`, `series_create`, `series_get`, `series_update`, `series_delete`, `project_set_series`,
   `series_glossary_list`, `series_glossary_upsert`, `series_glossary_delete`,
   `series_variant_upsert`, `series_variant_delete`, `series_promote_term`,
-  `series_export`, `series_import`, `series_qa_scan`,
+  `series_export`, `series_import`, `series_qa_scan`, `series_recon_start`,
   `job_list`, `chunk_get`, `review_start`, `suggestion_list/accept/reject`, `qa_report`,
   `export_build`, `export_preview`, `export_history`, `metrics_get`.
 - Events: `job://progress`, `log://line`, `metrics://tick`, `sidecar://status`,
