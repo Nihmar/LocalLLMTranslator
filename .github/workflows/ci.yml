@@ -82,7 +82,17 @@ jobs:
             libsoup-3.0-dev \
             libjavascriptcoregtk-4.1-dev \
             libayatana-appindicator3-dev \
-            librsvg2-dev
+            librsvg2-dev \
+            pandoc
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: sidecar/uv.lock
+      # The walking-skeleton test skips itself without `sidecar/.venv` and pandoc, so the
+      # end-to-end path is only covered when both exist here.
+      - name: Sidecar environment for the end-to-end test
+        working-directory: sidecar
+        run: uv sync --all-groups
       - name: Toolchain metadata
         run: cargo --version && rustc --version
       - name: Format
