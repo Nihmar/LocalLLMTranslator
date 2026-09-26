@@ -1,0 +1,24 @@
+{
+  "type": "object",
+  "properties": {
+    "verdict": { "enum": ["ok", "needs_fix"] },
+    "issues": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "block_index": { "type": "integer" },
+          "severity": { "enum": ["critical", "major", "minor"] },
+          "kind": {
+            "enum": ["meaning", "omission", "addition", "terminology", "register", "markup", "placeholder"]
+          },
+          "quote": { "type": "string" },
+          "suggested": { "type": "string" },
+          "reason": { "type": "string" }
+        },
+        "required": ["block_index", "kind", "quote", "suggested", "reason"]
+      }
+    }
+  },
+  "required": ["verdict", "issues"]
+}
