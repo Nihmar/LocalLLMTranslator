@@ -8,7 +8,7 @@ CREATE TABLE project (
   source_path TEXT NOT NULL, source_hash TEXT NOT NULL,
   source_format TEXT NOT NULL, source_lang TEXT, target_lang TEXT NOT NULL,
   doc_title TEXT, doc_author TEXT,
-  prompts_snapshot_dir TEXT,            -- copia dei prompt usati -> riproducibilita
+  prompts_snapshot_dir TEXT,            -- copy of the prompts used -> reproducibility
   settings_json TEXT NOT NULL DEFAULT '{}',
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
@@ -46,13 +46,13 @@ CREATE TABLE chunk (
   flags_json TEXT NOT NULL DEFAULT '[]',
   status TEXT NOT NULL DEFAULT 'pending',   -- pending|running|done|failed|needs_review
   prompt_hash TEXT, model_id TEXT, params_json TEXT,
-  context_manifest_json TEXT,               -- hash dei pezzi di contesto iniettati
+  context_manifest_json TEXT,               -- hash of the injected context pieces
   target_md TEXT, error TEXT,
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
 CREATE INDEX idx_chunk_status ON chunk(status, order_index);
 
-CREATE TABLE block_translation (            -- mappa originale <-> traduzione
+CREATE TABLE block_translation (            -- source <-> translation map
   block_id TEXT NOT NULL REFERENCES block(id) ON DELETE CASCADE,
   chunk_id TEXT NOT NULL REFERENCES chunk(id) ON DELETE CASCADE,
   text_md TEXT NOT NULL, placeholders_ok INTEGER NOT NULL DEFAULT 1,
@@ -61,7 +61,7 @@ CREATE TABLE block_translation (            -- mappa originale <-> traduzione
   PRIMARY KEY (block_id, origin)
 );
 
-CREATE TABLE suggestion (                   -- proposte di editor/proofreader
+CREATE TABLE suggestion (                   -- proposals from editor/proofreader
   id TEXT PRIMARY KEY, chunk_id TEXT NOT NULL REFERENCES chunk(id) ON DELETE CASCADE,
   pass TEXT NOT NULL,                       -- editor|proofreader
   block_id TEXT, field TEXT, original TEXT, proposed TEXT,
@@ -84,7 +84,7 @@ CREATE TABLE glossary_term (
   source TEXT NOT NULL, target TEXT NOT NULL, note TEXT,
   kind TEXT NOT NULL DEFAULT 'term',        -- term|proper_noun|do_not_translate
   origin TEXT NOT NULL DEFAULT 'manual',    -- manual|proposed|imported
-  revision INTEGER NOT NULL DEFAULT 1,      -- lock ottimistico
+  revision INTEGER NOT NULL DEFAULT 1,      -- optimistic lock
   status TEXT NOT NULL DEFAULT 'approved',  -- approved|candidate|conflict|rejected
   UNIQUE(project_id, source_lang, target_lang, source)
 );
@@ -97,7 +97,7 @@ CREATE TABLE project_memory (
 
 CREATE TABLE llm_endpoint (
   id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, base_url TEXT NOT NULL,
-  api_key_ref TEXT,                         -- nome nel keyring, mai il segreto in chiaro
+  api_key_ref TEXT,                         -- name in the keyring, never the secret in clear text
   max_concurrency INTEGER, notes TEXT,
   last_health_at TEXT, last_health_ok INTEGER, props_json TEXT
 );
@@ -122,7 +122,7 @@ CREATE TABLE job (
 );
 CREATE INDEX idx_job_claim ON job(state, priority, created_at);
 
-CREATE TABLE llm_call (                     -- audit + riproducibilita
+CREATE TABLE llm_call (                     -- audit + reproducibility
   id TEXT PRIMARY KEY, job_id TEXT, chunk_id TEXT, role TEXT NOT NULL,
   endpoint_id TEXT, model TEXT NOT NULL, params_json TEXT NOT NULL,
   seed INTEGER, prompt_hash TEXT NOT NULL, prompt_text TEXT, prompt_compressed INTEGER DEFAULT 0,
@@ -140,7 +140,7 @@ CREATE TABLE translation_cache (
   PRIMARY KEY (prompt_hash, model, params_hash, target_lang)
 );
 
-CREATE TABLE translation_memory (           -- riuso di blocchi identici
+CREATE TABLE translation_memory (           -- reuse of identical blocks
   content_hash TEXT NOT NULL, model TEXT NOT NULL, target_lang TEXT NOT NULL,
   text_md TEXT NOT NULL, hits INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL,
   PRIMARY KEY (content_hash, model, target_lang)
