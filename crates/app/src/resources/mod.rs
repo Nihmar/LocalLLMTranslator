@@ -8,7 +8,7 @@ pub mod endpoints;
 pub mod vram;
 
 pub use endpoints::{
-    kinds_for_role, plan_limit, probe_endpoint_limits, role_for_kind, EndpointLimits,
+    kinds_for_role, plan_limit, plan_slots, probe_endpoint_limits, role_for_kind, EndpointLimits,
     EndpointPermit, EndpointPlanEntry, EndpointUsage, LLM_ROLES, LOCAL_ROLE, ROLES,
 };
 pub use vram::{

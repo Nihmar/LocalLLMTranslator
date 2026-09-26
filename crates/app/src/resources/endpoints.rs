@@ -96,15 +96,31 @@ pub struct EndpointUsage {
 
 struct LimitState {
     endpoint_id: Option<String>,
+    reason: String,
+    /// Key of the shared capacity this role draws from (`endpoint:<id>` for a bound
+    /// role, `role:<role>` for local and unbound work).
+    capacity_key: String,
+}
+
+/// The shared, live counter of one endpoint (or of one unbound role). Two roles bound
+/// to the same endpoint draw from the same counter: `llama-server` enforces a slot limit
+/// per process, so per-role counters would let the pool exceed it.
+#[derive(Debug, Clone, Copy)]
+struct Capacity {
     limit: usize,
     in_flight: usize,
-    reason: String,
+}
+
+#[derive(Default)]
+struct LimitStateMap {
+    roles: HashMap<String, LimitState>,
+    capacity: HashMap<String, Capacity>,
 }
 
 /// Live per-role capacity. Unbound LLM roles are absent (their jobs would fail
 /// anyway); [`LOCAL_ROLE`] is always present.
 pub struct EndpointLimits {
-    state: Mutex<HashMap<String, LimitState>>,
+    inner: Mutex<LimitStateMap>,
 }
 
 impl EndpointLimits {
@@ -112,37 +128,55 @@ impl EndpointLimits {
     /// role without a binding still gets capacity (bounded by the global cap),
     /// so its jobs are claimed and fail with the dispatcher's clear "no binding"
     /// error instead of sitting in the queue forever.
+    ///
+    /// Roles bound to the same endpoint share one capacity, so the endpoint's real
+    /// slot limit is never exceeded by scheduling two roles side by side.
     pub fn from_plan(entries: &[EndpointPlanEntry], local_limit: usize) -> Arc<Self> {
         let local_limit = local_limit.max(1);
-        let mut state = HashMap::new();
-        state.insert(
+        let mut map = LimitStateMap::default();
+
+        insert_capacity(&mut map, "role:local", local_limit);
+        map.roles.insert(
             LOCAL_ROLE.to_string(),
             LimitState {
                 endpoint_id: None,
-                limit: local_limit,
-                in_flight: 0,
                 reason: format!("local work, global cap {local_limit}"),
+                capacity_key: "role:local".to_string(),
             },
         );
+
         for role in LLM_ROLES {
-            let limit_state = match entries.iter().find(|entry| entry.role == role) {
-                Some(entry) => LimitState {
-                    endpoint_id: entry.endpoint_id.clone(),
-                    limit: entry.limit.max(1),
-                    in_flight: 0,
-                    reason: entry.reason.clone(),
+            let (key, endpoint_id, limit, reason) =
+                match entries.iter().find(|entry| entry.role == role) {
+                    Some(entry) => {
+                        let endpoint_id = entry.endpoint_id.clone();
+                        let key = match &endpoint_id {
+                            Some(id) => format!("endpoint:{id}"),
+                            // A plan entry without an endpoint id is local-like capacity.
+                            None => format!("role:{role}"),
+                        };
+                        (key, endpoint_id, entry.limit.max(1), entry.reason.clone())
+                    }
+                    None => (
+                        format!("role:{role}"),
+                        None,
+                        local_limit,
+                        format!("no endpoint bound; bounded by the global cap {local_limit}"),
+                    ),
+                };
+            insert_capacity(&mut map, &key, limit);
+            map.roles.insert(
+                role.to_string(),
+                LimitState {
+                    endpoint_id,
+                    reason,
+                    capacity_key: key,
                 },
-                None => LimitState {
-                    endpoint_id: None,
-                    limit: local_limit,
-                    in_flight: 0,
-                    reason: format!("no endpoint bound; bounded by the global cap {local_limit}"),
-                },
-            };
-            state.insert(role.to_string(), limit_state);
+            );
         }
+
         Arc::new(Self {
-            state: Mutex::new(state),
+            inner: Mutex::new(map),
         })
     }
 
@@ -153,83 +187,122 @@ impl EndpointLimits {
 
     /// Roles known to the limiter, in the stable [`ROLES`] order.
     pub fn roles(&self) -> Vec<String> {
-        let state = self.state.lock();
+        let map = self.inner.lock();
         ROLES
             .iter()
-            .filter(|role| state.contains_key(**role))
+            .filter(|role| map.roles.contains_key(**role))
             .map(|role| (*role).to_string())
             .collect()
     }
 
-    /// Point-in-time usage, for the metrics payload.
+    /// Point-in-time usage, for the metrics payload. Roles sharing an endpoint report
+    /// the endpoint's in-flight count, which is the number that actually caps them.
     pub fn usage(&self) -> Vec<EndpointUsage> {
-        let state = self.state.lock();
+        let map = self.inner.lock();
         ROLES
             .iter()
             .filter_map(|role| {
-                let limit = state.get(*role)?;
+                let state = map.roles.get(*role)?;
+                let capacity = map.capacity.get(&state.capacity_key)?;
                 Some(EndpointUsage {
                     role: (*role).to_string(),
-                    endpoint_id: limit.endpoint_id.clone(),
-                    limit: limit.limit,
-                    in_flight: limit.in_flight,
-                    reason: limit.reason.clone(),
+                    endpoint_id: state.endpoint_id.clone(),
+                    limit: capacity.limit,
+                    in_flight: capacity.in_flight,
+                    reason: state.reason.clone(),
                 })
             })
             .collect()
     }
 
-    /// Total slots across the bound LLM endpoints (local and unbound roles are
-    /// not endpoint capacity).
+    /// Total slots the plan provides, counted once per endpoint: two roles bound to the
+    /// same server must not make it look twice as large.
     pub fn total_slots(&self) -> usize {
-        let state = self.state.lock();
-        state
+        let map = self.inner.lock();
+        map.capacity
             .iter()
-            .filter(|(role, limit)| role.as_str() != LOCAL_ROLE && limit.endpoint_id.is_some())
-            .map(|(_, limit)| limit.limit)
+            .filter(|(key, _)| key.starts_with("endpoint:"))
+            .map(|(_, capacity)| capacity.limit)
             .sum()
     }
 
     pub fn has_capacity(&self, role: &str) -> bool {
-        let state = self.state.lock();
-        state
-            .get(role)
-            .is_some_and(|limit| limit.in_flight < limit.limit)
+        let map = self.inner.lock();
+        let Some(state) = map.roles.get(role) else {
+            return false;
+        };
+        map.capacity
+            .get(&state.capacity_key)
+            .is_some_and(|capacity| capacity.in_flight < capacity.limit)
     }
 
-    fn release(&self, role: &str) {
-        let mut state = self.state.lock();
-        if let Some(limit) = state.get_mut(role) {
-            limit.in_flight = limit.in_flight.saturating_sub(1);
+    fn release(&self, capacity_key: &str) {
+        let mut map = self.inner.lock();
+        if let Some(capacity) = map.capacity.get_mut(capacity_key) {
+            capacity.in_flight = capacity.in_flight.saturating_sub(1);
         }
     }
 
-    /// Reserve one slot for `role`, or `None` when it is at capacity.
+    /// Reserve one slot for `role`, or `None` when the capacity it draws from is at
+    /// its limit.
     pub fn try_acquire(self: &Arc<Self>, role: &str) -> Option<EndpointPermit> {
-        {
-            let mut state = self.state.lock();
-            let limit = state.get_mut(role)?;
-            if limit.in_flight >= limit.limit {
+        let capacity_key = {
+            let mut map = self.inner.lock();
+            let state = map.roles.get(role)?;
+            let capacity_key = state.capacity_key.clone();
+            let capacity = map.capacity.get_mut(&capacity_key)?;
+            if capacity.in_flight >= capacity.limit {
                 return None;
             }
-            limit.in_flight += 1;
-        }
+            capacity.in_flight += 1;
+            capacity_key
+        };
         Some(EndpointPermit {
             limits: Arc::clone(self),
-            role: role.to_string(),
+            capacity_key,
         })
     }
+}
+
+/// Insert the shared capacity for `key`, or tighten it to the smallest limit a role
+/// asked for when the same endpoint is bound twice.
+fn insert_capacity(map: &mut LimitStateMap, key: &str, limit: usize) {
+    let limit = limit.max(1);
+    map.capacity
+        .entry(key.to_string())
+        .and_modify(|capacity| capacity.limit = capacity.limit.min(limit))
+        .or_insert(Capacity {
+            limit,
+            in_flight: 0,
+        });
+}
+
+/// Distinct endpoint slots the plan provides, counted once per endpoint. Used for the
+/// global cap, so a shared endpoint is not counted per role.
+pub fn plan_slots(entries: &[EndpointPlanEntry]) -> usize {
+    let mut limits: HashMap<&str, usize> = HashMap::new();
+    for entry in entries {
+        let Some(endpoint_id) = entry.endpoint_id.as_deref() else {
+            continue;
+        };
+        let limit = entry.limit.max(1);
+        limits
+            .entry(endpoint_id)
+            .and_modify(|current| *current = (*current).min(limit))
+            .or_insert(limit);
+    }
+    limits.values().sum()
 }
 
 /// Releases its slot on drop, so a panicking or cancelled job cannot leak one.
 pub struct EndpointPermit {
     limits: Arc<EndpointLimits>,
-    role: String,
+    capacity_key: String,
 }
 
 impl Drop for EndpointPermit {
     fn drop(&mut self) {
-        self.limits.release(&self.role);
+        self.limits.release(&self.capacity_key);
     }
 }
 
@@ -345,6 +418,80 @@ mod tests {
                 .map(|entry| entry.in_flight),
             Some(0)
         );
+    }
+
+    #[test]
+    fn two_roles_on_one_endpoint_share_a_single_budget() {
+        let plan = vec![
+            EndpointPlanEntry {
+                role: "translator".to_string(),
+                endpoint_id: Some("e1".to_string()),
+                limit: 2,
+                reason: "min(...)".to_string(),
+            },
+            EndpointPlanEntry {
+                role: "editor".to_string(),
+                endpoint_id: Some("e1".to_string()),
+                limit: 2,
+                reason: "min(...)".to_string(),
+            },
+        ];
+        let limits = EndpointLimits::from_plan(&plan, 8);
+
+        // The endpoint has two slots, not four: the roles draw from one counter.
+        assert_eq!(limits.total_slots(), 2, "a shared endpoint counts once");
+        let first = limits.try_acquire("translator").expect("first slot");
+        let second = limits.try_acquire("translator").expect("second slot");
+        assert!(
+            limits.try_acquire("editor").is_none(),
+            "the editor must wait while the translator holds both slots"
+        );
+
+        drop(first);
+        let editor = limits.try_acquire("editor").expect("released slot");
+        drop(editor);
+        drop(second);
+        assert!(limits.has_capacity("translator"));
+        assert!(limits.has_capacity("editor"));
+
+        // Both roles report the endpoint's live usage.
+        assert!(limits
+            .usage()
+            .iter()
+            .filter(|entry| entry.endpoint_id.as_deref() == Some("e1"))
+            .all(|entry| entry.in_flight == 0 && entry.limit == 2));
+    }
+
+    #[test]
+    fn plan_slots_counts_a_shared_endpoint_once_and_skips_unbound_entries() {
+        let plan = vec![
+            EndpointPlanEntry {
+                role: "translator".to_string(),
+                endpoint_id: Some("e1".to_string()),
+                limit: 4,
+                reason: String::new(),
+            },
+            EndpointPlanEntry {
+                role: "editor".to_string(),
+                endpoint_id: Some("e1".to_string()),
+                limit: 4,
+                reason: String::new(),
+            },
+            EndpointPlanEntry {
+                role: "proofreader".to_string(),
+                endpoint_id: Some("e2".to_string()),
+                limit: 1,
+                reason: String::new(),
+            },
+            EndpointPlanEntry {
+                role: "orchestrator".to_string(),
+                endpoint_id: None,
+                limit: 3,
+                reason: String::new(),
+            },
+        ];
+        assert_eq!(plan_slots(&plan), 5);
+        assert_eq!(plan_slots(&[]), 0);
     }
 
     #[test]

@@ -274,8 +274,10 @@ async fn build_state(app: &tauri::AppHandle) -> Result<AppState> {
     // Per-endpoint slots: a live `/props` probe per bound role (the persisted
     // props as fallback) feeds both the per-role limiter and the global cap.
     let endpoint_plan = crate::resources::endpoints::probe_endpoint_limits(&pool).await;
-    let endpoint_slots = (!endpoint_plan.is_empty())
-        .then(|| endpoint_plan.iter().map(|entry| entry.limit).sum::<usize>());
+    // Count each endpoint once: two roles bound to the same server must not make the
+    // global cap look twice as large as the hardware is.
+    let endpoint_slots =
+        Some(crate::resources::endpoints::plan_slots(&endpoint_plan)).filter(|slots| *slots > 0);
     let vram = tokio::task::spawn_blocking(crate::resources::vram::detect)
         .await
         .unwrap_or(None);
