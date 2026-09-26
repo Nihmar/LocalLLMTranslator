@@ -699,12 +699,24 @@ Rules that make it safe to inject into every prompt:
   - Slots: `/props.total_slots`; fallback `llm_endpoint.max_concurrency`.
   - `max_parallel = min(free_slots, floor(VRAM_headroom / estimated_cost_per_slot), user_limit)`.
   - If `max_parallel < 2` → **degradation to serial without error**, with a UI event and an explicit reason.
+  - **Per endpoint**: the pool claims a job only when the role's endpoint has a free slot. The
+    limit is `min(max_concurrency, /props.total_slots)`, and `1` when the endpoint reports
+    neither (serial, without error). The plan is built at boot from the role bindings with a
+    live `/props` probe and the persisted props as fallback; `Local` jobs (sidecar/pandoc: ingest,
+    export, QA scan) use the global cap. `metrics_get` and `metrics://tick` report the per-role
+    limit, the in-flight count and the reason, so the UI can show why the sub-agents are capped.
 - **Ordering**: priority = chapter order (sequential translation makes sense for
-  coherence), the user's jobs at the front, the retries at the back.
+  coherence), the user's jobs at the front, the retries at the back (a requeued attempt takes a
+  priority penalty so a failing chunk cannot starve the queue).
 - **Concurrent glossary**: the sub-agents **propose** terms, they do not impose them.
   `glossary_term.revision` + `status='candidate'`; if two agents propose different renderings for
   the same term → both saved as `candidate` and a `qa_finding(kind='glossary_conflict')`
   to be resolved in the UI. No blocking lock, no lost writes.
+  Merge rule: a proposal never overwrites a different existing rendering — the row becomes
+  `status='conflict'` when it was a candidate (an approved row stays approved) and an open
+  `qa_finding(kind='glossary_conflict')` records both renderings, deduplicated per source term.
+  Edits coming from the UI carry `expected_revision` and fail loudly when another writer changed
+  the row in the meantime, instead of silently overwriting it.
 - **Determinism**: the seeding derives from `hash(chunk_id, role)` → stable across serial and
   parallel runs.
 
