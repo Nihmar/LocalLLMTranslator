@@ -640,6 +640,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn two_books_of_a_series_share_the_canon_term() {
+        let (pool, _dir) = crate::db::connect_temp_file().await.expect("pool");
+        let first = seed(&pool, Some("en")).await;
+        assign_to_series(&pool, &first.id).await;
+        // A second book with its own id, in the same series and language pair.
+        let timestamp = now();
+        sqlx::query(
+            "INSERT INTO project (id, name, source_path, source_hash, source_format, \
+             source_lang, target_lang, series_id, series_order, settings_json, created_at, updated_at) \
+             VALUES ('p2','second','/x','h','epub','en','it','s1',2,'{}',?1,?1)",
+        )
+        .bind(&timestamp)
+        .execute(&pool)
+        .await
+        .expect("second project");
+        add_series_term(&pool, "st1", "keeper", "custode", "approved").await;
+
+        for project_id in [&first.id, "p2"] {
+            let terms = effective_terms(&pool, project_id).await.expect("terms");
+            let keeper = terms
+                .iter()
+                .find(|term| term.source == "keeper")
+                .unwrap_or_else(|| panic!("{project_id} does not see the series term"));
+            assert_eq!(keeper.target, "custode");
+            assert_eq!(keeper.scope, GlossaryScope::Series);
+        }
+    }
+
+    #[tokio::test]
     async fn a_project_term_overrides_the_series_rendering() {
         let (pool, _dir) = crate::db::connect_temp_file().await.expect("pool");
         let project = seed(&pool, Some("en")).await;
