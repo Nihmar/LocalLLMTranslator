@@ -33,7 +33,31 @@ pub struct TranslateOutcome {
 /// Translate a chunk. Idempotent: re-running a completed chunk overwrites the
 /// same `block_translation` rows (keyed on `block_id` + `origin`) and the same
 /// `chunk` outcome.
+///
+/// Chunk lifecycle: the chunk is marked `running` as soon as its translate job
+/// starts, moves to `done`/`needs_review` at the end (see `finish_chunk`) and to
+/// `failed` when the attempt errors out. A chunk left `running` by a crash is
+/// returned to `pending` at boot (`repo::reset_running_chunks`).
 pub async fn run_translate_chunk(
+    deps: &PipelineDeps,
+    job_id: Option<&str>,
+    chunk_id: &str,
+) -> Result<TranslateOutcome> {
+    repo::set_chunk_status(&deps.pool, chunk_id, "running").await?;
+    match translate_chunk_inner(deps, job_id, chunk_id).await {
+        Ok(outcome) => Ok(outcome),
+        Err(error) => {
+            // Surface the failed attempt; the job may still be retried, in which
+            // case the next run resets the chunk to `running`.
+            if let Err(mark_error) = repo::set_chunk_status(&deps.pool, chunk_id, "failed").await {
+                tracing::warn!(chunk_id, %mark_error, "could not mark chunk failed");
+            }
+            Err(error)
+        }
+    }
+}
+
+async fn translate_chunk_inner(
     deps: &PipelineDeps,
     job_id: Option<&str>,
     chunk_id: &str,

@@ -17,21 +17,37 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::{AppHandle, Emitter};
 
+use crate::db::models::Job;
+use crate::error::{AppError, Result};
 use crate::pipeline::PipelineDeps;
+use crate::scheduler::NewJob;
 use crate::AppState;
 
-// Event names (AGENTS.md, frozen).
-pub const EVENT_JOB_PROGRESS: &str = "job://progress";
-pub const EVENT_LOG_LINE: &str = "log://line";
-pub const EVENT_METRICS_TICK: &str = "metrics://tick";
-pub const EVENT_SIDECAR_STATUS: &str = "sidecar://status";
-pub const EVENT_EXPORT_PROGRESS: &str = "export://progress";
+// Event names (AGENTS.md, frozen). Defined once in `crate::events`; re-exported
+// here so command modules keep importing them from this namespace.
+pub use crate::events::{
+    EVENT_EXPORT_PROGRESS, EVENT_JOB_PROGRESS, EVENT_LOG_LINE, EVENT_METRICS_TICK,
+    EVENT_SIDECAR_PROGRESS, EVENT_SIDECAR_STATUS,
+};
 
 /// Emit a UI event, ignoring failures (there may be no window listening).
 pub fn emit<T: Serialize + Clone>(app: &AppHandle, event: &str, payload: T) {
     if let Err(error) = app.emit(event, payload) {
         tracing::debug!(%error, event, "failed to emit UI event");
     }
+}
+
+/// Enqueue a job and announce the `pending` transition on `job://progress`.
+///
+/// The emitted payload is the persisted [`Job`] row, identical to the shape
+/// `job_list` returns.
+pub async fn enqueue_and_emit(state: &AppState, job: &NewJob) -> Result<Job> {
+    let id = crate::scheduler::queue::enqueue(&state.pool, job).await?;
+    let stored = crate::scheduler::queue::get_job(&state.pool, &id)
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("job {id}")))?;
+    crate::events::emit_job(&*state.emitter, &stored);
+    Ok(stored)
 }
 
 /// Build the pipeline dependencies from the shared state.

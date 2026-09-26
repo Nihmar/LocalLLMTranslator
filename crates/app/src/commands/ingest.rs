@@ -5,8 +5,10 @@ use tauri::State;
 
 use crate::db::repo;
 use crate::error::{AppError, Result};
-use crate::scheduler::{queue, NewJob};
+use crate::scheduler::NewJob;
 use crate::AppState;
+
+use super::enqueue_and_emit;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct IngestStartRequest {
@@ -38,10 +40,10 @@ pub async fn ingest_start(
     });
 
     let job = NewJob::new(&req.project_id, "ingest", payload).with_priority(0);
-    let job_id = queue::enqueue(&state.pool, &job).await?;
+    let job = enqueue_and_emit(&state, &job).await?;
 
     // Ensure the worker pool is running to pick the job up.
     state.worker.start();
 
-    Ok(JobStarted { job_id })
+    Ok(JobStarted { job_id: job.id })
 }

@@ -412,6 +412,35 @@ pub async fn set_chunk_status(pool: &SqlitePool, chunk_id: &str, status: &str) -
     Ok(())
 }
 
+/// Return every chunk left `running` to `pending`.
+///
+/// A chunk is `running` only while its `translate_chunk` job executes, so a
+/// chunk still in that state at boot (or after a cancel) belongs to an
+/// interrupted job. Resetting it makes it eligible for `translation_start`
+/// again. Returns the number of chunks reset.
+pub async fn reset_running_chunks(pool: &SqlitePool) -> Result<u64> {
+    let res =
+        sqlx::query("UPDATE chunk SET status='pending', updated_at=?1 WHERE status='running'")
+            .bind(now())
+            .execute(pool)
+            .await?;
+    Ok(res.rows_affected())
+}
+
+/// Count the translatable blocks of a document that have no translation yet.
+///
+/// Used by export to report how much of the book fell back to the source text.
+pub async fn count_untranslated_blocks(pool: &SqlitePool, document_id: &str) -> Result<i64> {
+    let (count,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM block b WHERE b.document_id = ?1 AND b.translatable = 1 \
+         AND NOT EXISTS (SELECT 1 FROM block_translation t WHERE t.block_id = b.id)",
+    )
+    .bind(document_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(count)
+}
+
 /// Idempotent write of a chunk outcome. Re-running the same job overwrites the
 /// same row with the same content, so it never duplicates state.
 pub async fn finish_chunk(pool: &SqlitePool, o: &ChunkOutcome) -> Result<()> {
@@ -644,4 +673,123 @@ pub async fn memory_put(
     .execute(pool)
     .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::connect_memory;
+
+    /// Minimal project/document with two translatable blocks and one chunk.
+    async fn seed(pool: &SqlitePool) {
+        let ts = now();
+        sqlx::query(
+            "INSERT INTO project (id, name, source_path, source_hash, source_format, target_lang, \
+             settings_json, created_at, updated_at) VALUES ('p','p','/x','h','epub','it','{}',?1,?1)",
+        )
+        .bind(&ts)
+        .execute(pool)
+        .await
+        .expect("project");
+        sqlx::query(
+            "INSERT INTO document (id, project_id, markdown_path, front_matter_json, extractor, \
+             extractor_version, created_at) VALUES ('d','p','/m','{}','epub','0',?1)",
+        )
+        .bind(&ts)
+        .execute(pool)
+        .await
+        .expect("document");
+        for (id, translatable) in [("b1", 1), ("b2", 1)] {
+            sqlx::query(
+                "INSERT INTO block (id, document_id, order_index, kind, level, source_md, \
+                 source_text, translatable, attrs_json, content_hash) \
+                 VALUES (?1,'d',0,'para',0,'a','a',?2,'{}','h')",
+            )
+            .bind(id)
+            .bind(translatable)
+            .execute(pool)
+            .await
+            .expect("block");
+        }
+        sqlx::query(
+            "INSERT INTO chunk (id, document_id, order_index, block_ids_json, source_md, \
+             token_estimate, context_json, flags_json, status, created_at, updated_at) \
+             VALUES ('c1','d',0,'[\"b1\",\"b2\"]','a',1,'{}','[]','running',?1,?1)",
+        )
+        .bind(&ts)
+        .execute(pool)
+        .await
+        .expect("chunk");
+    }
+
+    #[tokio::test]
+    async fn reset_running_chunks_only_touches_running_chunks() {
+        let pool = connect_memory().await.expect("pool");
+        seed(&pool).await;
+        sqlx::query(
+            "INSERT INTO chunk (id, document_id, order_index, block_ids_json, source_md, \
+             token_estimate, context_json, flags_json, status, created_at, updated_at) \
+             VALUES ('c2','d',1,'[]','a',1,'{}','[]','done',?1,?1)",
+        )
+        .bind(now())
+        .execute(&pool)
+        .await
+        .expect("chunk 2");
+
+        assert_eq!(reset_running_chunks(&pool).await.expect("reset"), 1);
+        assert_eq!(
+            get_chunk(&pool, "c1")
+                .await
+                .expect("get")
+                .expect("some")
+                .status,
+            "pending"
+        );
+        assert_eq!(
+            get_chunk(&pool, "c2")
+                .await
+                .expect("get")
+                .expect("some")
+                .status,
+            "done"
+        );
+    }
+
+    #[tokio::test]
+    async fn count_untranslated_blocks_ignores_translated_and_untranslatable() {
+        let pool = connect_memory().await.expect("pool");
+        seed(&pool).await;
+        assert_eq!(
+            count_untranslated_blocks(&pool, "d").await.expect("count"),
+            2
+        );
+
+        // A non-translatable block (e.g. code) is never reported.
+        sqlx::query(
+            "INSERT INTO block (id, document_id, order_index, kind, level, source_md, \
+             source_text, translatable, attrs_json, content_hash) \
+             VALUES ('b3','d',2,'code',0,'x','x',0,'{}','h')",
+        )
+        .execute(&pool)
+        .await
+        .expect("code block");
+        assert_eq!(
+            count_untranslated_blocks(&pool, "d").await.expect("count"),
+            2
+        );
+
+        // Once a block has a translation it is no longer counted.
+        sqlx::query(
+            "INSERT INTO block_translation (block_id, chunk_id, text_md, placeholders_ok, origin, \
+             edited_by_user, updated_at) VALUES ('b1','c1','A',1,'translator',0,?1)",
+        )
+        .bind(now())
+        .execute(&pool)
+        .await
+        .expect("translation");
+        assert_eq!(
+            count_untranslated_blocks(&pool, "d").await.expect("count"),
+            1
+        );
+    }
 }

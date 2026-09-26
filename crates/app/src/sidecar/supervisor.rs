@@ -20,6 +20,7 @@ use super::rpc::{
     encode_request_line, read_loop, EventSink, Pending, RpcErrorObject, DEFAULT_TIMEOUT,
 };
 use crate::error::{AppError, Result};
+use crate::events::{classify_stderr_level, emit_log, EventEmitter};
 
 /// How many consecutive restart attempts before giving up.
 const MAX_RESTART_ATTEMPTS: u32 = 5;
@@ -137,8 +138,14 @@ pub struct Supervisor {
     timeout: Duration,
     pending: Arc<Pending>,
     sink: EventSink,
+    /// Emits sidecar stderr as `log://line`.
+    emitter: Arc<dyn EventEmitter>,
     writer: parking_lot::Mutex<Option<mpsc::UnboundedSender<Vec<u8>>>>,
+    /// Signal channel used to terminate the running child deterministically.
+    kill: parking_lot::Mutex<Option<oneshot::Sender<()>>>,
     running: Arc<AtomicBool>,
+    /// Set once the supervisor is shutting down: no restart, no new spawn.
+    stopping: AtomicBool,
     next_id: AtomicU64,
     start_lock: tokio::sync::Mutex<()>,
     status: parking_lot::Mutex<SidecarStatus>,
@@ -148,15 +155,23 @@ pub struct Supervisor {
 impl Supervisor {
     /// Build a supervisor. The returned `Arc` is shared by the client and the
     /// restart tasks.
-    pub fn new(spec: SpawnSpec, sink: EventSink, timeout: Option<Duration>) -> Arc<Self> {
+    pub fn new(
+        spec: SpawnSpec,
+        sink: EventSink,
+        emitter: Arc<dyn EventEmitter>,
+        timeout: Option<Duration>,
+    ) -> Arc<Self> {
         let (status_tx, _) = broadcast::channel(32);
         Arc::new(Self {
             spec,
             timeout: timeout.unwrap_or(DEFAULT_TIMEOUT),
             pending: Arc::new(Pending::default()),
             sink,
+            emitter,
             writer: parking_lot::Mutex::new(None),
+            kill: parking_lot::Mutex::new(None),
             running: Arc::new(AtomicBool::new(false)),
+            stopping: AtomicBool::new(false),
             next_id: AtomicU64::new(0),
             start_lock: tokio::sync::Mutex::new(()),
             status: parking_lot::Mutex::new(SidecarStatus::stopped()),
@@ -241,6 +256,11 @@ impl Supervisor {
     /// Start the process once (no retry). Shared by the initial start and the
     /// restart loop.
     async fn spawn_once(self: &Arc<Self>) -> Result<()> {
+        if self.stopping.load(Ordering::SeqCst) {
+            return Err(AppError::SidecarUnavailable(
+                "sidecar is shutting down".into(),
+            ));
+        }
         self.set_status(SidecarStatus::starting());
 
         let mut command = Command::new(&self.spec.program);
@@ -280,12 +300,14 @@ impl Supervisor {
             read_loop(BufReader::new(stdout), pending, sink).await;
         });
 
-        // stderr -> logs.
+        // stderr -> structured `log://line` events.
         if let Some(stderr) = stderr {
+            let emitter = self.emitter.clone();
             tokio::spawn(async move {
                 let mut lines = BufReader::new(stderr).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
                     tracing::debug!(target: "sidecar", "{line}");
+                    emit_log(&*emitter, classify_stderr_level(&line), "sidecar", line);
                 }
             });
         }
@@ -297,12 +319,30 @@ impl Supervisor {
         // Waiter: owns the child and reacts to its exit. `handle_exit` is
         // synchronous so this future's `Send`-ness does not depend on the
         // restart path (which awaits `spawn_once` again).
+        //
+        // It also listens on the per-spawn kill channel so `shutdown` can
+        // terminate the process deterministically instead of relying on
+        // `kill_on_drop`, which only fires when this task is dropped. The
+        // `child.wait()` future is confined to the `select!`, so `child` is free
+        // to be borrowed again by `kill` once the select has resolved.
+        let (kill_tx, kill_rx) = oneshot::channel::<()>();
+        *self.kill.lock() = Some(kill_tx);
         let weak = Arc::downgrade(self);
         tokio::spawn(async move {
-            let status = child.wait().await;
-            if let Some(this) = weak.upgrade() {
-                let code = status.ok().and_then(|s| s.code());
-                this.handle_exit(code);
+            let kill = tokio::select! {
+                status = child.wait() => {
+                    if let Some(this) = weak.upgrade() {
+                        let code = status.ok().and_then(|s| s.code());
+                        this.handle_exit(code);
+                    }
+                    false
+                }
+                requested = kill_rx => requested.is_ok(),
+            };
+            if kill {
+                if let Err(error) = child.kill().await {
+                    tracing::warn!(%error, "failed to kill sidecar process");
+                }
             }
         });
 
@@ -327,6 +367,9 @@ impl Supervisor {
             "sidecar exited; in-flight requests failed with a retryable error"
         );
 
+        if self.stopping.load(Ordering::SeqCst) {
+            return;
+        }
         self.set_status(SidecarStatus::restarting(
             0,
             Some(format!("exited with code {code:?}")),
@@ -341,7 +384,7 @@ impl Supervisor {
         let mut delay = Duration::from_millis(250);
         for attempt in 1..=MAX_RESTART_ATTEMPTS {
             tokio::time::sleep(delay).await;
-            if self.is_running() {
+            if self.stopping.load(Ordering::SeqCst) || self.is_running() {
                 return;
             }
             match self.spawn_once().await {
@@ -358,8 +401,10 @@ impl Supervisor {
         ));
     }
 
-    /// Stop the process (best effort) and mark the supervisor stopped.
+    /// Stop accepting work, terminate the child process and mark the supervisor
+    /// stopped. Idempotent.
     pub fn shutdown(&self) {
+        self.stopping.store(true, Ordering::SeqCst);
         self.running.store(false, Ordering::SeqCst);
         *self.writer.lock() = None;
         self.pending.fail_all(&RpcErrorObject {
@@ -367,6 +412,11 @@ impl Supervisor {
             message: "sidecar supervisor shutting down".into(),
             data: None,
         });
+        // Terminate the child now: the waiter reacts to this signal by calling
+        // `Child::kill`, so release does not depend on `kill_on_drop`.
+        if let Some(kill) = self.kill.lock().take() {
+            let _ = kill.send(());
+        }
         self.set_status(SidecarStatus::stopped());
     }
 

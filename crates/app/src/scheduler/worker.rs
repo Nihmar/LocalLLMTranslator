@@ -12,6 +12,7 @@ use tokio::sync::Semaphore;
 use super::{lease, queue};
 use crate::db::models::Job;
 use crate::error::Result;
+use crate::events::{emit_job, emit_log, EventEmitter};
 
 /// How a job is executed. Implemented by the pipeline in the app layer; tests
 /// supply a stub.
@@ -29,6 +30,8 @@ pub struct WorkerPool {
 struct Inner {
     pool: SqlitePool,
     dispatcher: Arc<dyn JobDispatcher>,
+    /// Emits `job://progress` on every transition the pool owns.
+    emitter: Arc<dyn EventEmitter>,
     owner: String,
     permits: Arc<Semaphore>,
     worker_count: usize,
@@ -44,6 +47,7 @@ impl WorkerPool {
     pub fn new(
         pool: SqlitePool,
         dispatcher: Arc<dyn JobDispatcher>,
+        emitter: Arc<dyn EventEmitter>,
         max_parallel: usize,
         worker_count: usize,
     ) -> Self {
@@ -52,6 +56,7 @@ impl WorkerPool {
             inner: Arc::new(Inner {
                 pool,
                 dispatcher,
+                emitter,
                 owner,
                 permits: Arc::new(Semaphore::new(max_parallel.max(1))),
                 worker_count: worker_count.max(1),
@@ -177,10 +182,15 @@ async fn worker_loop(inner: Arc<Inner>) {
 }
 
 async fn run_job(inner: &Arc<Inner>, job: Job) {
+    // `job` is the row returned by `claim`, i.e. the `leased` transition.
+    emit_job(&*inner.emitter, &job);
+
     if let Err(error) = queue::mark_running(&inner.pool, &job.id).await {
         tracing::warn!(job_id = %job.id, %error, "could not mark job running");
         return;
     }
+    emit_current_job(inner, &job.id).await;
+
     let heartbeat = lease::spawn_heartbeat(
         inner.pool.clone(),
         job.id.clone(),
@@ -195,12 +205,27 @@ async fn run_job(inner: &Arc<Inner>, job: Job) {
         Ok(()) => {
             if let Err(error) = queue::complete(&inner.pool, &job.id).await {
                 tracing::warn!(job_id = %job.id, %error, "could not complete job");
+            } else {
+                emit_current_job(inner, &job.id).await;
             }
         }
         Err(error) => {
             let message = error.to_string();
             match queue::retry_or_fail(&inner.pool, &job.id, &message).await {
                 Ok(state) => {
+                    emit_current_job(inner, &job.id).await;
+                    // A failed attempt always surfaces on `log://line`: `warn`
+                    // when the job is requeued, `error` when it is terminal.
+                    let level = if state == "failed" { "error" } else { "warn" };
+                    emit_log(
+                        &*inner.emitter,
+                        level,
+                        "worker",
+                        format!(
+                            "job {} ({}) attempt failed ({state}): {message}",
+                            job.id, job.kind
+                        ),
+                    );
                     tracing::warn!(job_id = %job.id, state, %message, "job attempt failed");
                 }
                 Err(record_error) => {
@@ -208,6 +233,15 @@ async fn run_job(inner: &Arc<Inner>, job: Job) {
                 }
             }
         }
+    }
+}
+
+/// Reload a job and emit its current row on `job://progress`.
+async fn emit_current_job(inner: &Arc<Inner>, job_id: &str) {
+    match queue::get_job(&inner.pool, job_id).await {
+        Ok(Some(job)) => emit_job(&*inner.emitter, &job),
+        Ok(None) => {}
+        Err(error) => tracing::warn!(job_id, %error, "could not reload job for event"),
     }
 }
 
@@ -262,7 +296,13 @@ mod tests {
             executions: executions.clone(),
             fail_from: u32::MAX,
         });
-        let worker = WorkerPool::new(pool.clone(), dispatcher, 2, 2);
+        let worker = WorkerPool::new(
+            pool.clone(),
+            dispatcher,
+            Arc::new(crate::events::NullEmitter),
+            2,
+            2,
+        );
         worker.start();
 
         let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
@@ -301,7 +341,13 @@ mod tests {
             executions: Arc::new(AtomicU32::new(0)),
             fail_from: 0,
         });
-        let worker = WorkerPool::new(pool.clone(), dispatcher, 1, 1);
+        let worker = WorkerPool::new(
+            pool.clone(),
+            dispatcher,
+            Arc::new(crate::events::NullEmitter),
+            1,
+            1,
+        );
         worker.start();
 
         let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
@@ -314,5 +360,105 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
         worker.cancel();
+    }
+
+    #[tokio::test]
+    async fn pool_emits_job_progress_for_each_transition() {
+        let (pool, _dir) = connect_temp_file().await.expect("pool");
+        seed_project(&pool).await;
+        queue::enqueue(
+            &pool,
+            &queue::NewJob::new("p", "translate_chunk", serde_json::Value::Null),
+        )
+        .await
+        .expect("enqueue");
+
+        let emitter = Arc::new(crate::events::RecordingEmitter::new());
+        let dispatcher = Arc::new(CountingDispatcher {
+            executions: Arc::new(AtomicU32::new(0)),
+            fail_from: u32::MAX,
+        });
+        let worker = WorkerPool::new(pool.clone(), dispatcher, emitter.clone(), 1, 1);
+        worker.start();
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let done = emitter
+                .events_named("job://progress")
+                .iter()
+                .any(|payload| payload["state"] == "done");
+            if done {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "no done job event emitted"
+            );
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        worker.cancel();
+
+        let states: Vec<String> = emitter
+            .events_named("job://progress")
+            .iter()
+            .filter_map(|payload| payload["state"].as_str().map(str::to_string))
+            .collect();
+        assert!(states.contains(&"leased".to_string()), "states: {states:?}");
+        assert!(
+            states.contains(&"running".to_string()),
+            "states: {states:?}"
+        );
+        assert!(states.contains(&"done".to_string()), "states: {states:?}");
+    }
+
+    #[tokio::test]
+    async fn permanent_failure_emits_a_worker_log_line() {
+        let (pool, _dir) = connect_temp_file().await.expect("pool");
+        seed_project(&pool).await;
+        queue::enqueue(
+            &pool,
+            &queue::NewJob::new("p", "translate_chunk", serde_json::Value::Null),
+        )
+        .await
+        .expect("enqueue");
+        // Exhaust the retry budget so the job fails permanently on the first run.
+        sqlx::query("UPDATE job SET max_attempts = 0")
+            .execute(&pool)
+            .await
+            .expect("shrink attempts");
+
+        let emitter = Arc::new(crate::events::RecordingEmitter::new());
+        let dispatcher = Arc::new(CountingDispatcher {
+            executions: Arc::new(AtomicU32::new(0)),
+            fail_from: 0,
+        });
+        let worker = WorkerPool::new(pool.clone(), dispatcher, emitter.clone(), 1, 1);
+        worker.start();
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let logged = emitter
+                .events_named("log://line")
+                .iter()
+                .any(|payload| payload["source"] == "worker" && payload["level"] == "error");
+            if logged {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "no worker failure log emitted"
+            );
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        worker.cancel();
+
+        // The terminal failure is also reflected as a `failed` job event.
+        assert!(
+            emitter
+                .events_named("job://progress")
+                .iter()
+                .any(|payload| payload["state"] == "failed"),
+            "no failed job event emitted"
+        );
     }
 }

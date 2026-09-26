@@ -182,6 +182,24 @@ pub async fn reap_expired(pool: &SqlitePool) -> Result<u64> {
     Ok(res.rows_affected())
 }
 
+/// Return every job left `leased`/`running` to `pending`.
+///
+/// Called once at start-up: a freshly launched process owns no lease, so any
+/// in-flight job from a previous run is stale and must be claimable again. This
+/// mirrors the reaper (bump `attempts`, record the reason) but without the lease
+/// expiry filter, so recovery is immediate rather than waiting out the lease.
+/// Returns the number of jobs requeued.
+pub async fn requeue_in_flight(pool: &SqlitePool) -> Result<u64> {
+    let res = sqlx::query(
+        "UPDATE job SET state='pending', lease_owner=NULL, lease_expires_at=NULL, \
+         attempts=attempts+1, last_error='interrupted by restart' \
+         WHERE state IN ('leased','running')",
+    )
+    .execute(pool)
+    .await?;
+    Ok(res.rows_affected())
+}
+
 /// Cancel a job that has not finished yet.
 pub async fn cancel(pool: &SqlitePool, id: &str) -> Result<bool> {
     let res = sqlx::query(
@@ -193,6 +211,28 @@ pub async fn cancel(pool: &SqlitePool, id: &str) -> Result<bool> {
     .execute(pool)
     .await?;
     Ok(res.rows_affected() > 0)
+}
+
+/// Cancel every unfinished job, returning the affected rows so callers can emit
+/// one `job://progress` event per `cancelled` transition.
+pub async fn cancel_active(pool: &SqlitePool) -> Result<Vec<Job>> {
+    let rows = sqlx::query_as::<_, Job>(
+        "UPDATE job SET state='cancelled', finished_at=?1, lease_owner=NULL, lease_expires_at=NULL \
+         WHERE state IN ('pending','leased','running') RETURNING *",
+    )
+    .bind(now())
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// Fetch a single job by id.
+pub async fn get_job(pool: &SqlitePool, id: &str) -> Result<Option<Job>> {
+    let row = sqlx::query_as::<_, Job>("SELECT * FROM job WHERE id = ?1")
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row)
 }
 
 /// List jobs, optionally filtered by state and/or project.
@@ -314,6 +354,58 @@ mod tests {
             .expect("enqueue");
         claim(&pool, "w1").await.expect("claim");
         assert_eq!(reap_expired(&pool).await.expect("reap"), 0);
+    }
+
+    #[tokio::test]
+    async fn requeue_in_flight_recovers_even_live_leases() {
+        let (pool, _dir) = connect_temp_file().await.expect("pool");
+        insert_test_project(&pool, "proj").await;
+        let id = enqueue(&pool, &NewJob::new("proj", "translate_chunk", Value::Null))
+            .await
+            .expect("enqueue");
+        // Claim then mark running: the lease is still in the future, so the
+        // reaper would not touch it, but a restart must.
+        claim(&pool, "w1").await.expect("claim");
+        mark_running(&pool, &id).await.expect("running");
+        assert_eq!(reap_expired(&pool).await.expect("reap"), 0);
+
+        assert_eq!(requeue_in_flight(&pool).await.expect("requeue"), 1);
+        let job = get_job(&pool, &id).await.expect("get").expect("some");
+        assert_eq!(job.state, "pending");
+        assert_eq!(job.attempts, 1);
+        assert!(job.lease_owner.is_none());
+        assert!(job.lease_expires_at.is_none());
+        // Claimable again.
+        assert!(claim(&pool, "w2").await.expect("claim").is_some());
+    }
+
+    #[tokio::test]
+    async fn cancel_active_returns_and_cancels_unfinished_jobs() {
+        let (pool, _dir) = connect_temp_file().await.expect("pool");
+        insert_test_project(&pool, "proj").await;
+        let pending = enqueue(&pool, &NewJob::new("proj", "translate_chunk", Value::Null))
+            .await
+            .expect("enqueue");
+        let running = enqueue(&pool, &NewJob::new("proj", "translate_chunk", Value::Null))
+            .await
+            .expect("enqueue");
+        // First claimed job becomes the running one.
+        let claimed = claim(&pool, "w1").await.expect("claim").expect("some");
+        mark_running(&pool, &claimed.id).await.expect("running");
+        let done = enqueue(&pool, &NewJob::new("proj", "translate_chunk", Value::Null))
+            .await
+            .expect("enqueue");
+        complete(&pool, &done).await.expect("complete");
+
+        let mut cancelled = cancel_active(&pool).await.expect("cancel");
+        cancelled.sort_by(|a, b| a.id.cmp(&b.id));
+        let ids: Vec<&str> = cancelled.iter().map(|j| j.id.as_str()).collect();
+        assert_eq!(ids.len(), 2);
+        assert!(ids.contains(&pending.as_str()));
+        assert!(ids.contains(&running.as_str()));
+        assert!(cancelled.iter().all(|j| j.state == "cancelled"));
+        // A completed job is left alone.
+        assert!(ids.iter().all(|id| **id != done));
     }
 
     #[tokio::test]

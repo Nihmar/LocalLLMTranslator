@@ -7,6 +7,7 @@ pub mod commands;
 pub mod context;
 pub mod db;
 pub mod error;
+pub mod events;
 pub mod llm;
 pub mod pandoc;
 pub mod pipeline;
@@ -21,20 +22,23 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::Value;
 use sqlx::SqlitePool;
-use tauri::{Emitter, Manager};
+use tauri::Manager;
 use tokio::sync::broadcast;
 
-use crate::commands::{emit, EVENT_JOB_PROGRESS, EVENT_METRICS_TICK, EVENT_SIDECAR_STATUS};
+use crate::commands::{emit, EVENT_METRICS_TICK, EVENT_SIDECAR_STATUS};
 use crate::db::models::Job;
 use crate::error::{AppError, Result};
+use crate::events::{sidecar_event_sink, EventEmitter};
 use crate::pipeline::PipelineDeps;
 use crate::resources::ResourceGovernor;
 use crate::scheduler::{JobDispatcher, WorkerPool};
-use crate::sidecar::{resolve_spawn_spec, EventSink, SidecarClient, Supervisor};
+use crate::sidecar::{resolve_spawn_spec, SidecarClient, Supervisor};
 
 /// Shared application state, managed by Tauri and injected into commands.
 pub struct AppState {
     pub app: tauri::AppHandle,
+    /// UI event emitter, shared by the worker pool and the commands.
+    pub emitter: Arc<dyn EventEmitter>,
     pub pool: SqlitePool,
     pub sidecar: SidecarClient,
     pub supervisor: Arc<Supervisor>,
@@ -44,9 +48,11 @@ pub struct AppState {
 }
 
 /// Dispatches claimed jobs to the pipeline stages.
+///
+/// It does not emit events: the worker pool owns the `job://progress` lifecycle,
+/// so every producer shares one consistent payload shape.
 pub struct PipelineDispatcher {
     deps: PipelineDeps,
-    app: tauri::AppHandle,
 }
 
 #[async_trait]
@@ -58,7 +64,7 @@ impl JobDispatcher for PipelineDispatcher {
                 let source_path = commands::payload_str(&payload, "source_path")
                     .ok_or_else(|| AppError::Invalid("ingest job is missing source_path".into()))?;
                 let pdf_backend = payload.get("pdf_backend").and_then(Value::as_str);
-                let outcome = crate::pipeline::ingest::run_ingest(
+                crate::pipeline::ingest::run_ingest(
                     &self.deps,
                     &job.project_id,
                     &source_path,
@@ -66,56 +72,24 @@ impl JobDispatcher for PipelineDispatcher {
                     None,
                 )
                 .await?;
-                emit(
-                    &self.app,
-                    EVENT_JOB_PROGRESS,
-                    serde_json::json!({
-                        "job_id": job.id,
-                        "kind": job.kind,
-                        "state": "done",
-                        "chunks": outcome.chunks,
-                        "blocks": outcome.blocks,
-                    }),
-                );
                 Ok(())
             }
             "translate_chunk" => {
                 let chunk_id = commands::payload_str(&payload, "chunk_id").ok_or_else(|| {
                     AppError::Invalid("translate_chunk job is missing chunk_id".into())
                 })?;
-                let outcome = crate::pipeline::translate::run_translate_chunk(
+                crate::pipeline::translate::run_translate_chunk(
                     &self.deps,
                     Some(&job.id),
                     &chunk_id,
                 )
                 .await?;
-                emit(
-                    &self.app,
-                    EVENT_JOB_PROGRESS,
-                    serde_json::json!({
-                        "job_id": job.id,
-                        "kind": job.kind,
-                        "chunk_id": outcome.chunk_id,
-                        "state": outcome.status,
-                        "from_cache": outcome.from_cache,
-                    }),
-                );
                 Ok(())
             }
             "export_unit" => {
                 let request: crate::pipeline::export::ExportRequest =
                     serde_json::from_value(payload)?;
-                let outcome = crate::pipeline::export::run_export(&self.deps, &request).await?;
-                emit(
-                    &self.app,
-                    EVENT_JOB_PROGRESS,
-                    serde_json::json!({
-                        "job_id": job.id,
-                        "kind": job.kind,
-                        "state": "done",
-                        "output_path": outcome.output_path,
-                    }),
-                );
+                crate::pipeline::export::run_export(&self.deps, &request).await?;
                 Ok(())
             }
             other => Err(AppError::Invalid(format!(
@@ -129,7 +103,7 @@ impl JobDispatcher for PipelineDispatcher {
 pub fn run() {
     init_tracing();
 
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
@@ -162,8 +136,29 @@ pub fn run() {
             commands::export::export_build,
             commands::misc::open_path,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running LocalLLMTranslator");
+        .build(tauri::generate_context!())
+        .expect("error while building LocalLLMTranslator");
+
+    app.run(|app_handle, event| {
+        // Release the worker pool and the sidecar child process on exit.
+        if matches!(
+            event,
+            tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }
+        ) {
+            shutdown(app_handle);
+        }
+    });
+}
+
+/// Stop the worker pool and shut the sidecar down deterministically.
+///
+/// Idempotent: both `ExitRequested` and `Exit` may fire.
+fn shutdown(app: &tauri::AppHandle) {
+    if let Some(state) = app.try_state::<AppState>() {
+        tracing::info!("shutting down: stopping worker pool and sidecar");
+        state.worker.cancel();
+        state.supervisor.shutdown();
+    }
 }
 
 fn init_tracing() {
@@ -181,20 +176,37 @@ async fn build_state(app: &tauri::AppHandle) -> Result<AppState> {
 
     let pool = db::connect(&data_dir.join("app.sqlite")).await?;
 
+    // --- Crash recovery ---------------------------------------------------
+    // Jobs left `leased`/`running` by a previous run are stale (this process
+    // owns no lease), and chunks left `running` belong to interrupted jobs.
+    // Return both to their claimable state so the worker pool resumes them.
+    let requeued = crate::scheduler::queue::requeue_in_flight(&pool)
+        .await
+        .unwrap_or_else(|error| {
+            tracing::warn!(%error, "could not requeue in-flight jobs at boot");
+            0
+        });
+    let reset_chunks = crate::db::repo::reset_running_chunks(&pool)
+        .await
+        .unwrap_or_else(|error| {
+            tracing::warn!(%error, "could not reset running chunks at boot");
+            0
+        });
+    if requeued > 0 || reset_chunks > 0 {
+        tracing::info!(
+            requeued,
+            reset_chunks,
+            "recovered interrupted work from a previous run"
+        );
+    }
+
     // --- Sidecar ---------------------------------------------------------
     let bundled = crate::sidecar::bundled_sidecar_path(app.path().resource_dir().ok().as_ref());
     let spec = resolve_spawn_spec(bundled.as_deref());
 
-    let sink: EventSink = {
-        let handle = app.clone();
-        Arc::new(move |method: &str, params: &Value| {
-            if method == "progress" {
-                let _ = handle.emit(EVENT_JOB_PROGRESS, params.clone());
-            }
-            let _ = handle.emit(&format!("sidecar://{method}"), params.clone());
-        })
-    };
-    let supervisor = Supervisor::new(spec, sink, None);
+    let emitter: Arc<dyn EventEmitter> = Arc::new(app.clone());
+    let sink = sidecar_event_sink(emitter.clone());
+    let supervisor = Supervisor::new(spec, sink, emitter.clone(), None);
     let sidecar = SidecarClient::new(supervisor.clone());
 
     // --- Resources -------------------------------------------------------
@@ -211,16 +223,18 @@ async fn build_state(app: &tauri::AppHandle) -> Result<AppState> {
         resources.clone(),
         data_dir.clone(),
     );
-    let dispatcher = Arc::new(PipelineDispatcher {
-        deps,
-        app: app.clone(),
-    });
+    let dispatcher = Arc::new(PipelineDispatcher { deps });
     let worker = Arc::new(WorkerPool::new(
         pool.clone(),
         dispatcher,
+        emitter.clone(),
         snapshot.suggested_parallel,
         4.max(snapshot.suggested_parallel),
     ));
+
+    // Start the pool at boot: this claims pending/leased jobs (resume) and runs
+    // the lease reaper, so recovery does not depend on a user action.
+    worker.start();
 
     spawn_status_forwarder(app.clone(), supervisor.clone());
     spawn_metrics_ticker(
@@ -233,6 +247,7 @@ async fn build_state(app: &tauri::AppHandle) -> Result<AppState> {
 
     Ok(AppState {
         app: app.clone(),
+        emitter,
         pool,
         sidecar,
         supervisor,

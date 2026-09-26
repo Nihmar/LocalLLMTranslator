@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::PipelineDeps;
+use crate::db::models::Chunk;
 use crate::db::repo;
 use crate::error::{AppError, Result};
 use crate::pandoc::{write_metadata_yaml, BookMetadata, PandocDriver};
@@ -47,6 +48,17 @@ pub async fn run_export(deps: &PipelineDeps, request: &ExportRequest) -> Result<
 
     let chapters = repo::list_chapters(pool, &document_id).await?;
     let chunks = repo::list_chunks(pool, &document_id).await?;
+
+    // Refuse to export when nothing has been translated at all: silently
+    // emitting the source text produced untranslated "translations".
+    let translated_chunks = chunks.iter().filter(|c| chunk_has_translation(c)).count();
+    if translated_chunks == 0 {
+        return Err(AppError::Invalid(
+            "nothing to export: no chunk has been translated yet".into(),
+        ));
+    }
+    // Blocks that will fall back to the source text; reported in the build log.
+    let untranslated_blocks = repo::count_untranslated_blocks(pool, &document_id).await?;
 
     let output_dir = deps.output_dir(&request.project_id);
     let units_dir = output_dir.join("units");
@@ -100,11 +112,7 @@ pub async fn run_export(deps: &PipelineDeps, request: &ExportRequest) -> Result<
 
     let output_path = request.output_path.clone().unwrap_or_else(|| {
         output_dir
-            .join(format!(
-                "{} .{}",
-                sanitize(&project.name),
-                request.output_format
-            ))
+            .join(export_filename(&project.name, &request.output_format))
             .to_string_lossy()
             .to_string()
     });
@@ -121,6 +129,14 @@ pub async fn run_export(deps: &PipelineDeps, request: &ExportRequest) -> Result<
         )
         .await?;
 
+    // Report, in the build log, how much of the book is not translated.
+    let mut log = result.log;
+    log.push('\n');
+    log.push_str(&format!(
+        "[export] translated chunks: {translated_chunks}/{}; untranslated blocks: {untranslated_blocks}\n",
+        chunks.len()
+    ));
+
     Ok(ExportOutcome {
         output_path: if result.output_path.is_empty() {
             output_path
@@ -128,9 +144,22 @@ pub async fn run_export(deps: &PipelineDeps, request: &ExportRequest) -> Result<
             result.output_path
         },
         units: units.len(),
-        log: result.log,
+        log,
         duration_ms: result.duration_ms,
     })
+}
+
+/// Whether a chunk carries translated output.
+fn chunk_has_translation(chunk: &Chunk) -> bool {
+    chunk
+        .target_md
+        .as_deref()
+        .is_some_and(|text| !text.trim().is_empty())
+}
+
+/// Default output filename: `<sanitized project name>.<format>`.
+fn export_filename(project_name: &str, output_format: &str) -> String {
+    format!("{}.{}", sanitize(project_name), output_format)
 }
 
 /// Render chunk outputs (translated when available) into one Markdown unit.
@@ -202,5 +231,18 @@ mod tests {
     #[test]
     fn sanitize_replaces_unsafe_characters() {
         assert_eq!(sanitize("My Book: v2"), "My_Book__v2");
+    }
+
+    #[test]
+    fn export_filename_has_no_stray_space_before_extension() {
+        assert_eq!(export_filename("Book", "epub"), "Book.epub");
+        assert_eq!(export_filename("My Book", "pdf"), "My_Book.pdf");
+    }
+
+    #[test]
+    fn chunk_has_translation_rejects_missing_and_blank_targets() {
+        assert!(chunk_has_translation(&chunk("c1", Some("Ciao"), "Hello")));
+        assert!(!chunk_has_translation(&chunk("c2", None, "Hello")));
+        assert!(!chunk_has_translation(&chunk("c3", Some("   "), "Hello")));
     }
 }
