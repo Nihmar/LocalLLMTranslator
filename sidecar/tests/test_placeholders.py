@@ -134,3 +134,14 @@ def test_math_and_footnotes_are_opaque() -> None:
     literals = [literal for _, literal in placeholders]
     assert "$E = mc^2$" in literals
     assert "[^12]" in literals
+
+
+def test_front_matter_yaml_is_not_a_placeholder_source() -> None:
+    # The YAML block is non-translatable, so the pipeline never builds a chunk whose
+    # sendable text is the front matter. Even the pure substitution pass allocates nothing
+    # for plain YAML, so a round-trip can never corrupt the document's metadata.
+    yaml_block = '---\ntitle: "The Lantern Keeper"\nauthor: Fixture Author\nlang: en\n---'
+    llm_text, placeholders = substitute(yaml_block)
+    assert placeholders == []
+    assert llm_text == yaml_block
+    assert reinject(llm_text, placeholders).text == yaml_block

@@ -49,6 +49,17 @@ NASTY_CORPUS: dict[str, str] = {
     "trailing_spaces": "A  \nB\n",
     "unicode_and_placeholders": "Città ⟦1⟧però⟦2⟧ 日本語\n",
     "crlf_free_but_dense": "A\n\n#H\n\n- x\n\n|a|b|\n|-|-|\n",
+    # YAML front matter must be one opaque block, not hr + para + hr.
+    "front_matter": '---\ntitle: "X"\nauthor: "Y"\n---\n\n# H\n\nBody\n',
+    "front_matter_closed_with_dots": "---\ntitle: X\n...\n\nBody\n",
+    "front_matter_empty": "---\n---\n\nBody\n",
+    "front_matter_only": "---\ntitle: X\n---\n",
+    "front_matter_unterminated_is_a_rule": "---\ntitle: X\n\nBody\n",
+    "front_matter_not_leading_is_a_rule": "Text\n\n---\n\ntitle: X\n",
+    # A table cell may carry a footnote reference and an image inline.
+    "table_cell_with_footnote_and_image": (
+        "| a | b |\n|---|---|\n| see[^1] | ![x](img.png) |\n\n[^1]: note\n"
+    ),
 }
 
 
@@ -183,3 +194,56 @@ def test_chapter_ranges_cover_every_block_exactly_once() -> None:
     for chapter in chapters:
         covered.extend(range(chapter.block_first, chapter.block_last + 1))
     assert covered == list(range(len(blocks)))
+
+
+# -- M2: YAML front matter is metadata, never a translatable paragraph -------------------
+
+
+def test_leading_front_matter_is_one_non_translatable_block() -> None:
+    markdown = (
+        '---\ntitle: "The Lantern Keeper"\nauthor: "Fixture Author"\nlang: en\n---\n\n# H\n\nBody\n'
+    )
+    blocks = split_blocks(markdown)
+
+    front = blocks[0]
+    assert front.kind == "frontmatter"
+    assert front.translatable is False
+    assert front.source_md == (
+        '---\ntitle: "The Lantern Keeper"\nauthor: "Fixture Author"\nlang: en\n---'
+    )
+    # One block, not the hr + para + hr the YAML body used to be segmented into.
+    assert [b.kind for b in blocks] == ["frontmatter", "heading", "para"]
+    assert "hr" not in {b.kind for b in blocks}
+
+
+def test_front_matter_is_recognised_only_at_the_very_start() -> None:
+    blocks = split_blocks("Paragraph\n\n---\n\nMore\n")
+    assert [b.kind for b in blocks] == ["para", "hr", "para"]
+
+
+def test_unterminated_front_matter_stays_a_rule() -> None:
+    blocks = split_blocks("---\ntitle: X\n\nBody\n")
+    # No closing delimiter: guessing the end would swallow the document, so it stays an hr.
+    assert blocks[0].kind == "hr"
+
+
+def test_render_emits_front_matter_verbatim() -> None:
+    markdown = "---\ntitle: X\n---\n\nBody\n"
+    blocks = split_blocks(markdown)
+    front, para = blocks[0], blocks[-1]
+
+    assert render(blocks, {para.id: "Corpo"}) == "---\ntitle: X\n---\n\nCorpo\n"
+    # A translation keyed to the front matter's id can never reach the output: the block is
+    # not translatable, so render always falls back to its source slice.
+    assert render(blocks, {front.id: "TAMPERED"}) == markdown
+
+
+def test_table_cell_may_hold_a_footnote_reference_and_an_image() -> None:
+    markdown = "| a | b |\n|---|---|\n| see[^1] | ![x](img.png) |\n\n[^1]: note\n"
+    blocks = split_blocks(markdown)
+
+    assert blocks[0].kind == "table"
+    assert "[^1]" in blocks[0].source_md
+    assert "![x](img.png)" in blocks[0].source_md
+    assert blocks[1].kind == "footnote_def"
+    assert serialize(blocks) == markdown

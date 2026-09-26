@@ -36,6 +36,12 @@ _HR_RE = re.compile(
 )
 _IMAGE_ONLY_RE = re.compile(r"^ {0,3}!\[[^\]]*\]\([^)]*\)[ \t]*$")
 _TABLE_DELIM_RE = re.compile(r"^ {0,3}\|?[ \t]*:?-{1,}:?[ \t]*\|[ \t:|-]*$")
+
+#: YAML front matter is fenced by a leading ``---`` and a matching closing delimiter at the
+#: very start of the document; ``...`` is the alternative terminator the YAML spec allows and
+#: the markdown extractor already accepts.
+_FRONTMATTER_OPEN = "---"
+_FRONTMATTER_CLOSE = frozenset({"---", "..."})
 _HTML_COMMENT_START_RE = re.compile(r"^ {0,3}<!--")
 _HTML_TAG_RE = re.compile(r"^ {0,3}<([A-Za-z][A-Za-z0-9-]*)")
 
@@ -84,6 +90,21 @@ def _match_fence(lines: Sequence[str], start: int) -> tuple[str, int, dict[str, 
             break
         end += 1
     return "code", end, {"lang": info.split()[0] if info else "", "info": info}
+
+
+def _match_frontmatter(lines: Sequence[str], start: int) -> tuple[str, int, dict[str, Any]] | None:
+    """Match a leading ``---`` ... ``---`` YAML block as one opaque block.
+
+    Only the very first line can open front matter, so a later ``---`` remains a
+    horizontal rule. An unterminated opening ``---`` also falls through to the rule
+    matcher: guessing where an unclosed block ends would silently swallow the document.
+    """
+    if start != 0 or lines[0].strip() != _FRONTMATTER_OPEN:
+        return None
+    for end in range(1, len(lines)):
+        if lines[end].strip() in _FRONTMATTER_CLOSE:
+            return "frontmatter", end + 1, {}
+    return None
 
 
 def _match_hr(lines: Sequence[str], start: int) -> tuple[str, int, dict[str, Any]] | None:
@@ -211,6 +232,7 @@ def _match_list(lines: Sequence[str], start: int) -> tuple[str, int, dict[str, A
 
 
 _MATCHERS: tuple[_Matcher, ...] = (
+    _match_frontmatter,
     _match_fence,
     _match_hr,
     _match_heading,

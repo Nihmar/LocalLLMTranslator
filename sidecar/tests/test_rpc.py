@@ -154,6 +154,67 @@ def test_ingest_emits_progress_and_writes_markdown(fixtures: Path, tmp_path: Pat
         assert 0 <= event["done"] <= event["total"]
 
 
+def test_ingest_reports_media_with_the_exact_result_keys(fixtures: Path, tmp_path: Path) -> None:
+    ingested = _ingest(fixtures, tmp_path, "content.epub")
+
+    # The Rust client deserialises these keys; the shape must not drift.
+    assert set(ingested) == {
+        "markdown_path",
+        "metadata",
+        "chapters",
+        "warnings",
+        "assets_dir",
+        "assets",
+    }
+    assert ingested["assets"] == ["assets/harbour.png"]
+    assert ingested["assets_dir"] == str(tmp_path / "work" / "assets")
+    assert Path(str(ingested["assets_dir"]), "harbour.png").is_file()
+    assert "assets/harbour.png" in Path(str(ingested["markdown_path"])).read_text("utf-8")
+
+
+def test_ingest_reports_no_media_for_a_source_without_any(
+    fixtures: Path,
+    tmp_path: Path,
+) -> None:
+    ingested = _ingest(fixtures, tmp_path, "content.md")
+    assert ingested["assets"] == []
+    assert ingested["assets_dir"] is None
+
+
+def test_front_matter_is_not_handed_to_the_model(tmp_path: Path) -> None:
+    source = tmp_path / "book.md"
+    source.write_text(
+        '---\ntitle: "The Lantern Keeper"\nauthor: Fixture Author\n---\n\n# Title\n\nBody text.\n',
+        encoding="utf-8",
+    )
+    ingested = call("ingest", {"path": str(source), "work_dir": str(tmp_path / "work")})
+    parsed = call("parse_document", {"markdown_path": ingested["markdown_path"]})
+
+    blocks = [_dict(block) for block in _list(parsed["blocks"])]
+    front = next(block for block in blocks if block["kind"] == "frontmatter")
+    assert front["translatable"] is False
+
+    built = call("build_chunks", {"blocks": blocks, "budget_tokens": 1000})
+    chunks = [_dict(chunk) for chunk in _list(built["chunks"])]
+    front_chunk = next(chunk for chunk in chunks if front["id"] in chunk["block_ids"])
+
+    # The block sits alone and costs nothing of the model's budget: the chunker gives a
+    # non-translatable block an empty send, so the YAML never consumes context.
+    assert front_chunk["block_ids"] == [front["id"]]
+    assert front_chunk["token_estimate"] == 0
+    assert "frontmatter" in _list(front_chunk["flags"])
+
+    # prepare_text allocates no placeholder for the YAML either, so there is no token in
+    # the metadata the model could be asked to rewrite.
+    prepared = call(
+        "prepare_text",
+        {"text": front_chunk["source_md"], "block_ids": front_chunk["block_ids"]},
+    )
+    assert prepared["placeholders"] == []
+    assert prepared["llm_text"] == front["source_md"]
+    assert prepared["used_blocks"] == 1
+
+
 def test_parse_document_block_and_chapter_shape(fixtures: Path, tmp_path: Path) -> None:
     ingested = _ingest(fixtures, tmp_path, "content.md")
     parsed = call("parse_document", {"markdown_path": ingested["markdown_path"]})
@@ -325,6 +386,30 @@ def test_pandoc_build_produces_output(tmp_path: Path) -> None:
     assert isinstance(result["duration_ms"], int)
     assert output.is_file()
     assert "Chapter One" in output.read_text(encoding="utf-8")
+
+
+def test_pandoc_build_forwards_the_resource_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An optional parameter must reach the module, not be dropped by the dispatcher."""
+    captured: dict[str, Any] = {}
+
+    def fake_build(**kwargs: Any) -> dict[str, Any]:
+        captured.update(kwargs)
+        return {"output_path": "book.epub", "log": "", "duration_ms": 0}
+
+    monkeypatch.setattr(rpc.pandoc, "build", fake_build)
+    params: dict[str, Any] = {
+        "units": [{"path": "one.md", "title": "Chapter One"}],
+        "metadata": {"title": "The Lantern Keeper"},
+        "output_path": "book.epub",
+        "output_format": "epub",
+    }
+
+    call("pandoc_build", params)
+    assert captured["resource_path"] == []
+
+    params["resource_path"] = ["/work"]
+    call("pandoc_build", params)
+    assert captured["resource_path"] == ["/work"]
 
 
 # ---------------------------------------------------------------------------

@@ -156,3 +156,32 @@ def test_estimate_tokens_is_monotonic() -> None:
     assert estimate_tokens("") == 0
     assert estimate_tokens("a") >= 1
     assert estimate_tokens("a" * 300) > estimate_tokens("a" * 30)
+
+
+# -- M2: a non-translatable block travels with its chunk but is never sent ---------------
+
+
+def test_front_matter_is_carried_but_costs_no_tokens() -> None:
+    markdown = "---\ntitle: X\nauthor: Y\n---\n\n# H\n\nBody text.\n"
+    blocks = split_blocks(markdown)
+    front = blocks[0]
+    assert front.kind == "frontmatter"
+    assert front.translatable is False
+
+    chunks = build_chunks(blocks, 1000)
+
+    # The chunker gives a non-translatable block an empty `sent`, so the whole document
+    # costs exactly what its translatable blocks cost: nothing is spent on the YAML.
+    translatable = sum(estimate_tokens(b.source_text) for b in blocks if b.translatable)
+    assert sum(chunk.token_estimate for chunk in chunks) == translatable
+
+    holder = next(chunk for chunk in chunks if front.id in chunk.block_ids)
+    assert "frontmatter" in holder.flags
+
+
+def test_non_translatable_block_is_carried_into_the_chunk_source_md() -> None:
+    blocks = split_blocks("---\ntitle: X\n---\n\nBody\n")
+    front = blocks[0]
+    holder = next(c for c in build_chunks(blocks, 1000) if front.id in c.block_ids)
+    # It is never sent, but it does travel so the document can be rebuilt verbatim.
+    assert front.source_md in holder.source_md

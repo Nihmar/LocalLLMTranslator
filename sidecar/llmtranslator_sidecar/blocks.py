@@ -21,13 +21,18 @@ BLOCK_KINDS: frozenset[str] = frozenset(
         "code",
         "figure",
         "footnote_def",
+        "frontmatter",
         "hr",
         "html",
     }
 )
 
-#: Blocks that are carried through the pipeline but never sent to the model.
-NON_TRANSLATABLE_KINDS: frozenset[str] = frozenset({"code", "hr", "html", "figure"})
+#: Blocks that are carried through the pipeline but never sent to the model. YAML front
+#: matter belongs here: it is the document's metadata, and a model asked to translate it
+#: would rewrite the very fields the pipeline needs to stay reproducible.
+NON_TRANSLATABLE_KINDS: frozenset[str] = frozenset(
+    {"code", "frontmatter", "hr", "html", "figure"},
+)
 
 
 @dataclass(slots=True)
