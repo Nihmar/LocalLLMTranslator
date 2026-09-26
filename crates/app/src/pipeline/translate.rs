@@ -2,12 +2,11 @@
 //! inference, placeholder validation, persistence and audit.
 
 use std::collections::HashMap;
-use std::time::Instant;
 
-use futures_util::StreamExt;
 use serde::Serialize;
 use serde_json::Value;
 
+use super::chat_call::{run_chat_call, ChatCall};
 use super::PipelineDeps;
 use crate::context::budget::CachedCounter;
 use crate::context::builder::{ContextBuilder, ContextInputs, GlossaryEntry};
@@ -15,7 +14,7 @@ use crate::db::models::{Block, BlockTranslation, QaFinding};
 use crate::db::repo::{self, ChunkOutcome};
 use crate::db::{new_id, now};
 use crate::error::{AppError, Result};
-use crate::llm::{ChatMessage, ChatRequest, LlamaClient};
+use crate::llm::LlamaClient;
 use crate::util::{json_hash, sha256_hex_str};
 
 const ROLE: &str = "translator";
@@ -197,21 +196,25 @@ async fn translate_chunk_inner(
     let mut needs_review_reason: Option<String> = None;
 
     if !from_cache {
-        let response = call_model(
+        response_text = run_chat_call(
             deps,
-            job_id,
-            &chunk.id,
-            &endpoint.base_url,
-            &binding.params_json,
-            &params,
-            &model,
-            &prompt_hash,
-            &built.system,
-            &built.user,
-            &chunk.id,
+            &ChatCall {
+                job_id,
+                chunk_id: Some(&chunk.id),
+                role: ROLE,
+                endpoint_id: &endpoint.id,
+                base_url: &endpoint.base_url,
+                model: &model,
+                params_json: &binding.params_json,
+                prompt_hash: &prompt_hash,
+                system: &built.system,
+                user: &built.user,
+                response_format: None,
+                seed: derive_seed(&chunk.id, ROLE),
+                default_max_tokens: None,
+            },
         )
         .await?;
-        response_text = response;
     }
 
     // ---- Reinject + placeholder validation ------------------------------
@@ -230,18 +233,23 @@ async fn translate_chunk_inner(
             built.user
         );
         let retry_hash = sha256_hex_str(&format!("{}\n\u{0}\n{}", built.system, retry_user));
-        response_text = call_model(
+        response_text = run_chat_call(
             deps,
-            job_id,
-            &chunk.id,
-            &endpoint.base_url,
-            &binding.params_json,
-            &params,
-            &model,
-            &retry_hash,
-            &built.system,
-            &retry_user,
-            &chunk.id,
+            &ChatCall {
+                job_id,
+                chunk_id: Some(&chunk.id),
+                role: ROLE,
+                endpoint_id: &endpoint.id,
+                base_url: &endpoint.base_url,
+                model: &model,
+                params_json: &binding.params_json,
+                prompt_hash: &retry_hash,
+                system: &built.system,
+                user: &retry_user,
+                response_format: None,
+                seed: derive_seed(&chunk.id, ROLE),
+                default_max_tokens: None,
+            },
         )
         .await?;
         reinject = deps
@@ -489,123 +497,6 @@ fn aligned_target_md(
     translations: &[Option<&str>],
 ) -> Option<String> {
     block_count_ok.then(|| compose_target_md(chunk_blocks, translations))
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn call_model(
-    deps: &PipelineDeps,
-    job_id: Option<&str>,
-    chunk_id: &str,
-    base_url: &str,
-    binding_params_json: &str,
-    params: &Value,
-    model: &str,
-    prompt_hash: &str,
-    system: &str,
-    user: &str,
-    seed_source: &str,
-) -> Result<String> {
-    let client = LlamaClient::new(base_url)?;
-    let mut request = ChatRequest::new(
-        model,
-        vec![ChatMessage::system(system), ChatMessage::user(user)],
-    );
-    request.seed = Some(derive_seed(seed_source, ROLE));
-    request.temperature = params
-        .get("temperature")
-        .and_then(Value::as_f64)
-        .map(|v| v as f32);
-    request.top_p = params
-        .get("top_p")
-        .and_then(Value::as_f64)
-        .map(|v| v as f32);
-    request.max_tokens = params
-        .get("max_tokens")
-        .and_then(Value::as_u64)
-        .map(|v| v as u32);
-    if let Some(grammar) = params.get("grammar").and_then(Value::as_str) {
-        request.grammar = Some(grammar.to_string());
-    }
-
-    let started = Instant::now();
-    let mut content = String::new();
-    let mut finish_reason = None;
-    let mut usage = None;
-
-    let stream_result: Result<()> = async {
-        let mut stream = client.chat_stream(request).await?;
-        while let Some(item) = stream.next().await {
-            let delta = item?;
-            if delta.done {
-                break;
-            }
-            content.push_str(&delta.content);
-            if let Some(reason) = delta.finish_reason {
-                finish_reason = Some(reason);
-            }
-            if delta.usage.is_some() {
-                usage = delta.usage;
-            }
-        }
-        Ok(())
-    }
-    .await;
-    let latency_ms = started.elapsed().as_millis() as i64;
-
-    match stream_result {
-        Ok(()) => {
-            repo::insert_llm_call(
-                &deps.pool,
-                job_id,
-                Some(chunk_id),
-                ROLE,
-                None,
-                model,
-                binding_params_json,
-                Some(derive_seed(seed_source, ROLE)),
-                prompt_hash,
-                Some(user),
-                Some(&content),
-                finish_reason.as_deref(),
-                usage
-                    .as_ref()
-                    .and_then(|u| u.prompt_tokens)
-                    .map(|v| v as i64),
-                usage
-                    .as_ref()
-                    .and_then(|u| u.completion_tokens)
-                    .map(|v| v as i64),
-                Some(latency_ms),
-                1,
-                None,
-            )
-            .await?;
-            Ok(content)
-        }
-        Err(error) => {
-            repo::insert_llm_call(
-                &deps.pool,
-                job_id,
-                Some(chunk_id),
-                ROLE,
-                None,
-                model,
-                binding_params_json,
-                None,
-                prompt_hash,
-                Some(user),
-                None,
-                None,
-                None,
-                None,
-                Some(latency_ms),
-                1,
-                Some(&error.to_string()),
-            )
-            .await?;
-            Err(error)
-        }
-    }
 }
 
 /// Deterministic seed from `hash(chunk_id, role)` (PLAN.md section 10).

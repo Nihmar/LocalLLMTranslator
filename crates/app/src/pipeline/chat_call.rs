@@ -1,9 +1,10 @@
-//! One structured-output call on any role: JSON schema, SSE streaming, audit.
+//! One chat call on any role: optional structured output, SSE streaming, audit.
 //!
-//! Shared by the book reconnaissance (PLAN.md §9.4) and the rolling summaries
-//! (§8): both ask the `orchestrator` role for JSON behind a schema and need the
-//! same stream accumulation and `llm_call` audit. The translation path has its
-//! own call helper because it is not a structured-output call.
+//! Shared by the book reconnaissance (PLAN.md §9.4), the rolling summaries (§8),
+//! the bilingual editor and the proofreader (§8): all of them stream from
+//! `llama-server` and must leave the same `llm_call` audit trail. The translation
+//! path uses it too. Only the `response_format` differs — a JSON schema for the
+//! structured passes, `None` for a plain text answer like the proofreader's.
 
 use std::time::Instant;
 
@@ -15,12 +16,12 @@ use crate::db::repo;
 use crate::error::Result;
 use crate::llm::{ChatMessage, ChatRequest, LlamaClient, ResponseFormat};
 
-/// Everything one structured call needs. `params_json` carries the role
-/// binding's sampling parameters; `default_max_tokens` applies when they do not
-/// set one.
-pub struct JsonCall<'a> {
+/// Everything one call needs. `params_json` carries the role binding's sampling
+/// parameters; `default_max_tokens` applies when they do not set one (`None`
+/// leaves the server default).
+pub struct ChatCall<'a> {
     pub job_id: Option<&'a str>,
-    /// The chunk the call belongs to, when there is one (the reconciliation and
+    /// The chunk the call belongs to, when there is one (reconnaissance and
     /// summary calls have none).
     pub chunk_id: Option<&'a str>,
     pub role: &'a str,
@@ -31,15 +32,15 @@ pub struct JsonCall<'a> {
     pub prompt_hash: &'a str,
     pub system: &'a str,
     pub user: &'a str,
-    pub schema_name: &'a str,
-    pub schema: Value,
+    /// `Some` for the structured passes, `None` for a plain text answer.
+    pub response_format: Option<ResponseFormat>,
     pub seed: i64,
-    pub default_max_tokens: u32,
+    pub default_max_tokens: Option<u32>,
 }
 
 /// Run the call and return the accumulated content. Success and failure are
 /// both recorded in `llm_call`, so a job can be audited after the fact.
-pub async fn run_json_call(deps: &PipelineDeps, call: &JsonCall<'_>) -> Result<String> {
+pub async fn run_chat_call(deps: &PipelineDeps, call: &ChatCall<'_>) -> Result<String> {
     let client = LlamaClient::new(call.base_url)?;
     let params: Value = serde_json::from_str(call.params_json).unwrap_or(Value::Null);
 
@@ -59,16 +60,15 @@ pub async fn run_json_call(deps: &PipelineDeps, call: &JsonCall<'_>) -> Result<S
         .get("top_p")
         .and_then(Value::as_f64)
         .map(|value| value as f32);
-    request.max_tokens = Some(
-        params
-            .get("max_tokens")
-            .and_then(Value::as_u64)
-            .map_or(call.default_max_tokens, |value| value as u32),
-    );
-    request.response_format = Some(ResponseFormat::json_schema(
-        call.schema_name,
-        call.schema.clone(),
-    ));
+    request.max_tokens = params
+        .get("max_tokens")
+        .and_then(Value::as_u64)
+        .map(|value| value as u32)
+        .or(call.default_max_tokens);
+    request.response_format = call.response_format.clone();
+    if let Some(grammar) = params.get("grammar").and_then(Value::as_str) {
+        request.grammar = Some(grammar.to_string());
+    }
 
     let started = Instant::now();
     let mut content = String::new();

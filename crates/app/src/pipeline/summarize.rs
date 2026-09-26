@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::SqlitePool;
 
-use super::json_call::{run_json_call, JsonCall};
+use super::chat_call::{run_chat_call, ChatCall};
 use super::PipelineDeps;
 use crate::db::models::{Chunk, GlossaryTerm, Project};
 use crate::db::{new_id, repo};
@@ -404,9 +404,9 @@ pub async fn run_summarize(
     )?;
     let prompt_hash = sha256_hex_str(&format!("{system}\n\u{0}\n{user}"));
 
-    let response = run_json_call(
+    let response = run_chat_call(
         deps,
-        &JsonCall {
+        &ChatCall {
             job_id,
             chunk_id: None,
             role: ROLE,
@@ -417,13 +417,12 @@ pub async fn run_summarize(
             prompt_hash: &prompt_hash,
             system: &system,
             user: &user,
-            schema_name: SCHEMA_NAME,
-            schema,
+            response_format: Some(crate::llm::ResponseFormat::json_schema(SCHEMA_NAME, schema)),
             seed: crate::pipeline::translate::derive_seed(
                 &format!("{}:{}", payload.chapter_id, payload.final_run),
                 ROLE,
             ),
-            default_max_tokens: DEFAULT_MAX_TOKENS,
+            default_max_tokens: Some(DEFAULT_MAX_TOKENS),
         },
     )
     .await?;
