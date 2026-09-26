@@ -468,6 +468,8 @@ export interface QaReportRequest {
   kind?: string | null;
   severity?: string | null;
   chunk_id?: string | null;
+  /** `open` | `resolved` | `ignored`; `null` returns every status. */
+  status?: string | null;
 }
 
 // --- jobs ----------------------------------------------------------------------------------

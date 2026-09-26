@@ -9,6 +9,7 @@ import {
   openPath,
   projectList,
   projectSetSeries,
+  qaFindingSetStatus,
   qaReport,
   seriesCreate,
   seriesDelete,
@@ -81,6 +82,40 @@ function draftFrom(term: SeriesGlossaryTerm): TermDraft {
     kind: term.kind,
     status: term.status,
     note: term.note ?? "",
+  };
+}
+
+/**
+ * The pieces of a `glossary_conflict` finding the view acts on. Both the series flagger
+ * (`series_target`/`project_target`) and the project-level proposal merge
+ * (`existing_target`/`proposed_target`) are understood.
+ */
+interface ConflictDetails {
+  source: string | null;
+  scope: string | null;
+  seriesTarget: string | null;
+  projectTarget: string | null;
+}
+
+function parseConflictDetails(json: string): ConflictDetails {
+  let record: Record<string, unknown> = {};
+  try {
+    const value: unknown = JSON.parse(json);
+    if (value !== null && typeof value === "object") {
+      record = value as Record<string, unknown>;
+    }
+  } catch {
+    record = {};
+  }
+  const text = (key: string): string | null => {
+    const value = record[key];
+    return typeof value === "string" && value.length > 0 ? value : null;
+  };
+  return {
+    source: text("source"),
+    scope: text("scope"),
+    seriesTarget: text("series_target") ?? text("existing_target"),
+    projectTarget: text("project_target") ?? text("proposed_target"),
   };
 }
 
@@ -178,6 +213,8 @@ export function SeriesView() {
   >({});
   // Re-synthesize the candidate even when no book profile or canon changed.
   const [forceRecon, setForceRecon] = useState(false);
+  // Conflicts panel: closed findings stay hidden unless asked for.
+  const [showClosedConflicts, setShowClosedConflicts] = useState(false);
 
   const selected = useMemo(
     () => series.find((entry) => entry.id === selectedId) ?? null,
@@ -247,10 +284,12 @@ export function SeriesView() {
       // Conflicts are project-scoped findings: gather the open ones from every book.
       const perProject = await Promise.all(
         loaded.projects.map(async (project) => {
-          const findings = await qaReport({ project_id: project.id, kind: "glossary_conflict" });
-          return findings
-            .filter((finding) => finding.status === "open")
-            .map((finding) => ({ project, finding }));
+          const findings = await qaReport({
+            project_id: project.id,
+            kind: "glossary_conflict",
+            status: showClosedConflicts ? null : "open",
+          });
+          return findings.map((finding) => ({ project, finding }));
         }),
       );
       setConflicts(perProject.flat());
@@ -258,7 +297,7 @@ export function SeriesView() {
       setError(toErrorMessage(loadError));
       setDetail(null);
     }
-  }, [selectedId]);
+  }, [selectedId, showClosedConflicts]);
 
   useEffect(() => {
     void loadSeries();
@@ -626,6 +665,50 @@ export function SeriesView() {
     });
   }
 
+  async function handleSetFindingStatus(finding: QaFinding, status: string): Promise<void> {
+    await run(`conflict:${finding.id}`, async () => {
+      await qaFindingSetStatus(finding.id, status);
+      await loadDetail();
+      setNotice(
+        status === "open"
+          ? "Conflitto riaperto."
+          : status === "resolved"
+            ? "Conflitto segnato come risolto."
+            : "Canone mantenuto: il conflitto è chiuso, il libro resta sovrano.",
+      );
+    });
+  }
+
+  /// Adopt the book's rendering into the canon, then close the finding.
+  async function handleAdoptConflict(
+    finding: QaFinding,
+    details: ConflictDetails,
+  ): Promise<void> {
+    if (selected === null || details.source === null || details.projectTarget === null) {
+      return;
+    }
+    const source = details.source;
+    const target = details.projectTarget;
+    await run(`conflict-adopt:${finding.id}`, async () => {
+      const existing = detail?.glossary.find(
+        (term) => term.source.trim().toLowerCase() === source.trim().toLowerCase(),
+      );
+      await seriesGlossaryUpsert({
+        id: existing?.id ?? null,
+        series_id: selected.id,
+        source,
+        target,
+        kind: existing?.kind ?? "term",
+        note: existing?.note ?? null,
+        status: "approved",
+        expected_revision: existing?.revision ?? null,
+      });
+      await qaFindingSetStatus(finding.id, "resolved");
+      await loadDetail();
+      setNotice(`Canone aggiornato: «${source}» ora è «${target}»; il conflitto è risolto.`);
+    });
+  }
+
   const freeProjects = projects.filter(
     (project) => !(detail?.projects ?? []).some((member) => member.id === project.id),
   );
@@ -937,33 +1020,100 @@ export function SeriesView() {
               <div className="panel">
                 <div className="panel-head">
                   <span className="panel-title">Conflitti di canone</span>
-                  <span className="mono-chip">{conflicts.length}</span>
+                  <span className="flex items-center gap-2">
+                    <label className="flex items-center gap-1 text-[0.68rem] text-muted">
+                      <input
+                        type="checkbox"
+                        checked={showClosedConflicts}
+                        onChange={(event) => {
+                          setShowClosedConflicts(event.target.checked);
+                        }}
+                      />
+                      Mostra chiusi
+                    </label>
+                    <span className="mono-chip">{conflicts.length}</span>
+                  </span>
                 </div>
                 <div className="panel-pad section-stack">
                   {conflicts.length === 0 ? (
                     <p className="field-hint">
-                      Nessun conflitto aperto: i libri rendono i termini di serie come il canone.
+                      Nessun conflitto: i libri rendono i termini di serie come il canone.
                     </p>
                   ) : (
                     <ul className="section-stack">
-                      {conflicts.map(({ project, finding }) => (
-                        <li
-                          key={finding.id}
-                          className="rounded border border-line p-2 text-xs"
-                        >
-                          <span className="flex flex-wrap items-center gap-1">
-                            <span className="badge badge-warning">{project.name}</span>
-                            <span className="badge badge-neutral">{finding.kind}</span>
-                          </span>
-                          <p className="mt-1 font-mono text-[0.65rem] break-all text-muted">
-                            {finding.details_json}
-                          </p>
-                          <p className="field-hint">
-                            Modifica il termine di serie oppure il glossario del libro per
-                            risolverlo; il libro resta comunque sovrano.
-                          </p>
-                        </li>
-                      ))}
+                      {conflicts.map(({ project, finding }) => {
+                        const details = parseConflictDetails(finding.details_json);
+                        const closed = finding.status !== "open";
+                        const adoptable =
+                          details.projectTarget !== null &&
+                          (details.scope === "series" || details.scope === "series_promote");
+                        return (
+                          <li key={finding.id} className="rounded border border-line p-2 text-xs">
+                            <span className="flex flex-wrap items-center gap-1">
+                              <span className="badge badge-warning">{project.name}</span>
+                              {details.source !== null ? (
+                                <span className="font-medium text-ink">{details.source}</span>
+                              ) : null}
+                              <span className="badge badge-neutral">{finding.kind}</span>
+                              <StatusBadge status={finding.status} />
+                              {details.scope !== null ? (
+                                <span className="text-[0.65rem] text-faint">{details.scope}</span>
+                              ) : null}
+                            </span>
+                            {details.seriesTarget !== null || details.projectTarget !== null ? (
+                              <p className="mt-1 text-[0.72rem] text-muted">
+                                canone: <strong>{details.seriesTarget ?? "—"}</strong> · libro:{" "}
+                                <strong>{details.projectTarget ?? "—"}</strong>
+                              </p>
+                            ) : (
+                              <p className="mt-1 font-mono text-[0.65rem] break-all text-muted">
+                                {finding.details_json}
+                              </p>
+                            )}
+                            <div className="mt-1 flex flex-wrap items-center gap-1">
+                              {!closed ? (
+                                <>
+                                  {adoptable ? (
+                                    <button
+                                      type="button"
+                                      className="btn btn-sm btn-primary"
+                                      disabled={busy !== null}
+                                      onClick={() => void handleAdoptConflict(finding, details)}
+                                    >
+                                      Adotta «{details.projectTarget}» nel canone
+                                    </button>
+                                  ) : null}
+                                  <button
+                                    type="button"
+                                    className="btn btn-sm"
+                                    disabled={busy !== null}
+                                    onClick={() => void handleSetFindingStatus(finding, "ignored")}
+                                  >
+                                    Mantieni il canone
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="btn btn-sm btn-ghost"
+                                    disabled={busy !== null}
+                                    onClick={() => void handleSetFindingStatus(finding, "resolved")}
+                                  >
+                                    Segna risolto
+                                  </button>
+                                </>
+                              ) : (
+                                <button
+                                  type="button"
+                                  className="btn btn-sm"
+                                  disabled={busy !== null}
+                                  onClick={() => void handleSetFindingStatus(finding, "open")}
+                                >
+                                  Riapri
+                                </button>
+                              )}
+                            </div>
+                          </li>
+                        );
+                      })}
                     </ul>
                   )}
                 </div>

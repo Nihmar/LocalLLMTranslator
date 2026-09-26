@@ -127,6 +127,7 @@ const COMMANDS = {
   suggestionAccept: "suggestion_accept",
   suggestionReject: "suggestion_reject",
   qaReport: "qa_report",
+  qaFindingSetStatus: "qa_finding_set_status",
   jobList: "job_list",
   chunkList: "chunk_list",
   chunkGet: "chunk_get",
@@ -443,9 +444,14 @@ export function suggestionReject(id: string): Promise<Suggestion> {
   return call<Suggestion>(COMMANDS.suggestionReject, { id });
 }
 
-/** `qa_finding` rows of a project, filterable by kind, severity and chunk. */
+/** `qa_finding` rows of a project, filterable by kind, severity, chunk and status. */
 export function qaReport(request: QaReportRequest): Promise<QaFinding[]> {
   return call<QaFinding[]>(COMMANDS.qaReport, { req: request });
+}
+
+/** Close or reopen a QA finding (`open` | `resolved` | `ignored`). */
+export function qaFindingSetStatus(id: string, status: string): Promise<Ack> {
+  return call<Ack>(COMMANDS.qaFindingSetStatus, { req: { id, status } });
 }
 
 // --- jobs and chunks -----------------------------------------------------------------------

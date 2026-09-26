@@ -146,6 +146,7 @@ Commands: `project_list`, `project_create`, `project_get`, `project_delete`,
 `series_export`, `series_import`, `series_qa_scan`, `series_recon_start`,
 `series_recon_confirm`,
 `review_start`, `suggestion_list`, `suggestion_accept`, `suggestion_reject`, `qa_report`,
+`qa_finding_set_status`,
 `job_list`, `chunk_list`, `chunk_get`, `metrics_get`, `sidecar_status`,
 `export_build`, `export_preview`, `export_history`, `open_path`.
 
@@ -184,6 +185,12 @@ did not change are not re-sent to the model, and the previous candidate travels 
 target, note?}], rejected_characters[], discard?}}`: the accepted fields land in the series
 memory, accepted characters become approved canon terms and rejected sources stay on the
 candidate so a later run does not propose them again.
+
+`qa_report` takes `{project_id, kind?, severity?, chunk_id?, status?}` (`status` is
+`open`/`resolved`/`ignored`; omitted returns every status) and returns the `qa_finding`
+rows. `qa_finding_set_status` takes `{id, status}` and closes or reopens one: that is how the
+Series view resolves a `glossary_conflict` (adopting a book rendering into the canon, keeping
+the canon, or marking the finding resolved). A chunk re-scan replaces its findings anyway.
 
 `review_start` takes `{req: {project_id, chunk_ids?, chapter_id?, pass?, with_qa?}}`, where `pass`
 is `editor` (default `both`, also `proofreader`), and enqueues the matching `edit_chunk` /

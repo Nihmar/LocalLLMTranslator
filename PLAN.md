@@ -921,6 +921,7 @@ what makes it safe to restart it and re-send the in-flight requests.
   `series_variant_upsert`, `series_variant_delete`, `series_promote_term`,
   `series_export`, `series_import`, `series_qa_scan`, `series_recon_start`, `series_recon_confirm`,
   `job_list`, `chunk_get`, `review_start`, `suggestion_list/accept/reject`, `qa_report`,
+  `qa_finding_set_status`,
   `export_build`, `export_preview`, `export_history`, `metrics_get`.
 - Events: `job://progress`, `log://line`, `metrics://tick`, `sidecar://status`,
   `sidecar://progress`, `export://progress`. Findings are not pushed: the UI reads them
