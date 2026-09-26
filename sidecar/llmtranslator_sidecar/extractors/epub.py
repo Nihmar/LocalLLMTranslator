@@ -6,6 +6,12 @@ canonical Markdown while keeping the structures the rest of the pipeline depends
 headings (the chapter skeleton), paragraphs, lists, blockquotes, tables, fenced code,
 images as Markdown links and footnotes as ``[^n]`` references with their definitions.
 
+Images live *inside* the EPUB archive, so a Markdown link pointing at the archive path
+would dangle for every consumer. Each reference is therefore resolved to its manifest item
+(the ``src`` is relative to the chapter, not to the archive root), the bytes are written to
+``<work_dir>/assets/<name>`` and the href is rewritten to ``assets/<name>``, which is
+relative to the ``document.md`` written next to it.
+
 The parser is deliberately line-oriented downstream, so the converter emits plain,
 well-behaved Markdown with blank-line separation and never relies on HTML surviving into
 the document. Anything it cannot represent faithfully is turned into a warning instead of
@@ -17,6 +23,7 @@ information, so every value it hands back is opaque to pyright and is narrowed a
 
 from __future__ import annotations
 
+import posixpath
 import re
 from typing import Any
 
@@ -25,7 +32,7 @@ from bs4 import BeautifulSoup, Comment, Tag
 from bs4.element import NavigableString, PageElement
 from ebooklib import epub
 
-from .base import ExtractionError, ExtractResult
+from .base import ASSETS_DIRNAME, ExtractionError, ExtractResult, assets_dir, clear_assets
 
 _HEADING_LEVELS = {f"h{level}": level for level in range(1, 7)}
 
@@ -141,6 +148,73 @@ def _delimiter_cell(alignment: str) -> str:
     return {"l": ":---", "r": "---:", "c": ":---:"}.get(alignment, "---")
 
 
+def _image_items(book: epub.EpubBook) -> dict[str, bytes]:
+    """Map every image item's archive-relative name to its bytes."""
+    items: dict[str, bytes] = {}
+    for item in book.get_items():
+        media_type = str(getattr(item, "media_type", "") or "")
+        if not media_type.startswith("image/"):
+            continue
+        items[posixpath.normpath(str(item.get_name()))] = bytes(item.get_content())
+    return items
+
+
+class _AssetStore:
+    """Materialises EPUB media into ``<work_dir>/assets`` and hands back rewritten hrefs.
+
+    The store is shared by every spine document so one image referenced from several
+    chapters is written once, and a name collision between two distinct items is
+    disambiguated deterministically (``harbour.png``, ``harbour-2.png``, ...) in first-seen
+    order — never by hashing or a timestamp, which would break the byte-identical
+    re-extraction guarantee.
+    """
+
+    def __init__(self, work_dir: str, items: dict[str, bytes]) -> None:
+        self._directory = assets_dir(work_dir)
+        self._items = items
+        self._assigned: dict[str, str] = {}
+        self._used: set[str] = set()
+        self._hrefs: list[str] = []
+
+    @property
+    def directory(self) -> str:
+        return str(self._directory)
+
+    @property
+    def hrefs(self) -> list[str]:
+        return list(self._hrefs)
+
+    def resolve(self, base: str, source: str) -> str | None:
+        """Write ``source`` (relative to ``base``) and return its new href.
+
+        ``None`` means the reference did not resolve to an item in the archive; the caller
+        then keeps the original href and warns, so nothing is dropped silently.
+        """
+        target = posixpath.normpath(posixpath.join(posixpath.dirname(base), source))
+        data = self._items.get(target)
+        if data is None:
+            return None
+
+        name = self._assigned.get(target)
+        if name is None:
+            name = self._unique(posixpath.basename(target) or "image")
+            self._assigned[target] = name
+            self._directory.mkdir(parents=True, exist_ok=True)
+            (self._directory / name).write_bytes(data)
+            self._hrefs.append(f"{ASSETS_DIRNAME}/{name}")
+        return f"{ASSETS_DIRNAME}/{name}"
+
+    def _unique(self, name: str) -> str:
+        candidate = name
+        stem, suffix = posixpath.splitext(name)
+        counter = 1
+        while candidate in self._used:
+            counter += 1
+            candidate = f"{stem}-{counter}{suffix}"
+        self._used.add(candidate)
+        return candidate
+
+
 class _ChapterRenderer:
     """Flattens one spine document to Markdown, resolving footnotes as it goes."""
 
@@ -149,10 +223,14 @@ class _ChapterRenderer:
         definitions: dict[str, Tag],
         numbers: dict[str, int],
         warnings: list[str],
+        assets: _AssetStore,
+        base_name: str,
     ) -> None:
         self._definitions = definitions
         self._numbers = numbers
         self._warnings = warnings
+        self._assets = assets
+        self._base_name = base_name
         self._in_definition = False
 
     #: Recorded the first time a bare text node has to be promoted to a paragraph.
@@ -245,7 +323,9 @@ class _ChapterRenderer:
         code = tag.find("code")
         language = ""
         if code is not None:
-            for name in _classes(code):
+            # Sorted so the chosen ``language-*`` class does not depend on set iteration
+            # order: two extractions must produce byte-identical blocks.
+            for name in sorted(_classes(code)):
                 if name.startswith("language-"):
                     language = name[len("language-") :]
                     break
@@ -363,7 +443,12 @@ class _ChapterRenderer:
         if not isinstance(src, str) or not src.strip():
             self._warnings.append("image without a source was replaced by its alt text")
             return alt
-        return f"![{_escape_alt(alt)}]({_escape_destination(src.strip())})"
+        reference = src.strip()
+        href = self._assets.resolve(self._base_name, reference)
+        if href is None:
+            self._warn(f"image {reference!r} could not be resolved; its href was left unchanged")
+            href = reference
+        return f"![{_escape_alt(alt)}]({_escape_destination(href)})"
 
     def _anchor(self, tag: Tag) -> str:
         text = self._inline_children(tag)
@@ -419,14 +504,21 @@ _INLINE_DISPATCH: dict[str, str] = {
 class _BookConverter:
     """Renders a whole book, keeping footnote numbering unique across documents."""
 
-    def __init__(self, warnings: list[str]) -> None:
+    def __init__(self, warnings: list[str], assets: _AssetStore) -> None:
         self._warnings = warnings
+        self._assets = assets
         self._counter = 0
 
-    def convert(self, soup: BeautifulSoup) -> str:
+    def convert(self, soup: BeautifulSoup, base_name: str) -> str:
         definitions = self._collect_definitions(soup)
         numbers = self._number_footnotes(soup, definitions)
-        renderer = _ChapterRenderer(definitions, numbers, self._warnings)
+        renderer = _ChapterRenderer(
+            definitions,
+            numbers,
+            self._warnings,
+            self._assets,
+            base_name,
+        )
         root = soup.body if soup.body is not None else soup
         return renderer.render(root)
 
@@ -517,27 +609,35 @@ class EpubExtractor:
 
     format = "epub"
 
-    def extract(self, path: str) -> ExtractResult:
+    def extract(self, path: str, work_dir: str) -> ExtractResult:
         try:
             book = epub.read_epub(path)
         except Exception as exc:
             message = f"cannot read EPUB {path}: {exc}"
             raise ExtractionError(message) from exc
 
+        # Reset first: a re-extraction of the same (or another) source must never leave a
+        # previously written image behind, so the assets directory matches the result.
+        clear_assets(work_dir)
+
         warnings: list[str] = []
-        converter = _BookConverter(warnings)
+        assets = _AssetStore(work_dir, _image_items(book))
+        converter = _BookConverter(warnings, assets)
         documents: list[str] = []
         for item in _reading_order(book):
             soup = BeautifulSoup(item.get_content(), "xml")
-            rendered = converter.convert(soup)
+            rendered = converter.convert(soup, str(item.get_name()))
             if rendered.strip():
                 documents.append(rendered)
 
         if not documents:
             warnings.append("EPUB contains no readable text documents")
 
+        hrefs = assets.hrefs
         return ExtractResult(
             markdown="\n\n".join(documents),
             metadata=_metadata(book),
             warnings=warnings,
+            assets_dir=assets.directory if hrefs else None,
+            assets=hrefs,
         )

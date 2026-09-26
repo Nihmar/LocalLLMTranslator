@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -30,6 +31,7 @@ from llmtranslator_sidecar.extractors import (
     extract,
 )
 from llmtranslator_sidecar.parse import parse_markdown, split_blocks
+from llmtranslator_sidecar.placeholders import reinject, substitute
 from llmtranslator_sidecar.serialize import serialize
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -191,7 +193,7 @@ def test_extract_epub_yields_headings_paragraphs_and_metadata(
     # GFM parser does not fold it into the table and lose the table itself.
     assert "Stores\n\n| Element | Number | Notes |" in markdown
     assert "```sql" in markdown
-    assert "![The harbour at dawn](harbour.png)" in markdown
+    assert "![The harbour at dawn](assets/harbour.png)" in markdown
     assert "[^1]:" in markdown and "[^2]:" in markdown
 
     titles = [chapter["title"] for chapter in result["chapters"]]
@@ -243,7 +245,10 @@ def test_chapters_match_a_later_parse(fixtures: Path, tmp_path: Path, name: str)
 def test_atomic_write_leaves_only_the_document(fixtures: Path, tmp_path: Path, name: str) -> None:
     result = extract(str(fixtures / name), str(tmp_path))
 
-    assert sorted(entry.name for entry in tmp_path.iterdir()) == ["document.md"]
+    # An EPUB carries its image inside the archive, so extraction adds the assets
+    # directory next to the document; markdown and PDF sources produce no media.
+    expected = ["assets", "document.md"] if result["assets"] else ["document.md"]
+    assert sorted(entry.name for entry in tmp_path.iterdir()) == expected
     assert not list(tmp_path.glob("*.tmp"))
 
     data = Path(str(result["markdown_path"])).read_bytes()
@@ -353,6 +358,7 @@ def test_extract_writes_nothing_to_stdout(fixtures: Path, tmp_path: Path, name: 
 
 def test_marker_import_failure_maps_to_missing_dependency(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     from llmtranslator_sidecar.extractors import pdf_marker
 
@@ -363,7 +369,7 @@ def test_marker_import_failure_maps_to_missing_dependency(
     monkeypatch.setattr(pdf_marker, "importlib", types.SimpleNamespace(import_module=boom))
 
     with pytest.raises(MissingDependencyError) as error:
-        pdf_marker.MarkerPdfExtractor().extract("whatever.pdf")
+        pdf_marker.MarkerPdfExtractor().extract("whatever.pdf", str(tmp_path))
     assert error.value.code == 1003
     assert error.value.backend == "marker"
 
@@ -390,3 +396,236 @@ def test_missing_dependency_error_is_shared_across_modules() -> None:
 
     assert MissingDependencyError is pandoc.MissingDependencyError
     assert issubclass(MissingDependencyError, errors.SidecarError)
+
+
+# -- M2: embedded media is materialised so image hrefs never dangle ---------------------
+
+#: Distinct byte payloads so a test can tell which item landed in which asset file.
+_PNG_ONE = b"\x89PNG\r\n\x1a\n" + b"asset-one"
+_PNG_TWO = b"\x89PNG\r\n\x1a\n" + b"asset-two"
+
+
+def _epub_xhtml(body: str) -> str:
+    return (
+        '<?xml version="1.0" encoding="utf-8"?>\n'
+        '<html xmlns="http://www.w3.org/1999/xhtml"><head><title>x</title></head>'
+        f"<body>{body}</body></html>\n"
+    )
+
+
+def _write_epub_tree(
+    path: Path,
+    *,
+    chapter_href: str,
+    body: str,
+    images: dict[str, bytes],
+) -> None:
+    """Write an EPUB whose one chapter and images live at chosen archive paths.
+
+    ``chapter_href`` and the keys of ``images`` are manifest hrefs relative to the OPF
+    (``OEBPS/``), which is what the extractor must resolve a chapter's ``src`` against.
+    The flat :func:`_write_epub` cannot express a chapter nested in a directory, so the
+    relative ``../images/x.png``-style references need this richer builder.
+    """
+    manifest = [
+        f'    <item id="chap" href="{chapter_href}" media-type="application/xhtml+xml"/>',
+        *(
+            f'    <item id="img{index}" href="{href}" media-type="image/png"/>'
+            for index, href in enumerate(images)
+        ),
+    ]
+    opf = (
+        '<?xml version="1.0" encoding="utf-8"?>\n'
+        '<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="bookid">\n'
+        '  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">\n'
+        '    <dc:identifier id="bookid">urn:uuid:00000000-0000-0000-0000-000000000000'
+        "</dc:identifier>\n"
+        "    <dc:title>Synthetic</dc:title>\n"
+        "    <dc:language>en</dc:language>\n"
+        "  </metadata>\n"
+        "  <manifest>\n" + "\n".join(manifest) + "\n  </manifest>\n"
+        '  <spine>\n    <itemref idref="chap"/>\n  </spine>\n'
+        "</package>\n"
+    )
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("mimetype", "application/epub+zip", zipfile.ZIP_STORED)
+        archive.writestr("META-INF/container.xml", _EPUB_CONTAINER)
+        archive.writestr("OEBPS/content.opf", opf)
+        archive.writestr(f"OEBPS/{chapter_href}", _epub_xhtml(body))
+        for href, data in images.items():
+            archive.writestr(f"OEBPS/{href}", data)
+
+
+def test_epub_materialises_image_bytes_and_rewrites_the_href(
+    fixtures: Path,
+    tmp_path: Path,
+) -> None:
+    result = extract(str(fixtures / "content.epub"), str(tmp_path))
+
+    assert result["assets"] == ["assets/harbour.png"]
+    assert result["assets_dir"] == str(tmp_path / "assets")
+
+    written = tmp_path / "assets" / "harbour.png"
+    assert written.is_file()
+    assert written.read_bytes() == (fixtures / "harbour.png").read_bytes()
+
+    markdown = produced(result)
+    assert "![The harbour at dawn](assets/harbour.png)" in markdown
+    assert "(harbour.png)" not in markdown, "the archive-relative href must be gone"
+    # Rewriting the href does not disturb the IR round-trip.
+    assert serialize(split_blocks(markdown)) == markdown
+
+
+def test_epub_resolves_image_paths_relative_to_the_chapter(tmp_path: Path) -> None:
+    source = tmp_path / "nested.epub"
+    _write_epub_tree(
+        source,
+        chapter_href="text/chap.xhtml",
+        body='<p><img src="../images/pic.png" alt="pic"/></p>',
+        images={"images/pic.png": _PNG_ONE},
+    )
+
+    result = extract(str(source), str(tmp_path / "work"))
+    assert result["assets"] == ["assets/pic.png"]
+    assert (tmp_path / "work" / "assets" / "pic.png").read_bytes() == _PNG_ONE
+    assert "![pic](assets/pic.png)" in produced(result)
+    assert result["warnings"] == []
+
+
+def test_epub_disambiguates_name_collisions_deterministically(tmp_path: Path) -> None:
+    source = tmp_path / "collision.epub"
+    _write_epub_tree(
+        source,
+        chapter_href="chap.xhtml",
+        body=(
+            '<p><img src="images/harbour.png" alt="A"/></p>'
+            '<p><img src="other/harbour.png" alt="B"/></p>'
+        ),
+        images={"images/harbour.png": _PNG_ONE, "other/harbour.png": _PNG_TWO},
+    )
+
+    result = extract(str(source), str(tmp_path / "work"))
+    assert result["assets"] == ["assets/harbour.png", "assets/harbour-2.png"]
+    assets = tmp_path / "work" / "assets"
+    assert (assets / "harbour.png").read_bytes() == _PNG_ONE
+    assert (assets / "harbour-2.png").read_bytes() == _PNG_TWO
+
+    markdown = produced(result)
+    assert "![A](assets/harbour.png)" in markdown
+    assert "![B](assets/harbour-2.png)" in markdown
+
+
+def test_epub_unresolvable_image_keeps_its_href_and_warns(tmp_path: Path) -> None:
+    source = tmp_path / "missing.epub"
+    _write_epub(source, '<p><img src="missing.png" alt="gone"/></p><p>Body.</p>')
+
+    result = extract(str(source), str(tmp_path / "work"))
+    assert "![gone](missing.png)" in produced(result)
+    assert result["assets"] == []
+    assert result["assets_dir"] is None
+    assert any("missing.png" in warning for warning in result["warnings"]), result["warnings"]
+    assert not (tmp_path / "work" / "assets").exists()
+
+
+def test_epub_re_extraction_leaves_no_stale_asset(fixtures: Path, tmp_path: Path) -> None:
+    work_dir = tmp_path / "work"
+    extract(str(fixtures / "content.epub"), str(work_dir))
+
+    stale = work_dir / "assets" / "stale.png"
+    stale.write_bytes(b"stale")
+    assert stale.is_file()
+
+    result = extract(str(fixtures / "content.epub"), str(work_dir))
+    assert result["assets"] == ["assets/harbour.png"]
+    assert not stale.exists(), "a re-extraction must clear stale media"
+    assert sorted(entry.name for entry in (work_dir / "assets").iterdir()) == ["harbour.png"]
+
+
+def test_epub_two_extractions_produce_byte_identical_output(
+    fixtures: Path,
+    tmp_path: Path,
+) -> None:
+    first = extract(str(fixtures / "content.epub"), str(tmp_path / "a"))
+    second = extract(str(fixtures / "content.epub"), str(tmp_path / "b"))
+
+    assert produced(first) == produced(second)
+    assert first["assets"] == second["assets"]
+    for href in first["assets"]:
+        left = (tmp_path / "a" / href).read_bytes()
+        right = (tmp_path / "b" / href).read_bytes()
+        assert left == right
+
+
+# -- M2: stable ids -- the same source extracted twice yields identical block identity ---
+
+
+@pytest.mark.parametrize("name", sorted(FORMATS))
+def test_two_extractions_yield_identical_block_identities(
+    fixtures: Path,
+    tmp_path: Path,
+    name: str,
+) -> None:
+    first = produced(extract(str(fixtures / name), str(tmp_path / "a")))
+    second = produced(extract(str(fixtures / name), str(tmp_path / "b")))
+
+    def identity(markdown: str) -> list[tuple[str, int, str, str]]:
+        return [(b.id, b.order, b.kind, b.content_hash) for b in split_blocks(markdown)]
+
+    assert identity(first) == identity(second)
+    assert identity(first), "the fixture must produce at least one block"
+
+
+# -- M2: footnotes are a reference plus a definition that survive the model ---------------
+
+
+def test_epub_footnotes_become_references_and_definitions(fixtures: Path, tmp_path: Path) -> None:
+    blocks = split_blocks(produced(extract(str(fixtures / "content.epub"), str(tmp_path))))
+
+    definitions = [b for b in blocks if b.kind == "footnote_def"]
+    assert [b.attrs["ref"] for b in definitions] == ["^1", "^2"]
+    # Only the note body is prose; the ``[^n]`` marker is hidden from the model by the
+    # placeholder layer, so the definition itself stays translatable.
+    assert all(b.translatable is True for b in definitions)
+
+    referencing = [
+        b
+        for b in blocks
+        if b.kind != "footnote_def" and re.search(r"\[\^[^\]]+\]", b.source_md) is not None
+    ]
+    assert referencing, "a paragraph must carry the [^n] reference"
+
+
+def test_footnote_reference_and_definition_survive_the_model(
+    fixtures: Path,
+    tmp_path: Path,
+) -> None:
+    blocks = split_blocks(produced(extract(str(fixtures / "content.epub"), str(tmp_path))))
+    definition = next(b for b in blocks if b.kind == "footnote_def" and b.attrs["ref"] == "^1")
+    reference = next(b for b in blocks if b.kind != "footnote_def" and "[^1]" in b.source_md)
+    pair = f"{reference.source_md}\n\n{definition.source_md}\n"
+
+    llm_text, placeholders = substitute(pair)
+    translated = reinject(llm_text.replace("muttered", "mormorò"), placeholders)
+    assert translated.ok, (translated.missing, translated.duplicated)
+
+    rebuilt = split_blocks(translated.text)
+    refs = [b for b in rebuilt if b.kind != "footnote_def" and "[^1]" in b.source_md]
+    defs = [b for b in rebuilt if b.kind == "footnote_def"]
+    assert len(refs) == 1
+    assert len(defs) == 1
+    assert defs[0].attrs["ref"] == "^1"
+    reference_number = re.search(r"\[\^([^\]]+)\]", refs[0].source_md)
+    assert reference_number is not None
+    assert reference_number.group(1) == defs[0].attrs["ref"].lstrip("^")
+
+
+# -- M2: a table is a single block that keeps its alignment ------------------------------
+
+
+def test_epub_table_is_a_single_block_with_alignments(fixtures: Path, tmp_path: Path) -> None:
+    blocks = split_blocks(produced(extract(str(fixtures / "content.epub"), str(tmp_path))))
+
+    tables = [b for b in blocks if b.kind == "table"]
+    assert len(tables) == 1
+    assert tables[0].attrs["align"] == ["l", "r", "c"]
+    assert tables[0].translatable is True

@@ -55,11 +55,14 @@ def extract(path: str, work_dir: str, pdf_backend: str | None = None) -> dict[st
     """Ingest ``path`` into ``work_dir`` and describe the produced document.
 
     Returns the path of the one Markdown file written, its metadata, the chapter skeleton
-    and any warnings raised while degrading the source. Extraction is a pure function of
-    the input file: repeated calls produce byte-identical output.
+    and any warnings raised while degrading the source, plus the media it extracted:
+    ``assets`` are the hrefs as they appear in the Markdown (relative to ``document.md``)
+    and ``assets_dir`` is the absolute directory that holds them (``None`` when the source
+    carried no media). Extraction is a pure function of the input file: repeated calls
+    produce byte-identical output.
     """
     extractor = _select(path, pdf_backend)
-    result = extractor.extract(path)
+    result = extractor.extract(path, work_dir)
 
     markdown = normalise_markdown(result.markdown)
     markdown_path = atomic_write_text(work_dir, result.filename, markdown)
@@ -69,4 +72,6 @@ def extract(path: str, work_dir: str, pdf_backend: str | None = None) -> dict[st
         "metadata": result.metadata,
         "chapters": chapters_from_markdown(markdown),
         "warnings": result.warnings,
+        "assets_dir": result.assets_dir,
+        "assets": result.assets,
     }

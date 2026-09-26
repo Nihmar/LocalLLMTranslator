@@ -6,6 +6,7 @@ is available), because invoking a real pandoc is the whole point of the module.
 
 from __future__ import annotations
 
+import base64
 import os
 import shutil
 import zipfile
@@ -17,6 +18,13 @@ from llmtranslator_sidecar.pandoc import MissingDependencyError, PandocError, bu
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TEMPLATE = REPO_ROOT / "pandoc" / "templates" / "book.html"
 CSS = REPO_ROOT / "pandoc" / "styles" / "book.css"
+
+#: A 4x4 PNG, the same bytes the fixture generator embeds in `content.epub`.
+PNG_NAME = "harbour.png"
+PNG_BYTES = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAIAAAAmkwkpAAAACXBIWXMAAA7EAAAOxAGVKw4bAAAAEUlE"
+    "QVR4nGM4cekOHDEQxwEA/uEnYVFgUy4AAAAASUVORK5CYII="
+)
 
 
 def _find_latex_engine() -> str | None:
@@ -198,3 +206,51 @@ def test_unreadable_unit_raises_pandoc_error(tmp_path: Path) -> None:
             output_format="html",
         )
     assert info.value.code == 1002
+
+
+def _media_book(tmp_path: Path) -> tuple[list[dict[str, str]], Path]:
+    """A one-chapter book whose Markdown references `assets/harbour.png` relatively."""
+    work = tmp_path / "work"
+    assets = work / "assets"
+    assets.mkdir(parents=True)
+    (assets / PNG_NAME).write_bytes(PNG_BYTES)
+    units = [_unit(work, "one.md", "Chapter One", f"![The harbour at dawn](assets/{PNG_NAME})\n")]
+    return units, work
+
+
+def _embedded_images(output: Path) -> list[str]:
+    with zipfile.ZipFile(output) as archive:
+        return [name for name in archive.namelist() if name.lower().endswith(".png")]
+
+
+def test_resource_path_resolves_relative_media(tmp_path: Path) -> None:
+    """The combined document lives in a throwaway directory, so a relative `assets/...`
+    href only resolves through the resource path the caller passes."""
+    units, work = _media_book(tmp_path)
+    output = work / "book.epub"
+
+    build(
+        units=units,
+        metadata={"title": "The Lantern Keeper"},
+        output_path=str(output),
+        output_format="epub",
+        resource_path=[str(work)],
+    )
+
+    assert _embedded_images(output), "the image must be embedded, not dropped"
+
+
+def test_without_a_resource_path_relative_media_is_dropped(tmp_path: Path) -> None:
+    """The flag is load-bearing: without it pandoc cannot find the image at all."""
+    units, work = _media_book(tmp_path)
+    output = work / "book.epub"
+
+    build(
+        units=units,
+        metadata={"title": "The Lantern Keeper"},
+        output_path=str(output),
+        output_format="epub",
+    )
+
+    assert not _embedded_images(output)
+    assert output.is_file(), "a missing resource is a warning, not a failed build"

@@ -16,7 +16,7 @@ from typing import Any, cast
 
 from llmtranslator_sidecar.errors import MissingDependencyError
 
-from .base import ExtractionError, ExtractResult
+from .base import ExtractionError, ExtractResult, clear_assets
 from .pdf_pymupdf import pdf_metadata
 
 
@@ -68,7 +68,8 @@ class MarkerPdfExtractor:
 
     format = "pdf"
 
-    def extract(self, path: str) -> ExtractResult:
+    def extract(self, path: str, work_dir: str) -> ExtractResult:
+        clear_assets(work_dir)
         if not _marker_available():
             message = (
                 "the 'marker' PDF backend is not installed; "

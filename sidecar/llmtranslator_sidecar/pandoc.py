@@ -138,7 +138,7 @@ def _combine_units(units: Sequence[Mapping[str, Any]]) -> str:
     return "\n\n".join(parts) + "\n"
 
 
-def build(  # noqa: PLR0913 - the six-keyword signature is frozen by AGENTS.md
+def build(  # noqa: PLR0913 - the keyword signature is frozen by AGENTS.md
     *,
     units: Sequence[Mapping[str, Any]],
     metadata: Mapping[str, Any],
@@ -146,12 +146,15 @@ def build(  # noqa: PLR0913 - the six-keyword signature is frozen by AGENTS.md
     output_format: str,
     template: str | None = None,
     css: str | None = None,
+    resource_path: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     """Render ``units`` to ``output_path`` in ``output_format``.
 
     ``units`` are ``{"path", "title"}`` per-chapter Markdown files, combined in the given
-    order with each title as a top-level heading. Returns ``output_path``, the combined
-    pandoc output as ``log``, and the wall time as ``duration_ms``.
+    order with each title as a top-level heading. ``resource_path`` lists the directories
+    pandoc searches for relative targets (extracted media such as ``assets/<name>``), since
+    the combined document lives in a throwaway directory. Returns ``output_path``, the
+    combined pandoc output as ``log``, and the wall time as ``duration_ms``.
     """
     binary = _resolve_binary()
     writer = _writer_for(output_format)
@@ -185,6 +188,8 @@ def build(  # noqa: PLR0913 - the six-keyword signature is frozen by AGENTS.md
             command.append(f"--template={template}")
         if css:
             command.append(f"--css={css}")
+        if resource_path:
+            command.append(f"--resource-path={os.pathsep.join(resource_path)}")
 
         try:
             completed = subprocess.run(  # noqa: S603 - argv is built here, pandoc only

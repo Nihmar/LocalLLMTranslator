@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import shutil
 import tempfile
 import zipfile
 from dataclasses import dataclass, field
@@ -26,6 +27,10 @@ BACKENDS: dict[str, list[str]] = {
     "pdf": ["pymupdf4llm", "marker"],
     "markdown": ["source"],
 }
+
+#: Name of the directory, inside ``work_dir``, that holds extracted media. Image hrefs in
+#: the produced Markdown are written ``assets/<name>``, i.e. relative to ``document.md``.
+ASSETS_DIRNAME = "assets"
 
 _PDF_MAGIC = b"%PDF-"
 _ZIP_MAGIC = b"PK\x03\x04"
@@ -44,12 +49,20 @@ _EXTENSIONS: dict[str, str] = {
 
 @dataclass(slots=True)
 class ExtractResult:
-    """What a backend produces before the dispatcher writes it to ``work_dir``."""
+    """What a backend produces before the dispatcher writes it to ``work_dir``.
+
+    ``assets`` holds the media hrefs exactly as they appear in ``markdown`` (for example
+    ``assets/harbour.png``), already relative to the ``document.md`` written into
+    ``work_dir``; ``assets_dir`` is the absolute directory that holds them, or ``None``
+    when the source carried no media.
+    """
 
     markdown: str
     metadata: dict[str, Any] = field(default_factory=dict[str, Any])
     warnings: list[str] = field(default_factory=list[str])
     filename: str = "document.md"
+    assets_dir: str | None = None
+    assets: list[str] = field(default_factory=list[str])
 
 
 @runtime_checkable
@@ -57,14 +70,35 @@ class Extractor(Protocol):
     """One format backend.
 
     ``format`` names the source family (``epub``/``pdf``/``markdown``) so a caller can
-    check which extractor a path dispatched to.
+    check which extractor a path dispatched to. ``work_dir`` is the directory the
+    dispatcher writes ``document.md`` into; a backend that carries embedded media writes
+    it to ``<work_dir>/assets`` so the rewritten hrefs resolve.
     """
 
     format: str
 
-    def extract(self, path: str) -> ExtractResult:
+    def extract(self, path: str, work_dir: str) -> ExtractResult:
         """Turn one source file into canonical Markdown plus metadata and warnings."""
         ...
+
+
+def assets_dir(work_dir: str) -> Path:
+    """The directory that holds the media referenced by the produced Markdown."""
+    return Path(work_dir) / ASSETS_DIRNAME
+
+
+def clear_assets(work_dir: str) -> None:
+    """Remove ``<work_dir>/assets`` so a re-extraction cannot leave stale media behind.
+
+    Only the ``assets`` entry is ever touched: everything else in ``work_dir`` is left
+    alone. A symlink is unlinked rather than followed, so clearing can never delete a
+    directory outside the work dir.
+    """
+    directory = assets_dir(work_dir)
+    if directory.is_symlink() or (directory.exists() and not directory.is_dir()):
+        directory.unlink()
+    elif directory.is_dir():
+        shutil.rmtree(directory)
 
 
 def normalise_markdown(text: str) -> str:

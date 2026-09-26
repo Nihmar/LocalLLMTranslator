@@ -325,6 +325,7 @@ def _handle_pandoc_build(params: JsonObject, _notify: ProgressSink) -> JsonObjec
         output_format=_require_str(params, "output_format"),
         template=_optional_str(params, "template"),
         css=_optional_str(params, "css"),
+        resource_path=_optional_str_list(params, "resource_path") or [],
     )
 
 

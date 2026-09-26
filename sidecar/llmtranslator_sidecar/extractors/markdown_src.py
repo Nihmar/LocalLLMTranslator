@@ -3,6 +3,11 @@
 The only work done here is reading optional YAML front matter into the ``metadata``
 channel. The front matter block itself stays in the document: stripping it would change
 the source, and the source is what the round-trip invariant is measured against.
+
+A Markdown source references media with ordinary relative hrefs (``![alt](img.png)``);
+those files are *not* embedded in the source, so this backend materialises nothing and
+reports an empty ``assets`` list. Copying them would mean rewriting the document, which is
+exactly what the passthrough contract forbids.
 """
 
 from __future__ import annotations
@@ -12,7 +17,7 @@ from typing import Any, cast
 
 import yaml
 
-from .base import ExtractionError, ExtractResult
+from .base import ExtractionError, ExtractResult, clear_assets
 
 #: The front-matter delimiters mandated by the YAML-in-Markdown convention.
 _OPEN_DELIMITER = "---"
@@ -57,7 +62,11 @@ class MarkdownSourceExtractor:
 
     format = "markdown"
 
-    def extract(self, path: str) -> ExtractResult:
+    def extract(self, path: str, work_dir: str) -> ExtractResult:
+        # The ingest contract resets <work_dir>/assets even when a backend writes no media,
+        # so re-ingesting into a reused work dir can never leave stale media behind.
+        clear_assets(work_dir)
+
         source = Path(path)
         try:
             text = source.read_text(encoding="utf-8")

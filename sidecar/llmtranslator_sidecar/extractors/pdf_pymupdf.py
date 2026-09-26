@@ -24,7 +24,7 @@ from typing import Any
 
 import pymupdf
 
-from .base import ExtractionError, ExtractResult
+from .base import ExtractionError, ExtractResult, clear_assets
 
 #: Metadata keys lifted from the PDF document information dictionary, in output order.
 _METADATA_KEYS: tuple[tuple[str, str], ...] = (
@@ -104,7 +104,12 @@ class PymupdfExtractor:
 
     format = "pdf"
 
-    def extract(self, path: str) -> ExtractResult:
+    def extract(self, path: str, work_dir: str) -> ExtractResult:
+        # ``pymupdf4llm`` is invoked without a write_images target, so it emits no image
+        # references and this backend produces no media; the assets directory is still
+        # reset so a re-ingest into a reused work dir cannot leave stale media behind.
+        clear_assets(work_dir)
+
         warnings: list[str] = []
         metadata = pdf_metadata(path)
 
