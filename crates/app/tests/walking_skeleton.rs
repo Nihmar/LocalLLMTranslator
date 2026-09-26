@@ -31,6 +31,15 @@
 //! writes `chunk.target_md`, which the pipeline now stores as the validated,
 //! placeholder-free composition of the chunk's blocks.
 //!
+//! # M2: media, footnotes and tables
+//!
+//! The fixture EPUB embeds a real PNG behind a `<figure><img>`, a table with a
+//! caption and alignment classes, and two footnotes. The ingest must extract the
+//! image under `<work_dir>/assets/` and reference it as `assets/...`; `run_export`
+//! hands pandoc that directory through `resource_path`, so the exported EPUB must
+//! contain the image bytes and the exported PDF the footnote and table text.
+//! `assert_ingest_assets` and `assert_export_media_and_structure` cover this.
+//!
 //! Environment gate: the test skips cleanly (early return + `eprintln!`) when
 //! `sidecar/.venv/bin/python`, `pandoc` or `/bin/sh` are missing; when no PDF
 //! engine is on `PATH` it skips only the PDF assertion.
@@ -238,6 +247,11 @@ async fn walking_skeleton_end_to_end() -> Result<()> {
     let document_a = ingest_a.document_id.clone();
     assert_persistence(&pool_a, &client, &document_a, &ingest_a.markdown_path).await?;
 
+    // M2: the fixture EPUB embeds a real PNG referenced by `<figure><img>`; ingest
+    // must extract it under `assets/`, rewrite the Markdown href and leave the
+    // file on disk next to `document.md`.
+    assert_ingest_assets(&ingest_a.markdown_path, &ingest_a.assets).await?;
+
     // Translate every chunk through the real worker pool / queue.
     let jobs_a = enqueue_translate_jobs(&pool_a, &project_a).await?;
     ensure!(
@@ -255,6 +269,16 @@ async fn walking_skeleton_end_to_end() -> Result<()> {
     // Export both artifacts through the real export path.
     let (epub_path, pdf_path) =
         export_book(&deps_a, &project_a, &venv_python, pdf_engine.is_some()).await?;
+
+    // M2 acceptance: the image, the footnotes and the table must be present and
+    // intact in the exported artifacts, not merely the translated prose.
+    assert_export_media_and_structure(
+        &epub_path,
+        pdf_path.as_deref(),
+        &venv_python,
+        &fixture_dir.path().join("harbour.png"),
+    )
+    .await?;
 
     let blocks_a = block_signature(&pool_a, &document_a).await?;
 
@@ -1034,6 +1058,192 @@ async fn assert_fake_server_reached(
 }
 
 // ---------------------------------------------------------------------------
+// M2: media, footnotes and tables
+// ---------------------------------------------------------------------------
+
+/// Asset hrefs (`assets/...`) referenced by Markdown image/link syntax.
+fn referenced_assets(markdown: &str) -> Vec<String> {
+    const MARKER: &str = "](assets/";
+    let mut found = Vec::new();
+    let mut cursor = 0;
+    while let Some(offset) = markdown[cursor..].find(MARKER) {
+        // `offset` is the `]`; the href starts two bytes later, at the `a`.
+        let href_start = cursor + offset + 2;
+        let rest = &markdown[href_start..];
+        let target = rest.split(')').next().unwrap_or(rest).trim();
+        // A link may carry an optional `"title"`; the href is its first token.
+        let href = target.split_whitespace().next().unwrap_or(target);
+        found.push(href.to_string());
+        cursor = href_start + 1;
+    }
+    found
+}
+
+/// Every asset the ingest extracted is referenced as `assets/...` in the produced
+/// Markdown and exists on disk next to `document.md`.
+async fn assert_ingest_assets(markdown_path: &str, assets: &[String]) -> Result<()> {
+    let markdown = std::fs::read_to_string(markdown_path)
+        .with_context(|| format!("reading the extracted markdown {markdown_path}"))?;
+    let referenced = referenced_assets(&markdown);
+    ensure!(
+        !referenced.is_empty(),
+        "the extracted markdown does not reference its media as `assets/...`: {markdown}"
+    );
+    ensure!(
+        !assets.is_empty(),
+        "the fixture embeds an image, but ingest reported no assets"
+    );
+
+    let base = Path::new(markdown_path)
+        .parent()
+        .ok_or_else(|| anyhow!("markdown path {markdown_path} has no parent directory"))?;
+    for href in &referenced {
+        let resolved = base.join(href);
+        ensure!(
+            resolved.is_file(),
+            "the markdown references {href:?} but {} does not exist",
+            resolved.display()
+        );
+    }
+    // The declared list is the same set of hrefs the Markdown carries.
+    for href in assets {
+        ensure!(
+            referenced.contains(href),
+            "ingest declared asset {href:?}, but the markdown never references it"
+        );
+    }
+    eprintln!(
+        "[walking_skeleton] ingest extracted {} asset(s), all referenced and present on disk",
+        assets.len()
+    );
+    Ok(())
+}
+
+/// Footnotes, the aligned table and the embedded image survive into the exported
+/// artifacts.
+async fn assert_export_media_and_structure(
+    epub_path: &str,
+    pdf_path: Option<&str>,
+    python: &Path,
+    fixture_image: &Path,
+) -> Result<()> {
+    // Footnotes: pandoc renders `[^n]` as a real `<aside epub:type="footnote">`
+    // and keeps the (translated) note text inside it.
+    ensure!(
+        epub_contains(epub_path, python, "epub:type=\"footnote\"").await?,
+        "the exported EPUB contains no footnote: the source footnotes were dropped"
+    );
+    // The table is rendered as a table, not flattened into paragraphs.
+    ensure!(
+        epub_contains(epub_path, python, "<table").await?,
+        "the exported EPUB contains no <table>: the source table was dropped"
+    );
+    // The fake model wraps words but leaves these unchanged, so the substring
+    // proves the footnote body and the table cells reached the output.
+    for needle in ["storms", "lanterns", "Wicks", "Element"] {
+        ensure!(
+            epub_contains(epub_path, python, needle).await?,
+            "the exported EPUB is missing {needle:?} (the footnote text or a table cell)"
+        );
+    }
+
+    // The image must be embedded verbatim: the alt text alone would still pass a
+    // string check, so the fixture's bytes are looked for inside the archive.
+    ensure!(
+        epub_embeds_file(epub_path, python, fixture_image).await?,
+        "the exported EPUB does not embed the fixture image bytes ({}): the image was dropped",
+        fixture_image.display()
+    );
+
+    if let Some(pdf) = pdf_path {
+        match pdf_text(pdf, python).await? {
+            Some(text) => {
+                ensure!(
+                    text.contains("storms") && text.contains("lanterns"),
+                    "the exported PDF is missing the footnote text: footnotes were dropped"
+                );
+                ensure!(
+                    text.contains("Wicks") && text.contains("Element"),
+                    "the exported PDF is missing the table content: the table was dropped"
+                );
+            }
+            None => eprintln!(
+                "[walking_skeleton] note: PyMuPDF is unavailable; the PDF text assertion is skipped"
+            ),
+        }
+    }
+    Ok(())
+}
+
+/// Whether the EPUB embeds a media entry whose bytes equal `reference`'s bytes.
+///
+/// The fixture image must be embedded verbatim, so the alt text alone never
+/// satisfies the assertion.
+async fn epub_embeds_file(path: &str, python: &Path, reference: &Path) -> Result<bool> {
+    const SCRIPT: &str = r#"
+import sys, zipfile
+with open(sys.argv[2], "rb") as handle:
+    data = handle.read()
+with zipfile.ZipFile(sys.argv[1]) as archive:
+    found = any(archive.read(name) == data for name in archive.namelist())
+sys.stdout.write("FOUND" if found else "MISSING")
+"#;
+    let output = tokio::time::timeout(
+        Duration::from_secs(30),
+        tokio::process::Command::new(python)
+            .arg("-c")
+            .arg(SCRIPT)
+            .arg(path)
+            .arg(reference)
+            .output(),
+    )
+    .await
+    .context("reading the EPUB media timed out")??;
+    ensure!(
+        output.status.success(),
+        "reading the EPUB media failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    Ok(String::from_utf8_lossy(&output.stdout).trim() == "FOUND")
+}
+
+/// The extracted text of a PDF, or `None` when PyMuPDF is unavailable.
+async fn pdf_text(path: &str, python: &Path) -> Result<Option<String>> {
+    const SCRIPT: &str = r#"
+import sys
+try:
+    import pymupdf
+except ImportError:
+    try:
+        import fitz as pymupdf
+    except ImportError:
+        sys.exit(3)
+doc = pymupdf.open(sys.argv[1])
+text = "\n".join(page.get_text() for page in doc)
+sys.stdout.write(text.replace("-\n", "").replace("\n", " "))
+"#;
+    let output = tokio::time::timeout(
+        Duration::from_secs(30),
+        tokio::process::Command::new(python)
+            .arg("-c")
+            .arg(SCRIPT)
+            .arg(path)
+            .output(),
+    )
+    .await
+    .context("reading the PDF text timed out")??;
+    if output.status.code() == Some(3) {
+        return Ok(None);
+    }
+    ensure!(
+        output.status.success(),
+        "reading the PDF text failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    Ok(Some(String::from_utf8_lossy(&output.stdout).to_string()))
+}
+
+// ---------------------------------------------------------------------------
 // Translation driving
 // ---------------------------------------------------------------------------
 
@@ -1348,4 +1558,20 @@ async fn block_signature(
         .into_iter()
         .map(|b| (b.id, b.kind, b.order_index))
         .collect())
+}
+
+#[test]
+fn referenced_assets_finds_relative_media_hrefs() {
+    let markdown = "intro\n\n![The harbour at dawn](assets/harbour.png)\n\n\
+                    [plate](assets/plate-2.jpg \"Plate 2\")\n";
+    assert_eq!(
+        referenced_assets(markdown),
+        vec![
+            "assets/harbour.png".to_string(),
+            "assets/plate-2.jpg".to_string()
+        ]
+    );
+    // An absolute or external link is not an extracted asset.
+    assert!(referenced_assets("![x](https://example.org/x.png)").is_empty());
+    assert!(referenced_assets("no media here").is_empty());
 }
