@@ -37,7 +37,7 @@ pub fn role_for_kind(kind: &str) -> &'static str {
         "translate_chunk" => "translator",
         "edit_chunk" => "editor",
         "proofread_chunk" => "proofreader",
-        "book_recon" | "summarize" => "orchestrator",
+        "book_recon" | "summarize" | "series_recon" => "orchestrator",
         _ => LOCAL_ROLE,
     }
 }
@@ -48,7 +48,7 @@ pub fn kinds_for_role(role: &str) -> &'static [&'static str] {
         "translator" => &["translate_chunk"],
         "editor" => &["edit_chunk"],
         "proofreader" => &["proofread_chunk"],
-        "orchestrator" => &["book_recon", "summarize"],
+        "orchestrator" => &["book_recon", "series_recon", "summarize"],
         _ => &["ingest", "export_unit", "qa_scan"],
     }
 }
@@ -354,6 +354,7 @@ mod tests {
         assert_eq!(role_for_kind("edit_chunk"), "editor");
         assert_eq!(role_for_kind("proofread_chunk"), "proofreader");
         assert_eq!(role_for_kind("book_recon"), "orchestrator");
+        assert_eq!(role_for_kind("series_recon"), "orchestrator");
         assert_eq!(role_for_kind("summarize"), "orchestrator");
         // Sidecar/pandoc work needs no endpoint.
         assert_eq!(role_for_kind("ingest"), LOCAL_ROLE);

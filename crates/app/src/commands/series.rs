@@ -479,3 +479,37 @@ pub async fn series_qa_scan(
     }
     Ok(SeriesQaScanResult { enqueued })
 }
+
+/// Enqueue the `series_recon` job: a candidate series profile built from the member
+/// books' confirmed profiles and the canon glossary. The job belongs to the first member
+/// book (the queue is project-scoped) and carries the `series_id` in its payload.
+#[tauri::command]
+pub async fn series_recon_start(
+    state: State<'_, AppState>,
+    series_id: String,
+) -> Result<super::ingest::JobStarted> {
+    let series = repo::get_series(&state.pool, &series_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("series {series_id}")))?;
+    let projects = repo::list_projects_for_series(&state.pool, &series_id).await?;
+    let first = projects.first().ok_or_else(|| {
+        AppError::Invalid("the series has no member book: attach one first".into())
+    })?;
+    if repo::role_binding_for(&state.pool, crate::pipeline::series_recon::ROLE)
+        .await?
+        .is_none()
+    {
+        return Err(AppError::Invalid(
+            "no role_binding configured for 'orchestrator': bind a model to run the series reconnaissance"
+                .into(),
+        ));
+    }
+
+    let payload = serde_json::json!({ "series_id": series.id });
+    let job =
+        crate::scheduler::NewJob::new(&first.id, crate::pipeline::series_recon::JOB_KIND, payload)
+            .with_priority(20);
+    let job = super::enqueue_and_emit(&state, &job).await?;
+    state.worker.start();
+    Ok(super::ingest::JobStarted { job_id: job.id })
+}

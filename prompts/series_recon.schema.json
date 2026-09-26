@@ -1,0 +1,26 @@
+{
+  "$comment": "Series reconnaissance schema (PLAN.md §9.5, S5). Everything here is a candidate: nothing reaches a translation prompt until the user copies it into the series memory.",
+  "type": "object",
+  "properties": {
+    "synopsis": { "type": "string", "maxLength": 1200 },
+    "style_notes": {
+      "type": "array",
+      "maxItems": 8,
+      "items": { "type": "string", "maxLength": 240 }
+    },
+    "characters": {
+      "type": "array",
+      "maxItems": 24,
+      "items": {
+        "type": "object",
+        "properties": {
+          "source": { "type": "string", "maxLength": 120 },
+          "target": { "type": "string", "maxLength": 120 },
+          "note": { "type": "string", "maxLength": 200 }
+        },
+        "required": ["source", "target"]
+      }
+    }
+  },
+  "required": ["synopsis", "style_notes", "characters"]
+}

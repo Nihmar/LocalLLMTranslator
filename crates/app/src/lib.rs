@@ -97,6 +97,18 @@ impl JobDispatcher for PipelineDispatcher {
                 .await?;
                 Ok(())
             }
+            "series_recon" => {
+                let series_id = commands::payload_str(&payload, "series_id").ok_or_else(|| {
+                    AppError::Invalid("series_recon job is missing series_id".into())
+                })?;
+                crate::pipeline::series_recon::run_series_recon(
+                    &self.deps,
+                    Some(&job.id),
+                    &series_id,
+                )
+                .await?;
+                Ok(())
+            }
             "summarize" => {
                 let request: crate::pipeline::summarize::SummarizePayload =
                     serde_json::from_value(payload)?;
@@ -196,6 +208,7 @@ pub fn run() {
             commands::series::series_export,
             commands::series::series_import,
             commands::series::series_qa_scan,
+            commands::series::series_recon_start,
             commands::review::review_start,
             commands::review::suggestion_list,
             commands::review::suggestion_accept,

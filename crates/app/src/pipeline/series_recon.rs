@@ -1,0 +1,403 @@
+//! Series reconnaissance (PLAN.md §9.5, S5): a candidate series profile.
+//!
+//! The evidence is local: the confirmed synopsis and style guide of the member books plus
+//! the canon glossary. The answer is a **candidate** stored under
+//! `series_memory['series_profile']`: it never reaches a translation prompt on its own, the
+//! user reviews it and copies what they want into the series style guide or synopsis.
+
+use std::collections::BTreeSet;
+use std::path::Path;
+
+use minijinja::{context, Environment};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+use super::chat_call::{run_chat_call, ChatCall};
+use super::PipelineDeps;
+use crate::db::models::Project;
+use crate::db::now;
+use crate::db::repo;
+use crate::error::{AppError, Result};
+use crate::util::{clamp_chars, clamp_list, clamp_words, sha256_hex_str};
+
+/// Role binding used for the series synthesis.
+pub const ROLE: &str = "orchestrator";
+/// Job kind that runs the series reconnaissance.
+pub const JOB_KIND: &str = "series_recon";
+/// Memory key holding the candidate profile.
+pub const MEMORY_KEY: &str = "series_profile";
+const SCHEMA_NAME: &str = "series_profile";
+
+const MAX_BOOKS: usize = 12;
+const MAX_SYNOPSIS_WORDS: usize = 150;
+const MAX_STYLE_NOTES: usize = 8;
+const MAX_STYLE_NOTE_CHARS: usize = 240;
+const MAX_CHARACTERS: usize = 24;
+const MAX_SHORT_CHARS: usize = 120;
+const MAX_NOTE_CHARS: usize = 200;
+const MAX_EVIDENCE_CHARS: usize = 12_000;
+const MAX_GLOSSARY_TERMS: usize = 200;
+const DEFAULT_MAX_TOKENS: u32 = 1200;
+
+/// Fallback templates, byte-identical to `prompts/series_recon.md` and
+/// `prompts/series_recon.schema.json` (a unit test asserts that).
+pub const DEFAULT_SERIES_RECON_SYSTEM_TEMPLATE: &str = r#"You are the canon editor of a translated book series ({{ source_language }} → {{ target_language }}).
+You receive the confirmed profiles of the books already translated and the series glossary.
+Produce a CANDIDATE series profile: what a translator of the next book must know to stay
+consistent with the saga — recurring characters, invented terms, register, running themes.
+Reply with JSON only, no commentary, no code fences. Do not invent facts the evidence cannot
+support; an empty list is a valid answer."#;
+
+pub const DEFAULT_SERIES_RECON_USER_TEMPLATE: &str = r#"SERIES: {{ series_name }}
+
+BOOKS (confirmed profiles):
+{{ books }}
+
+SERIES GLOSSARY (source => target):
+{{ glossary }}
+
+Reply with a single JSON object that validates against this schema:
+{{ response_schema }}
+"#;
+
+pub const DEFAULT_SERIES_RECON_SCHEMA: &str = r##"{"$comment":"Series reconnaissance schema (PLAN.md §9.5, S5). Everything here is a candidate: nothing reaches a translation prompt until the user copies it into the series memory.","type":"object","properties":{"synopsis":{"type":"string","maxLength":1200},"style_notes":{"type":"array","maxItems":8,"items":{"type":"string","maxLength":240}},"characters":{"type":"array","maxItems":24,"items":{"type":"object","properties":{"source":{"type":"string","maxLength":120},"target":{"type":"string","maxLength":120},"note":{"type":"string","maxLength":200}},"required":["source","target"]}}},"required":["synopsis","style_notes","characters"]}"##;
+
+/// One recurring character or term of the saga.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct SeriesCharacter {
+    pub source: String,
+    pub target: String,
+    #[serde(default)]
+    pub note: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct SeriesProfileProvenance {
+    pub generated_at: String,
+    pub model: String,
+    pub prompt_hash: String,
+    /// Names of the books the profile was derived from.
+    pub books: Vec<String>,
+}
+
+/// The candidate profile stored under [`MEMORY_KEY`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct SeriesProfile {
+    pub synopsis: String,
+    pub style_notes: Vec<String>,
+    pub characters: Vec<SeriesCharacter>,
+    #[serde(default)]
+    pub provenance: SeriesProfileProvenance,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SeriesReconOutcome {
+    pub series_id: String,
+    pub model: String,
+    pub books: usize,
+    pub characters: usize,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct RawProfile {
+    #[serde(default)]
+    synopsis: String,
+    #[serde(default)]
+    style_notes: Vec<String>,
+    #[serde(default)]
+    characters: Vec<SeriesCharacter>,
+}
+
+/// The local evidence handed to the model: one block per book plus the glossary.
+#[derive(Debug, Clone, Default)]
+struct Evidence {
+    books: String,
+    glossary: String,
+    book_names: Vec<String>,
+}
+
+fn book_block(project: &Project, synopsis: &str, style_guide: &str) -> Option<String> {
+    let synopsis = synopsis.trim();
+    let style_guide = style_guide.trim();
+    if synopsis.is_empty() && style_guide.is_empty() {
+        return None;
+    }
+    let mut block = format!("BOOK: {}", project.name);
+    if !synopsis.is_empty() {
+        block.push_str(&format!("\nSYNOPSIS: {}", clamp_chars(synopsis, 1200)));
+    }
+    if !style_guide.is_empty() {
+        block.push_str(&format!("\nSTYLE GUIDE: {}", clamp_chars(style_guide, 800)));
+    }
+    Some(block)
+}
+
+fn render_evidence(books: Vec<String>, glossary: Vec<String>) -> Evidence {
+    let mut evidence = Evidence {
+        book_names: Vec::new(),
+        books: String::new(),
+        glossary: String::new(),
+    };
+    for block in books {
+        let name = block
+            .lines()
+            .next()
+            .and_then(|line| line.strip_prefix("BOOK: "))
+            .unwrap_or_default()
+            .to_string();
+        evidence.book_names.push(name);
+        if evidence.books.chars().count() + block.chars().count() > MAX_EVIDENCE_CHARS {
+            break;
+        }
+        if !evidence.books.is_empty() {
+            evidence.books.push_str("\n\n");
+        }
+        evidence.books.push_str(&block);
+    }
+    evidence.glossary = clamp_chars(&glossary.join("\n"), MAX_EVIDENCE_CHARS / 2);
+    evidence
+}
+
+fn parse_profile(text: &str, provenance: SeriesProfileProvenance) -> Result<SeriesProfile> {
+    let start = text
+        .find('{')
+        .ok_or_else(|| AppError::Invalid("the series answer contains no JSON object".into()))?;
+    let end = text
+        .rfind('}')
+        .ok_or_else(|| AppError::Invalid("the series answer contains no JSON object".into()))?;
+    let json = &text[start..=end];
+    let raw: RawProfile = serde_json::from_str(json).map_err(|error| {
+        AppError::Invalid(format!("the series answer is not a valid profile: {error}"))
+    })?;
+
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    let characters = raw
+        .characters
+        .iter()
+        .filter_map(|character| {
+            let source = clamp_chars(&character.source, MAX_SHORT_CHARS);
+            if source.is_empty() || !seen.insert(source.to_lowercase()) {
+                return None;
+            }
+            let target = clamp_chars(&character.target, MAX_SHORT_CHARS);
+            Some(SeriesCharacter {
+                source,
+                target: if target.is_empty() {
+                    String::new()
+                } else {
+                    target
+                },
+                note: clamp_chars(&character.note, MAX_NOTE_CHARS),
+            })
+        })
+        .take(MAX_CHARACTERS)
+        .collect();
+
+    Ok(SeriesProfile {
+        synopsis: clamp_words(&raw.synopsis, MAX_SYNOPSIS_WORDS),
+        style_notes: clamp_list(&raw.style_notes, MAX_STYLE_NOTES, MAX_STYLE_NOTE_CHARS),
+        characters,
+        provenance,
+    })
+}
+
+/// Write the shipped prompt files into the project snapshot, never overwriting an edit.
+pub async fn ensure_prompt_files(dir: &Path) -> Result<()> {
+    tokio::fs::create_dir_all(dir).await?;
+    for (name, content) in [
+        (
+            "series_recon.system.md",
+            DEFAULT_SERIES_RECON_SYSTEM_TEMPLATE,
+        ),
+        ("series_recon.user.md", DEFAULT_SERIES_RECON_USER_TEMPLATE),
+        ("series_recon.schema.json", DEFAULT_SERIES_RECON_SCHEMA),
+    ] {
+        let path = dir.join(name);
+        if !path.exists() {
+            tokio::fs::write(&path, content).await?;
+        }
+    }
+    Ok(())
+}
+
+fn read_first(dir: &Path, name: &str) -> Option<String> {
+    std::fs::read_to_string(dir.join(name)).ok()
+}
+
+/// Run the series synthesis and persist the candidate profile.
+pub async fn run_series_recon(
+    deps: &PipelineDeps,
+    job_id: Option<&str>,
+    series_id: &str,
+) -> Result<SeriesReconOutcome> {
+    let pool = &deps.pool;
+    let series = repo::get_series(pool, series_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("series {series_id}")))?;
+    let projects = repo::list_projects_for_series(pool, series_id).await?;
+    if projects.is_empty() {
+        return Err(AppError::Invalid(
+            "the series has no member book: attach one first".into(),
+        ));
+    }
+
+    // Evidence: the confirmed profile of every member book, capped.
+    let mut blocks = Vec::new();
+    for project in projects.iter().take(MAX_BOOKS) {
+        let synopsis = repo::get_memory(pool, &project.id, "synopsis")
+            .await?
+            .unwrap_or_default();
+        let style_guide = repo::get_memory(pool, &project.id, "style_guide")
+            .await?
+            .unwrap_or_default();
+        if let Some(block) = book_block(project, &synopsis, &style_guide) {
+            blocks.push(block);
+        }
+    }
+    if blocks.is_empty() {
+        return Err(AppError::Invalid(
+            "no confirmed book profile: run the reconnaissance on at least one book".into(),
+        ));
+    }
+
+    // The canon as the translator sees it, deduplicated across the books.
+    let mut glossary: BTreeSet<String> = BTreeSet::new();
+    for project in &projects {
+        for term in crate::pipeline::glossary::effective_terms(pool, &project.id).await? {
+            glossary.insert(format!("{} => {}", term.source, term.target));
+        }
+    }
+    let evidence = render_evidence(
+        blocks,
+        glossary.into_iter().take(MAX_GLOSSARY_TERMS).collect(),
+    );
+
+    let binding = repo::role_binding_for(pool, ROLE)
+        .await?
+        .ok_or_else(|| AppError::Invalid("no role_binding configured for 'orchestrator'".into()))?;
+    let endpoint = repo::get_endpoint(pool, &binding.endpoint_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("endpoint {}", binding.endpoint_id)))?;
+
+    let prompts_dir = deps.prompts_dir(&projects[0].id);
+    ensure_prompt_files(&prompts_dir).await?;
+    let system_template = read_first(&prompts_dir, "series_recon.system.md")
+        .unwrap_or_else(|| DEFAULT_SERIES_RECON_SYSTEM_TEMPLATE.to_string());
+    let user_template = read_first(&prompts_dir, "series_recon.user.md")
+        .unwrap_or_else(|| DEFAULT_SERIES_RECON_USER_TEMPLATE.to_string());
+    let schema: Value = read_first(&prompts_dir, "series_recon.schema.json")
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_else(|| {
+            serde_json::from_str(DEFAULT_SERIES_RECON_SCHEMA)
+                .expect("embedded series schema is valid JSON")
+        });
+
+    let env = Environment::new();
+    let system = env.render_str(
+        &system_template,
+        context! {
+            source_language => series.source_lang.clone().unwrap_or_default(),
+            target_language => series.target_lang.clone().unwrap_or_default(),
+        },
+    )?;
+    let user = env.render_str(
+        &user_template,
+        context! {
+            series_name => &series.name,
+            books => &evidence.books,
+            glossary => &evidence.glossary,
+            response_schema => serde_json::to_string_pretty(&schema)?,
+        },
+    )?;
+    let prompt_hash = sha256_hex_str(&format!("{system}\n\u{0}\n{user}"));
+
+    let response = run_chat_call(
+        deps,
+        &ChatCall {
+            job_id,
+            chunk_id: None,
+            role: ROLE,
+            endpoint_id: &endpoint.id,
+            base_url: &endpoint.base_url,
+            model: &binding.model,
+            params_json: &binding.params_json,
+            prompt_hash: &prompt_hash,
+            system: &system,
+            user: &user,
+            response_format: Some(crate::llm::ResponseFormat::json_schema(SCHEMA_NAME, schema)),
+            seed: crate::pipeline::translate::derive_seed(series_id, ROLE),
+            default_max_tokens: Some(DEFAULT_MAX_TOKENS),
+        },
+    )
+    .await?;
+
+    let profile = parse_profile(
+        &response,
+        SeriesProfileProvenance {
+            generated_at: now(),
+            model: binding.model.clone(),
+            prompt_hash,
+            books: evidence.book_names.clone(),
+        },
+    )?;
+    repo::set_series_memory(
+        pool,
+        series_id,
+        MEMORY_KEY,
+        &serde_json::to_string(&profile)?,
+    )
+    .await?;
+
+    Ok(SeriesReconOutcome {
+        series_id: series_id.to_string(),
+        model: binding.model,
+        books: evidence.book_names.len(),
+        characters: profile.characters.len(),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn series_profile_is_clamped_and_deduplicated() {
+        let raw = r#"{"synopsis":"  A saga.  ","style_notes":["note","note"],"characters":[
+            {"source":"Keeper","target":"Custode","note":"n"},
+            {"source":"keeper","target":"altra","note":"dup"},
+            {"source":"","target":"x"},
+            {"source":"Ship","target":""}
+        ]}"#;
+        let profile = parse_profile(raw, SeriesProfileProvenance::default()).expect("profile");
+        assert_eq!(profile.synopsis, "A saga.");
+        // `clamp_list` deduplicates the notes.
+        assert_eq!(profile.style_notes.len(), 1);
+        assert_eq!(profile.characters.len(), 2);
+        assert_eq!(profile.characters[0].source, "Keeper");
+        assert_eq!(profile.characters[1].target, "");
+    }
+
+    #[test]
+    fn embedded_series_prompts_match_the_repository_files() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let file = std::fs::read_to_string(root.join("prompts/series_recon.md"))
+            .expect("read prompts/series_recon.md");
+        let (system, user) = file
+            .split_once("-->\n")
+            .expect("series header")
+            .1
+            .split_once("\n---USER---\n")
+            .expect("the file must contain the ---USER--- marker");
+        assert_eq!(system, DEFAULT_SERIES_RECON_SYSTEM_TEMPLATE);
+        assert_eq!(user, DEFAULT_SERIES_RECON_USER_TEMPLATE);
+
+        let file: Value = serde_json::from_str(
+            &std::fs::read_to_string(root.join("prompts/series_recon.schema.json"))
+                .expect("read prompts/series_recon.schema.json"),
+        )
+        .expect("schema is valid JSON");
+        let embedded: Value =
+            serde_json::from_str(DEFAULT_SERIES_RECON_SCHEMA).expect("embedded schema is JSON");
+        assert_eq!(file, embedded);
+    }
+}
