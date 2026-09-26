@@ -913,3 +913,30 @@ export interface SeriesImportOutcome {
 export interface SeriesQaScanResult {
   enqueued: number;
 }
+
+/** One character/term of the candidate series profile (`pipeline::series_recon::SeriesCharacter`). */
+export interface SeriesReconCharacter {
+  source: string;
+  target: string;
+  note: string;
+}
+
+/** Where the candidate series profile came from (`pipeline::series_recon::SeriesProfileProvenance`). */
+export interface SeriesReconProvenance {
+  generated_at: string;
+  model: string;
+  prompt_hash: string;
+  books: string[];
+}
+
+/**
+ * Candidate series profile, stored in `series_memory['series_profile']`.
+ * The view parses the stored JSON and degrades to this shape rather than hiding an older
+ * candidate, so `characters` is always present and `provenance` may be missing.
+ */
+export interface SeriesProfile {
+  synopsis: string;
+  style_notes: string[];
+  characters: SeriesReconCharacter[];
+  provenance?: SeriesReconProvenance;
+}

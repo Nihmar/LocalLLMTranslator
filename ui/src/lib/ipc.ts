@@ -118,6 +118,7 @@ const COMMANDS = {
   seriesExport: "series_export",
   seriesImport: "series_import",
   seriesQaScan: "series_qa_scan",
+  seriesReconStart: "series_recon_start",
   reviewStart: "review_start",
   suggestionList: "suggestion_list",
   suggestionAccept: "suggestion_accept",
@@ -402,6 +403,11 @@ export function seriesImport(request: SeriesImportRequest): Promise<SeriesImport
 /** Re-runs the QA scan on every translated chunk of the member books. */
 export function seriesQaScan(seriesId: string): Promise<SeriesQaScanResult> {
   return call<SeriesQaScanResult>(COMMANDS.seriesQaScan, { series_id: seriesId });
+}
+
+/** Enqueues the `series_recon` job: a candidate series profile from the confirmed books. */
+export function seriesReconStart(seriesId: string): Promise<JobStarted> {
+  return call<JobStarted>(COMMANDS.seriesReconStart, { series_id: seriesId });
 }
 
 // --- review and QA (PLAN.md §11.4) -----------------------------------------------------------

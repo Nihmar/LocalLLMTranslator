@@ -3,6 +3,7 @@ import { EmptyState } from "../components/EmptyState";
 import { FormField } from "../components/FormField";
 import { StatusBadge } from "../components/StatusBadge";
 import { pickSeriesBundleFile } from "../lib/dialog";
+import { onJobProgress } from "../lib/events";
 import {
   glossaryList,
   openPath,
@@ -19,6 +20,7 @@ import {
   seriesList,
   seriesPromoteTerm,
   seriesQaScan,
+  seriesReconStart,
   seriesUpdate,
   seriesVariantDelete,
   seriesVariantUpsert,
@@ -31,6 +33,7 @@ import type {
   Series,
   SeriesDetail,
   SeriesGlossaryTerm,
+  SeriesProfile,
 } from "../lib/types";
 
 /**
@@ -85,6 +88,46 @@ function parentDirectory(path: string): string {
   return index > 0 ? path.slice(0, index) : path;
 }
 
+/**
+ * Parse the stored `series_profile` JSON. The candidate may predate fields, so the parser
+ * degrades to the parts it understands instead of failing the whole view.
+ */
+function parseSeriesProfile(json: string): SeriesProfile | null {
+  try {
+    const value: unknown = JSON.parse(json);
+    if (value === null || typeof value !== "object") {
+      return null;
+    }
+    const record = value as Record<string, unknown>;
+    const synopsis = typeof record["synopsis"] === "string" ? record["synopsis"] : "";
+    const styleNotes = Array.isArray(record["style_notes"])
+      ? record["style_notes"].filter((note): note is string => typeof note === "string")
+      : [];
+    const characters = Array.isArray(record["characters"])
+      ? record["characters"].flatMap((entry) => {
+          if (entry === null || typeof entry !== "object") {
+            return [];
+          }
+          const raw = entry as Record<string, unknown>;
+          const source = typeof raw["source"] === "string" ? raw["source"] : "";
+          if (source.length === 0) {
+            return [];
+          }
+          return [
+            {
+              source,
+              target: typeof raw["target"] === "string" ? raw["target"] : "",
+              note: typeof raw["note"] === "string" ? raw["note"] : "",
+            },
+          ];
+        })
+      : [];
+    return { synopsis, style_notes: styleNotes, characters };
+  } catch {
+    return null;
+  }
+}
+
 export function SeriesView() {
   const [series, setSeries] = useState<Series[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -129,6 +172,13 @@ export function SeriesView() {
     (key: string): string => detail?.memory.find((row) => row.key === key)?.value ?? "",
     [detail],
   );
+
+  // The candidate series profile is stored as memory JSON; it is never injected into a
+  // prompt, the user decides what to copy into the canon.
+  const candidate = useMemo(() => {
+    const raw = detail?.memory.find((row) => row.key === "series_profile")?.value;
+    return raw === undefined ? null : parseSeriesProfile(raw);
+  }, [detail]);
 
   const loadSeries = useCallback(async () => {
     setLoading(true);
@@ -189,6 +239,18 @@ export function SeriesView() {
   useEffect(() => {
     void loadDetail();
   }, [loadDetail]);
+
+  useEffect(
+    () =>
+      onJobProgress((job) => {
+        // The series reconnaissance is the only job this view waits for; reloading on its
+        // transition surfaces the candidate without a manual refresh.
+        if (job.kind === "series_recon") {
+          void loadDetail();
+        }
+      }),
+    [loadDetail],
+  );
 
   useEffect(() => {
     if (promoteProjectId === "") {
@@ -440,6 +502,45 @@ export function SeriesView() {
           ? "Nessun chunk da scansionare: i libri non hanno traduzioni complete."
           : `${outcome.enqueued} job di scansione QA accodati su tutti i libri della serie.`,
       );
+    });
+  }
+
+  async function handleReconStart(): Promise<void> {
+    if (selected === null) {
+      return;
+    }
+    await run("recon", async () => {
+      await seriesReconStart(selected.id);
+      setNotice(
+        "Ricognizione di serie accodata: al termine il profilo candidato compare qui sotto.",
+      );
+    });
+  }
+
+  async function handlePromoteCharacters(profile: SeriesProfile): Promise<void> {
+    if (selected === null) {
+      return;
+    }
+    const characters = profile.characters.filter(
+      (character) => character.target.trim().length > 0,
+    );
+    if (characters.length === 0) {
+      setNotice("Il candidato non ha personaggi con un rendering da promuovere.");
+      return;
+    }
+    await run("characters", async () => {
+      for (const character of characters) {
+        await seriesGlossaryUpsert({
+          series_id: selected.id,
+          source: character.source,
+          target: character.target,
+          kind: "proper_noun",
+          note: character.note.length > 0 ? character.note : null,
+          status: "candidate",
+        });
+      }
+      await loadDetail();
+      setNotice(`${characters.length} personaggi portati nel glossario come candidati.`);
     });
   }
 
@@ -1109,6 +1210,84 @@ export function SeriesView() {
                     <span className="mono-chip ml-1">qa_scan</span> sulle traduzioni esistenti di
                     tutti i libri della serie.
                   </p>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      className="btn"
+                      disabled={busy !== null || detail.projects.length === 0}
+                      onClick={() => void handleReconStart()}
+                    >
+                      Genera profilo di serie
+                    </button>
+                    <span className="field-hint">
+                      Usa il ruolo orchestrator sui profili confermati dei libri.
+                    </span>
+                  </div>
+
+                  {candidate !== null ? (
+                    <div className="section-stack rounded border border-line p-2">
+                      <span className="stat-label">Profilo candidato</span>
+                      <p className="text-xs text-ink-soft">
+                        {candidate.synopsis.length > 0 ? candidate.synopsis : "—"}
+                      </p>
+                      {candidate.style_notes.length > 0 ? (
+                        <ul className="section-stack">
+                          {candidate.style_notes.map((note) => (
+                            <li key={note} className="text-[0.72rem] text-muted">
+                              • {note}
+                            </li>
+                          ))}
+                        </ul>
+                      ) : null}
+                      {candidate.characters.length > 0 ? (
+                        <ul className="section-stack">
+                          {candidate.characters.map((character) => (
+                            <li key={character.source} className="text-[0.72rem] text-muted">
+                              <span className="font-medium text-ink-soft">{character.source}</span>
+                              {character.target.length > 0 ? ` → ${character.target}` : ""}
+                              {character.note.length > 0 ? ` · ${character.note}` : ""}
+                            </li>
+                          ))}
+                        </ul>
+                      ) : null}
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          className="btn btn-sm"
+                          disabled={candidate.synopsis.length === 0}
+                          onClick={() => {
+                            setSynopsis(candidate.synopsis);
+                            setNotice("Sinossi copiata nel modulo: salva per applicarla.");
+                          }}
+                        >
+                          Usa come sinossi
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-sm"
+                          disabled={candidate.style_notes.length === 0}
+                          onClick={() => {
+                            setStyleGuide(candidate.style_notes.join("\n"));
+                            setNotice("Style guide copiata nel modulo: salva per applicarla.");
+                          }}
+                        >
+                          Usa come style guide
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-sm"
+                          disabled={busy !== null || candidate.characters.length === 0}
+                          onClick={() => void handlePromoteCharacters(candidate)}
+                        >
+                          Personaggi nel glossario
+                        </button>
+                      </div>
+                      <p className="field-hint">
+                        Il candidato non è mai iniettato nei prompt: nulla cambia finché non salvi
+                        la memoria o approvi i termini.
+                      </p>
+                    </div>
+                  ) : null}
                 </div>
               </div>
             </>
