@@ -122,7 +122,6 @@ pub async fn get_endpoint(pool: &SqlitePool, id: &str) -> Result<Option<LlmEndpo
         .await?;
     Ok(row)
 }
-
 pub async fn delete_endpoint(pool: &SqlitePool, id: &str) -> Result<u64> {
     let res = sqlx::query("DELETE FROM llm_endpoint WHERE id = ?1")
         .bind(id)
@@ -237,6 +236,80 @@ pub async fn list_glossary_terms(pool: &SqlitePool, project_id: &str) -> Result<
     .fetch_all(pool)
     .await?;
     Ok(rows)
+}
+
+pub async fn get_glossary_term(pool: &SqlitePool, id: &str) -> Result<Option<GlossaryTerm>> {
+    let row = sqlx::query_as::<_, GlossaryTerm>("SELECT * FROM glossary_term WHERE id = ?1")
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row)
+}
+
+/// The term matching `source` case-insensitively, if any. The unique key is
+/// case-sensitive, so the merge rule needs this lookup instead of relying on it.
+pub async fn get_glossary_term_by_source(
+    pool: &SqlitePool,
+    project_id: &str,
+    source: &str,
+) -> Result<Option<GlossaryTerm>> {
+    let row = sqlx::query_as::<_, GlossaryTerm>(
+        "SELECT * FROM glossary_term WHERE project_id = ?1 AND lower(source) = lower(?2) LIMIT 1",
+    )
+    .bind(project_id)
+    .bind(source)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}
+
+/// Optimistic update of a term: only writes when `revision` still matches.
+/// Returns `false` when another writer changed (or removed) the row.
+pub async fn update_glossary_term_checked(
+    pool: &SqlitePool,
+    term: &GlossaryTerm,
+    expected_revision: i64,
+) -> Result<bool> {
+    let result = sqlx::query(
+        "UPDATE glossary_term SET target = ?2, note = ?3, kind = ?4, status = ?5, \
+         origin = 'manual', revision = revision + 1 WHERE id = ?1 AND revision = ?6",
+    )
+    .bind(term.id.as_str())
+    .bind(term.target.as_str())
+    .bind(term.note.as_deref())
+    .bind(term.kind.as_str())
+    .bind(term.status.as_str())
+    .bind(expected_revision)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() == 1)
+}
+
+pub async fn set_glossary_status(pool: &SqlitePool, id: &str, status: &str) -> Result<()> {
+    sqlx::query("UPDATE glossary_term SET status = ?2 WHERE id = ?1")
+        .bind(id)
+        .bind(status)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Whether an open `glossary_conflict` finding already records this source term,
+/// so re-running an agent does not pile up duplicate findings.
+pub async fn has_open_glossary_conflict(
+    pool: &SqlitePool,
+    project_id: &str,
+    source: &str,
+) -> Result<bool> {
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM qa_finding WHERE project_id = ?1 AND kind = 'glossary_conflict' \
+         AND status = 'open' AND json_extract(details_json, '$.source') = ?2",
+    )
+    .bind(project_id)
+    .bind(source)
+    .fetch_one(pool)
+    .await?;
+    Ok(count > 0)
 }
 
 pub async fn delete_glossary_term(pool: &SqlitePool, id: &str) -> Result<u64> {

@@ -32,6 +32,10 @@ pub struct GlossaryUpsert {
     pub source_lang: Option<String>,
     #[serde(default)]
     pub target_lang: Option<String>,
+    /// Optimistic-lock revision the caller edited from; when `id` is present too,
+    /// the write is rejected if another writer changed the row in the meantime.
+    #[serde(default)]
+    pub expected_revision: Option<i64>,
 }
 
 fn normalize_kind(raw: &str) -> &'static str {
@@ -46,6 +50,7 @@ fn normalize_status(raw: &str) -> &'static str {
     match raw.trim().to_lowercase().as_str() {
         "candidate" => "candidate",
         "rejected" => "rejected",
+        "conflict" => "conflict",
         _ => "approved",
     }
 }
@@ -83,6 +88,7 @@ pub async fn glossary_upsert(
         target
     };
 
+    let is_update = req.id.is_some();
     let term = GlossaryTerm {
         id: req.id.unwrap_or_else(new_id),
         project_id: req.project_id.clone(),
@@ -103,6 +109,23 @@ pub async fn glossary_upsert(
         revision: 1,
         status: normalize_status(req.status.as_deref().unwrap_or_default()).to_string(),
     };
+
+    // Optimistic path: the UI sends the revision it loaded, so a concurrent
+    // summarizer write surfaces as an error instead of being overwritten.
+    if is_update {
+        if let Some(expected_revision) = req.expected_revision {
+            if !repo::update_glossary_term_checked(&state.pool, &term, expected_revision).await? {
+                return Err(AppError::Invalid(format!(
+                    "glossary term {} changed since it was loaded; reload the glossary",
+                    term.id
+                )));
+            }
+            return repo::get_glossary_term(&state.pool, &term.id)
+                .await?
+                .ok_or_else(|| AppError::NotFound(format!("glossary term {}", term.id)));
+        }
+    }
+
     repo::upsert_glossary_term(&state.pool, &term).await?;
     Ok(term)
 }

@@ -2,6 +2,7 @@
 
 pub mod chat_call;
 pub mod export;
+pub mod glossary;
 pub mod ingest;
 pub mod qa;
 pub mod recon;

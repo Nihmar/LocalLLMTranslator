@@ -20,8 +20,8 @@ use sqlx::SqlitePool;
 
 use super::chat_call::{run_chat_call, ChatCall};
 use super::PipelineDeps;
-use crate::db::models::{Chunk, GlossaryTerm, Project};
-use crate::db::{new_id, repo};
+use crate::db::models::{Chunk, Project};
+use crate::db::repo;
 use crate::error::{AppError, Result};
 use crate::util::{clamp_chars, clamp_list, clamp_words, sha256_hex_str};
 
@@ -444,40 +444,40 @@ pub async fn run_summarize(
     })
 }
 
-/// Insert proposed terms as candidates, never touching an existing term: an
-/// approved rendering must not be demoted by a later summary.
+/// Insert proposed terms without ever overwriting a different rendering: a
+/// conflict marks the existing candidate and records one open finding.
 async fn add_candidates(
     pool: &SqlitePool,
     project: &Project,
     terms: &[CandidateTerm],
 ) -> Result<usize> {
-    let existing = repo::list_glossary_terms(pool, &project.id).await?;
     let mut added = 0;
+    let mut conflicts = 0;
     for term in terms {
-        if existing
-            .iter()
-            .any(|row| row.source.eq_ignore_ascii_case(&term.source))
-        {
-            continue;
-        }
-        repo::upsert_glossary_term(
+        let outcome = super::glossary::record_proposal(
             pool,
-            &GlossaryTerm {
-                id: new_id(),
-                project_id: project.id.clone(),
-                source_lang: Some(project.source_lang.clone().unwrap_or_default()),
-                target_lang: Some(project.target_lang.clone()),
+            project,
+            &super::glossary::ProposedTerm {
                 source: term.source.clone(),
                 target: term.target.clone(),
-                note: term.note.clone(),
                 kind: term.kind.clone(),
-                origin: "proposed".to_string(),
-                revision: 1,
-                status: "candidate".to_string(),
+                note: term.note.clone(),
             },
+            "proposed",
         )
         .await?;
-        added += 1;
+        match outcome {
+            super::glossary::ProposalOutcome::Added => added += 1,
+            super::glossary::ProposalOutcome::Conflict => conflicts += 1,
+            super::glossary::ProposalOutcome::Unchanged => {}
+        }
+    }
+    if conflicts > 0 {
+        tracing::info!(
+            project_id = %project.id,
+            conflicts,
+            "glossary proposals conflicted with existing renderings"
+        );
     }
     Ok(added)
 }
