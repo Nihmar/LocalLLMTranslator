@@ -174,10 +174,10 @@ unchanged-build skip. It returns the outcome (including `from_cache`, `changed_u
 `metadata.yaml` without invoking Pandoc. `export_history` takes `{project_id}` and returns the
 last ten build records.
 
-`project_export` takes `{project_id, output_path}` and writes the `.llmtz`
+`project_export` takes `{project_id, output_path?}` and writes the `.llmtz`
 (ZIP with `manifest.json`, `project.sqlite`, `work/`, `output/`, `prompts/`), returning
-`{output_path, bytes, files}`. `project_import` takes `{archive_path}` and returns the imported
-`Project`.
+`{output_path, bytes, files}`; an absent `output_path` uses the project output directory.
+`project_import` takes `{archive_path}` and returns the imported `Project`.
 
 Events: `job://progress`, `log://line`, `metrics://tick`, `sidecar://status`,
 `sidecar://progress`, `export://progress`.
