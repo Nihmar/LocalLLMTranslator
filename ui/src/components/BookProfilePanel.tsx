@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { FormField } from "./FormField";
-import { reconConfirm, reconGet, reconStart, toErrorMessage } from "../lib/ipc";
+import {
+  glossaryDelete,
+  glossaryUpsert,
+  reconConfirm,
+  reconGet,
+  reconStart,
+  toErrorMessage,
+} from "../lib/ipc";
 import type {
   BookProfile,
   ConfirmedTerm,
@@ -53,10 +60,20 @@ interface TermForm {
   accepted: boolean;
 }
 
+interface GlossaryRowForm {
+  id: string | null;
+  source: string;
+  target: string;
+  kind: string;
+  status: string;
+  note: string;
+}
+
 interface FormState {
   fields: Record<FieldKey, FieldForm>;
   styleGuide: string;
   terms: TermForm[];
+  glossary: GlossaryRowForm[];
 }
 
 const EMPTY_PROVENANCE: ProfileProvenance = {
@@ -95,13 +112,25 @@ const TERM_KINDS: ReadonlyArray<{ value: string; label: string }> = [
   { value: "do_not_translate", label: "Non tradurre" },
 ];
 
+const GLOSSARY_KINDS: ReadonlyArray<{ value: string; label: string }> = [
+  { value: "term", label: "Termine" },
+  { value: "proper_noun", label: "Nome proprio" },
+  { value: "do_not_translate", label: "Non tradurre" },
+];
+
+const GLOSSARY_STATUSES: ReadonlyArray<{ value: string; label: string }> = [
+  { value: "candidate", label: "Candidato" },
+  { value: "approved", label: "Approvato" },
+  { value: "rejected", label: "Rifiutato" },
+];
+
 function emptyFields(): Record<FieldKey, FieldForm> {
   const rows = FIELD_ROWS.map((row) => [row.key, { value: "", basis: "user", confirmed: false }]);
   return Object.fromEntries(rows) as Record<FieldKey, FieldForm>;
 }
 
 function emptyForm(): FormState {
-  return { fields: emptyFields(), styleGuide: "", terms: [] };
+  return { fields: emptyFields(), styleGuide: "", terms: [], glossary: [] };
 }
 
 function splitLines(value: string): string[] {
@@ -141,7 +170,15 @@ function formFromSnapshot(snapshot: ReconSnapshot): FormState {
       accepted: true,
     };
   });
-  return { fields, styleGuide: snapshot.style_guide, terms };
+  const glossary: GlossaryRowForm[] = snapshot.glossary.map((term) => ({
+    id: term.id,
+    source: term.source,
+    target: term.target,
+    kind: term.kind,
+    status: term.status,
+    note: term.note ?? "",
+  }));
+  return { fields, styleGuide: snapshot.style_guide, terms, glossary };
 }
 
 /** The stable part of a snapshot: a change to it means the candidate really changed. */
@@ -152,6 +189,8 @@ function snapshotSignature(snapshot: ReconSnapshot): string {
     snapshot.style_guide,
     snapshot.synopsis,
     snapshot.book_meta,
+    snapshot.glossary.map((term) => `${term.id}:${term.revision}:${term.status}`).join(","),
+    snapshot.style_notes,
   ]);
 }
 
@@ -252,6 +291,8 @@ export function BookProfilePanel({ projectId, reloadToken }: BookProfilePanelPro
   const [pasted, setPasted] = useState("");
   const [expanded, setExpanded] = useState(false);
   const signatureRef = useRef("");
+  const [deletedTerms, setDeletedTerms] = useState<string[]>([]);
+  const [glossarySaving, setGlossarySaving] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -296,6 +337,93 @@ export function BookProfilePanel({ projectId, reloadToken }: BookProfilePanelPro
         position === index ? { ...term, ...patch } : term,
       ),
     }));
+  }
+
+  function updateGlossaryRow(index: number, patch: Partial<GlossaryRowForm>) {
+    setForm((current) => ({
+      ...current,
+      glossary: current.glossary.map((row, position) =>
+        position === index ? { ...row, ...patch } : row,
+      ),
+    }));
+  }
+
+  function removeGlossaryRow(index: number) {
+    setForm((current) => {
+      const removedId = current.glossary[index]?.id ?? null;
+      if (removedId !== null) {
+        setDeletedTerms((deleted) => [...deleted, removedId]);
+      }
+      return {
+        ...current,
+        glossary: current.glossary.filter((_, position) => position !== index),
+      };
+    });
+  }
+
+  function addGlossaryRow() {
+    setForm((current) => ({
+      ...current,
+      glossary: [
+        ...current.glossary,
+        { id: null, source: "", target: "", kind: "term", status: "candidate", note: "" },
+      ],
+    }));
+  }
+
+  function appendStyleNote(note: string) {
+    setForm((current) => {
+      const existing = current.styleGuide.trim();
+      if (existing.includes(note)) {
+        return current;
+      }
+      return {
+        ...current,
+        styleGuide: existing === "" ? note : `${existing}\n- ${note}`,
+      };
+    });
+  }
+
+  async function saveGlossary() {
+    for (const row of form.glossary) {
+      if (
+        row.source.trim() === "" ||
+        (row.target.trim() === "" && row.kind !== "do_not_translate")
+      ) {
+        setActionError(
+          "Ogni termine richiede un testo di partenza e una traduzione (oppure il tipo «Non tradurre»).",
+        );
+        return;
+      }
+    }
+    setGlossarySaving(true);
+    setActionError(null);
+    setNotice(null);
+    try {
+      for (const id of deletedTerms) {
+        await glossaryDelete(id);
+      }
+      for (const row of form.glossary) {
+        await glossaryUpsert({
+          id: row.id,
+          project_id: projectId,
+          source: row.source.trim(),
+          target: row.target.trim(),
+          kind: row.kind,
+          note: row.note,
+          status: row.status,
+        });
+      }
+      setDeletedTerms([]);
+      // Force a refresh from the persisted rows (revisions, ids, statuses).
+      signatureRef.current = "";
+      await load();
+      setNotice("Glossario aggiornato.");
+    } catch (saveError) {
+      setActionError(toErrorMessage(saveError));
+    } finally {
+      setGlossarySaving(false);
+    }
   }
 
   async function runStart() {
@@ -601,26 +729,143 @@ export function BookProfilePanel({ projectId, reloadToken }: BookProfilePanelPro
               </div>
             ) : null}
 
-            {snapshot !== null && snapshot.glossary.length > 0 ? (
+            {snapshot !== null ? (
               <div>
                 <div className="field-label">
-                  Glossario del progetto ({snapshot.glossary.length})
+                  Glossario del progetto ({form.glossary.length})
                 </div>
-                <div className="flex flex-wrap gap-1">
-                  {snapshot.glossary.map((term) => (
-                    <span
-                      key={term.id}
-                      className="mono-chip"
-                      title={
-                        term.note === null
-                          ? `${term.kind} · ${term.status}`
-                          : `${term.kind} · ${term.status} · ${term.note}`
-                      }
-                    >
-                      {term.source} → {term.target}
-                    </span>
+                {form.glossary.length > 0 ? (
+                  <div className="table-scroll">
+                    <table className="data-table">
+                      <thead>
+                        <tr>
+                          <th>Sorgente</th>
+                          <th>Traduzione</th>
+                          <th>Tipo</th>
+                          <th>Stato</th>
+                          <th>Nota</th>
+                          <th style={{ width: "3rem" }} />
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {form.glossary.map((row, index) => (
+                          <tr key={row.id ?? `new-${index}`}>
+                            <td>
+                              <input
+                                className="input"
+                                value={row.source}
+                                onChange={(event) => {
+                                  updateGlossaryRow(index, { source: event.target.value });
+                                }}
+                              />
+                            </td>
+                            <td>
+                              <input
+                                className="input"
+                                value={row.target}
+                                onChange={(event) => {
+                                  updateGlossaryRow(index, { target: event.target.value });
+                                }}
+                              />
+                            </td>
+                            <td>
+                              <select
+                                className="select"
+                                value={row.kind}
+                                onChange={(event) => {
+                                  updateGlossaryRow(index, { kind: event.target.value });
+                                }}
+                              >
+                                {GLOSSARY_KINDS.map((kind) => (
+                                  <option key={kind.value} value={kind.value}>
+                                    {kind.label}
+                                  </option>
+                                ))}
+                              </select>
+                            </td>
+                            <td>
+                              <select
+                                className="select"
+                                value={row.status}
+                                onChange={(event) => {
+                                  updateGlossaryRow(index, { status: event.target.value });
+                                }}
+                              >
+                                {GLOSSARY_STATUSES.map((status) => (
+                                  <option key={status.value} value={status.value}>
+                                    {status.label}
+                                  </option>
+                                ))}
+                              </select>
+                            </td>
+                            <td>
+                              <input
+                                className="input"
+                                value={row.note}
+                                onChange={(event) => {
+                                  updateGlossaryRow(index, { note: event.target.value });
+                                }}
+                              />
+                            </td>
+                            <td>
+                              <button
+                                type="button"
+                                className="btn btn-sm btn-ghost"
+                                title="Rimuovi il termine"
+                                onClick={() => {
+                                  removeGlossaryRow(index);
+                                }}
+                              >
+                                ✕
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <p className="field-hint">Nessun termine: aggiungine uno o lancia la ricognizione.</p>
+                )}
+                <div className="mt-2 flex items-center gap-2">
+                  <button type="button" className="btn btn-sm" onClick={addGlossaryRow}>
+                    Aggiungi termine
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-primary"
+                    disabled={glossarySaving}
+                    onClick={() => void saveGlossary()}
+                  >
+                    {glossarySaving ? <span className="spinner" aria-hidden="true" /> : null}
+                    Salva glossario
+                  </button>
+                  <span className="field-hint">
+                    I termini rifiutati non entrano nel prompt.
+                  </span>
+                </div>
+              </div>
+            ) : null}
+
+            {snapshot !== null && snapshot.style_notes.length > 0 ? (
+              <div>
+                <div className="field-label">Osservazioni del riassuntore</div>
+                <ul className="space-y-1">
+                  {snapshot.style_notes.map((note) => (
+                    <li key={note} className="flex items-start justify-between gap-2 text-xs">
+                      <span className="text-ink-soft">{note}</span>
+                      <button
+                        type="button"
+                        className="btn btn-sm"
+                        onClick={() => {
+                          appendStyleNote(note);
+                        }}
+                      >
+                        Aggiungi alla guida
+                      </button>
+                    </li>
                   ))}
-                </div>
+                </ul>
               </div>
             ) : null}
 

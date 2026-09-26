@@ -30,6 +30,8 @@ import type {
   EndpointUpsert,
   ExportOutcome,
   ExportRequest,
+  GlossaryTerm,
+  GlossaryUpsertRequest,
   IngestStartRequest,
   Job,
   JobListRequest,
@@ -68,6 +70,9 @@ const COMMANDS = {
   reconStart: "recon_start",
   reconGet: "recon_get",
   reconConfirm: "recon_confirm",
+  glossaryList: "glossary_list",
+  glossaryUpsert: "glossary_upsert",
+  glossaryDelete: "glossary_delete",
   jobList: "job_list",
   chunkList: "chunk_list",
   chunkGet: "chunk_get",
@@ -240,6 +245,23 @@ export function reconGet(projectId: string): Promise<ReconSnapshot> {
 /** Writes the fields the user confirmed into project memory and the glossary. */
 export function reconConfirm(request: ReconConfirmRequest): Promise<ReconSnapshot> {
   return call<ReconSnapshot>(COMMANDS.reconConfirm, { req: request });
+}
+
+// --- glossary (PLAN.md §5, §9.2) -------------------------------------------------------------
+
+/** Every term of a project, candidates included. */
+export function glossaryList(projectId: string): Promise<GlossaryTerm[]> {
+  return call<GlossaryTerm[]>(COMMANDS.glossaryList, { project_id: projectId });
+}
+
+/** Create or update a term; the returned row is the persisted one. */
+export function glossaryUpsert(request: GlossaryUpsertRequest): Promise<GlossaryTerm> {
+  return call<GlossaryTerm>(COMMANDS.glossaryUpsert, { req: request });
+}
+
+/** Remove a term. The translator prompt stops seeing it immediately. */
+export function glossaryDelete(id: string): Promise<Ack> {
+  return call<Ack>(COMMANDS.glossaryDelete, { id });
 }
 
 // --- jobs and chunks -----------------------------------------------------------------------

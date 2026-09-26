@@ -325,6 +325,8 @@ export interface ReconSnapshot {
   synopsis: string;
   book_meta: JsonValue | null;
   glossary: GlossaryTerm[];
+  /** Style-note candidates proposed by the summarizer; the user decides. */
+  style_notes: string[];
   orchestrator_bound: boolean;
   /** Id of a pending/running `book_recon` job, when there is one. */
   running_job: string | null;
@@ -356,6 +358,21 @@ export interface ReconConfirmRequest {
   /** Style guide assembled and edited in the UI. */
   style_guide: string;
   proper_nouns: ConfirmedTerm[];
+}
+
+/** Request body of `glossary_upsert` (`commands::glossary::GlossaryUpsert`). */
+export interface GlossaryUpsertRequest {
+  /** Absent or `null` creates a term; present edits the existing row. */
+  id?: string | null;
+  project_id: string;
+  source: string;
+  target?: string | null;
+  kind?: string | null;
+  note?: string | null;
+  /** `approved` | `candidate` | `rejected`; defaults to `approved`. */
+  status?: string | null;
+  source_lang?: string | null;
+  target_lang?: string | null;
 }
 
 // --- jobs ----------------------------------------------------------------------------------
