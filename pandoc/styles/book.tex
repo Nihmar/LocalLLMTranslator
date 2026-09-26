@@ -1,0 +1,44 @@
+% -*- mode: latex -*-
+%
+% pandoc/styles/book.tex
+% USER-EDITABLE LaTeX print style — the PDF counterpart of pandoc/styles/book.css.
+%
+% This is NOT a document template.  It is a preamble fragment (a "style layer")
+% meant to be merged into pandoc/templates/book.tex through that template's
+% header-includes hook, so a project can tune the printed book without editing
+% the template itself.  Pass it on the command line:
+%
+%   pandoc input.md -o book.pdf \
+%          --template=pandoc/templates/book.tex \
+%          --include-in-header=pandoc/styles/book.tex \
+%          --toc --top-level-division=chapter
+%
+% ...or through the document metadata:
+%
+%   header-includes:
+%     - \input{pandoc/styles/book.tex}   % path relative to the markdown file
+%
+% Everything here is additive and guarded, so the file stays safe to include
+% next to the template on every supported engine (pdflatex / xelatex / lualatex).
+
+% --- justification quality --------------------------------------------------
+% microtype improves justification and hyphenation; skip it when absent.
+\IfFileExists{microtype.sty}{%
+  \usepackage{microtype}%
+}{}
+
+% --- widow / orphan control (mirrors the CSS orphans/widows: 2) -------------
+% Never leave a single line of a paragraph stranded at the top or bottom of a
+% page, and avoid a hyphenated word splitting a paragraph across pages.
+\widowpenalty=10000
+\clubpenalty=10000
+\displaywidowpenalty=10000
+\brokenpenalty=10000
+
+% --- float placement for figures and tables --------------------------------
+% Allow a floated figure/table to fill most of a page instead of being pushed
+% to the end, which keeps plates near the text that references them.
+\renewcommand{\topfraction}{0.9}
+\renewcommand{\bottomfraction}{0.8}
+\setcounter{topnumber}{2}
+\setcounter{bottomnumber}{2}

@@ -26,7 +26,8 @@ $endif$$for(classoption)$  $classoption$,
 $endfor$]{book}
 
 % --- colours / links -------------------------------------------------------
-\usepackage{xcolor}
+% dvipsnames provides the Maroon/Blue defaults used by the hyperref block below.
+\usepackage[dvipsnames]{xcolor}
 \PassOptionsToPackage{unicode,hidelinks}{hyperref}
 \usepackage[hyphens]{url}
 
@@ -48,10 +49,12 @@ $endif$
   \usepackage{textcomp}
   \usepackage{lmodern}
 \else
+  % unicode-math loads fontspec; Latin Modern is the default text font there, so
+  % loading the NFSS lmodern package in this branch would request an OpenType
+  % font that does not exist and abort the build.
   \usepackage{unicode-math}
   \defaultfontfeatures{Scale=MatchLowercase}
   \defaultfontfeatures[\rmfamily]{Ligatures=TeX,Scale=1}
-  \usepackage{lmodern}
   $if(mainfont)$
   \setmainfont[$for(mainfontoptions)$$mainfontoptions$$sep$,$endfor$]{$mainfont$}
   $endif$
@@ -148,6 +151,11 @@ $endif$
 \providecommand{\tightlist}{%
   \setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}}
 
+% NOTE: unlike Pandoc's default template there is no preamble \subtitle{...}
+% call here.  That call typeset in the preamble and aborted the build with
+% "Missing \begin{document}"; the custom title page below renders the subtitle
+% (and the title/author/date) directly instead.
+
 $for(header-includes)$
 $header-includes$
 $endfor$
@@ -156,10 +164,20 @@ $endfor$
 \IfFileExists{xurl.sty}{\usepackage{xurl}}{}
 \urlstyle{same}
 
+% Every conditional below lives on its own line: hyperref parses this argument
+% with kvsetkeys, whose key processor is not \long, so an empty line (a \par)
+% left behind by a conditional sharing a line with its content aborts the parse
+% with "Paragraph ended before \kv@processor@default was complete".
 \hypersetup{%
-$if(title-meta)$  pdftitle={$title-meta$},$endif$
-$if(author-meta)$  pdfauthor={$author-meta$},$endif$
-$if(lang)$  pdflang={$lang$},$endif$
+$if(title-meta)$
+  pdftitle={$title-meta$},
+$endif$
+$if(author-meta)$
+  pdfauthor={$author-meta$},
+$endif$
+$if(lang)$
+  pdflang={$lang$},
+$endif$
 $if(colorlinks)$
   colorlinks=true,
   linkcolor={$if(linkcolor)$$linkcolor$$else$Maroon$endif$},
@@ -171,7 +189,6 @@ $endif$
   pdfcreator={LaTeX via pandoc}}
 
 \title{$title$}
-$if(subtitle)$\providecommand{\subtitle}[1]{\par{\large\itshape #1\par}}\subtitle{$subtitle$}$endif$
 \author{$for(author)$$author$$sep$ \and $endfor$}
 \date{$date$}
 
