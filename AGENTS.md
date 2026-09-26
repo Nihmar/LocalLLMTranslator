@@ -1,48 +1,56 @@
-# AGENTS.md — convenzioni del progetto
+# AGENTS.md — project conventions
 
-## Cos'è questo progetto
+## What this project is
 
-`LocalLLMTranslator`: applicazione desktop per tradurre documenti lunghi (romanzi, saggi,
-manuali) con LLM eseguiti **in locale** su `llama.cpp`. Pipeline completa:
-ingestione → conversione → traduzione → revisione → impaginazione.
+`LocalLLMTranslator`: a desktop application to translate long documents (novels, essays,
+manuals) with LLMs running **locally** on `llama.cpp`. Complete pipeline:
+ingestion → conversion → translation → review → typesetting.
 
-**Leggi `PLAN.md` prima di scrivere codice.** Contiene architettura, schema del database,
-contratto IPC, prompt template, strategia di chunking e milestone. È la fonte di verità:
-se il codice e `PLAN.md` divergono, fermati e segnala la divergenza invece di scegliere da solo.
+**Read `PLAN.md` before writing code.** It holds the architecture, the database schema, the
+IPC contract, the prompt templates, the chunking strategy and the milestones. It is the source
+of truth: if the code and `PLAN.md` diverge, stop and report the divergence instead of deciding
+on your own.
 
 ---
 
-## Regola numero uno: commit frequenti e significativi
+## Language policy
 
-**Fai quanti più commit significativi puoi.** Non accumulare lavoro in un commit gigante a fine
-sessione. Un commit = una unità logica di lavoro, completa e coerente.
+**Everything that lands in the repository is written in English**: commit messages, code
+comments, docstrings and documentation (`README.md`, `PLAN.md`, `AGENTS.md`, anything under
+`docs/`). The single exception is the **UI copy**, which is in Italian — see the TypeScript
+section. Never leave Italian prose in commits, comments or docs.
 
-Linee guida operative:
+## Rule number one: frequent, meaningful commits
 
-- Committa **appena** un'unità è completa e verificata (`ruff`/`pyright`/`pytest` o
-  `cargo fmt`/`clippy`/`test` passano). Non aspettare la fine del task.
-- Un modulo nuovo = un commit. Un test nuovo per quel modulo = un altro commit. Una migrazione
-  dello schema = un altro commit ancora.
-- **Non mischiare** riformattazioni, rinomini e cambi di comportamento nello stesso commit.
-  Se `ruff format` tocca file non correlati, committali separatamente.
-- Non committare mai codice che non compila o test rossi. Se sei in un vicolo cieco, usa
-  `git stash` o un branch, non un commit "WIP" sul ramo principale.
-- Commit piccoli e frequenti battono commit grandi e rari. Nel dubbio, spezza.
+**Make as many meaningful commits as you can.** Do not pile work up into one giant commit at
+the end of a session. One commit = one logical unit of work, complete and coherent.
 
-Formato: **Conventional Commits**, messaggio in inglese, imperativo, con scope.
+Operating guidelines:
+
+- Commit **as soon as** a unit is complete and verified (`ruff`/`pyright`/`pytest` or
+  `cargo fmt`/`clippy`/`test` pass). Do not wait until the end of the task.
+- A new module = one commit. A new test for that module = another commit. A schema migration =
+  yet another commit.
+- **Do not mix** reformatting, renames and behaviour changes in the same commit. If
+  `ruff format` touches unrelated files, commit them separately.
+- Never commit code that does not compile or tests that fail. If you are in a dead end, use
+  `git stash` or a branch, not a "WIP" commit on the main branch.
+- Small, frequent commits beat large, rare ones. When in doubt, split.
+
+Format: **Conventional Commits**, message in English, imperative mood, with a scope.
 
 ```
-<type>(<scope>): <descrizione breve>
+<type>(<scope>): <short description>
 
-<corpo opzionale: perché, non cosa>
+<optional body: why, not what>
 
 Co-authored-by: CommandCodeBot <noreply@commandcode.ai>
 ```
 
-Tipi: `feat`, `fix`, `refactor`, `test`, `docs`, `chore`, `perf`, `build`, `ci`.
-Scope: `sidecar`, `rust`, `ui`, `tools`, `prompts`, `pandoc`, `db`, `docs`, `ci`.
+Types: `feat`, `fix`, `refactor`, `test`, `docs`, `chore`, `perf`, `build`, `ci`.
+Scopes: `sidecar`, `rust`, `ui`, `tools`, `prompts`, `pandoc`, `db`, `docs`, `ci`.
 
-Esempi di commit **giusti**:
+Examples of **good** commits:
 
 ```
 feat(sidecar): parse markdown into stable-id blocks
@@ -54,34 +62,34 @@ feat(rust): add llama-server HTTP client with SSE streaming
 feat(ui): add chunk progress table
 ```
 
-Esempi di commit **sbagliati**: `update files`, `wip`, `fix stuff`, o un unico commit che
-contiene sidecar + UI + migrazioni.
+Examples of **bad** commits: `update files`, `wip`, `fix stuff`, or a single commit holding
+sidecar + UI + migrations.
 
 ---
 
-## Struttura del repository
+## Repository structure
 
 ```
-crates/app/     Tauri 2 (Rust) — control plane: DB, coda, LLM, orchestrazione
-ui/             Frontend React + TS + Vite — solo presentazione
-sidecar/        Python — data plane: formati, Markdown IR, chunking, Pandoc
-prompts/        Template Jinja2 editabili dall'utente
-pandoc/         Template, filtri Lua, CSS/LaTeX
-tools/          Script di supporto (fake llama-server, generator di fixture)
+crates/app/     Tauri 2 (Rust) — control plane: DB, queue, LLM, orchestration
+ui/             React + TS + Vite frontend — presentation only
+sidecar/        Python — data plane: formats, Markdown IR, chunking, Pandoc
+prompts/        Jinja2 templates, editable by the user
+pandoc/         Templates, Lua filters, CSS/LaTeX
+tools/          Support scripts (fake llama-server, fixture generator)
 ```
 
-**Il confine è architetturale, non stilistico.** Rust è il *control plane*: possiede stato,
-concorrenza e orchestrazione. Python è il *data plane*: le sue funzioni sono **pure**
-(`input → output`), non toccano mai il database e non conoscono la coda. Se ti accorgi di aver
-bisogno di stato condiviso o di I/O sul DB nel sidecar, il design è sbagliato: segnalalo.
+**The boundary is architectural, not stylistic.** Rust is the *control plane*: it owns state,
+concurrency and orchestration. Python is the *data plane*: its functions are **pure**
+(`input → output`), they never touch the database and do not know about the queue. If you find
+yourself needing shared state or database I/O in the sidecar, the design is wrong: report it.
 
 ---
 
-## Contratto IPC (congelato — non modificarlo senza aggiornare `PLAN.md`)
+## IPC contract (frozen — do not change it without updating `PLAN.md`)
 
-### Sidecar → JSON-RPC 2.0, NDJSON su stdio
+### Sidecar → JSON-RPC 2.0, NDJSON over stdio
 
-Una richiesta per riga, una risposta per riga. `id` numerico progressivo.
+One request per line, one response per line. Progressive numeric `id`.
 
 ```
 → {"jsonrpc":"2.0","id":1,"method":"ping","params":{}}
@@ -89,12 +97,12 @@ Una richiesta per riga, una risposta per riga. `id` numerico progressivo.
 ← {"jsonrpc":"2.0","method":"progress","params":{"job_id":"...","done":12,"total":340}}
 ```
 
-Errori: `{"jsonrpc":"2.0","id":N,"error":{"code":-32602,"message":"...","data":{...}}}`.
-Codici: `-32700` parse, `-32600` invalid request, `-32601` method not found,
+Errors: `{"jsonrpc":"2.0","id":N,"error":{"code":-32602,"message":"...","data":{...}}}`.
+Codes: `-32700` parse, `-32600` invalid request, `-32601` method not found,
 `-32602` invalid params, `-32603` internal, `1001` ingestion failure, `1002` pandoc failure,
 `1003` missing dependency.
 
-| Metodo | Params | Result |
+| Method | Params | Result |
 |---|---|---|
 | `ping` | `{}` | `{pong, version, python, platform}` |
 | `detect_format` | `{path}` | `{format: "epub"\|"pdf"\|"markdown", backends: [str]}` |
@@ -112,12 +120,12 @@ Codici: `-32700` parse, `-32600` invalid request, `-32601` method not found,
 `Chapter` = `{id, order, title, level, block_first, block_last}`
 `Finding` = `{kind, severity, block_id?, details{}}`
 
-Tipi di `kind` per i blocchi:
+Block `kind` values:
 `heading|para|list|blockquote|table|code|figure|footnote_def|hr|html`.
 
-Il sidecar è **senza stato**: nessuna cache tra chiamate, nessun DB, nessun file temporaneo
-oltre a quelli dichiarati in `work_dir`. Ogni metodo deve essere ripetibile senza effetti
-collaterali — è ciò che rende sicuro riavviare il sidecar e ri-inviare le richieste in volo.
+The sidecar is **stateless**: no cache between calls, no DB, no temporary files beyond those
+declared in `work_dir`. Every method must be repeatable with no side effects — that is what
+makes it safe to restart the sidecar and re-send in-flight requests.
 
 ### UI → Tauri
 
@@ -131,55 +139,55 @@ Events: `job://progress`, `log://line`, `metrics://tick`, `sidecar://status`, `e
 
 ---
 
-## Convenzioni per linguaggio
+## Per-language conventions
 
 ### Python (`sidecar/`)
 
-- **Python 3.12** (pin in `.python-version`). Non 3.14: `marker`/`torch` non hanno wheel.
-- Gestione progetto: `uv`. `uv sync --all-groups`, `uv run <cmd>`.
-- Lint/format: `ruff` con `select = ["ALL"]`, `ignore = ["D", "COM812"]`.
-- Tipi: `pyright` in modalità **strict**. Nessun `Any` non giustificato, nessun `# type: ignore`
-  senza commento che spieghi perché.
-- Test: `pytest` + `pytest-cov`.
-- `from __future__ import annotations` in ogni modulo.
-- Docstring solo dove il *perché* non è ovvio; niente commenti che ripetono il codice.
-- Struttura: pacchetto `llmtranslator_sidecar`, test in `sidecar/tests/`.
+- **Python 3.12** (pinned in `.python-version`). Not 3.14: `marker`/`torch` have no wheels.
+- Project management: `uv`. `uv sync --all-groups`, `uv run <cmd>`.
+- Lint/format: `ruff` with `select = ["ALL"]`, `ignore = ["D", "COM812"]`.
+- Types: `pyright` in **strict** mode. No unjustified `Any`, no `# type: ignore` without a
+  comment explaining why.
+- Tests: `pytest` + `pytest-cov`.
+- `from __future__ import annotations` in every module.
+- Docstrings only where the *why* is not obvious; no comments that restate the code.
+- Layout: `llmtranslator_sidecar` package, tests in `sidecar/tests/`.
 
 ### Rust (`crates/app/`)
 
-- `cargo fmt` + `cargo clippy -- -D warnings` puliti.
-- `sqlx` con query **runtime-checked** (`sqlx::query`), non le macro compile-time: evitano di
-  richiedere un database attivo in fase di build. Migrazioni embedded con `sqlx::migrate!`.
-- Errori: `thiserror` per gli errori di dominio, `anyhow` solo al bordo dei command handler.
-- Async su `tokio`. Nessun `unwrap()`/`expect()` su percorsi che possono fallire a runtime
-  (I/O, rete, parsing): solo dove l'invariante è garantita da costruzione, con commento.
-- Log con `tracing`, strutturato, mai `println!`.
+- `cargo fmt` + `cargo clippy -- -D warnings` clean.
+- `sqlx` with **runtime-checked** queries (`sqlx::query`), not the compile-time macros: they
+  avoid requiring a live database at build time. Embed migrations with `sqlx::migrate!`.
+- Errors: `thiserror` for domain errors, `anyhow` only at the edge of command handlers.
+- Async on `tokio`. No `unwrap()`/`expect()` on paths that can fail at runtime (I/O, network,
+  parsing): only where the invariant is guaranteed by construction, with a comment.
+- Logging with `tracing`, structured, never `println!`.
 
 ### TypeScript (`ui/`)
 
-- TypeScript strict, nessun `any`.
-- Nessuna chiamata di rete diretta: tutto passa da `invoke`/`listen` di `@tauri-apps/api`.
-- UI in **italiano**, codice e commenti in inglese.
+- Strict TypeScript, no `any`.
+- No direct network calls: everything goes through `invoke`/`listen` from `@tauri-apps/api`.
+- UI copy in **Italian**; code and comments in English.
 
 ---
 
-## Vincoli di prodotto (non negoziabili)
+## Product constraints (non-negotiable)
 
-- **Nessuna telemetria.** Nessuna chiamata di rete eccetto gli endpoint `llama-server`
-  configurati dall'utente. Nessun analytics, nessun crash reporter, nessun font o CDN remoto.
-- **Tutto offline.** L'app deve funzionare senza connessione.
-- **Nessun segreto nel database.** Le API key stanno nel keyring di sistema; nel DB solo un
-  riferimento.
-- Prompt e template Pandoc sono **dati dell'utente**: esternalizzati, copiati nello snapshot di
-  progetto, editabili. Mai hardcodarli nel codice.
-- Non introdurre dipendenze che richiedono una GPU o modelli scaricati nel percorso di default
-  (l'eccezione `marker` è un extra opzionale e resta fuori dal bundle).
+- **No telemetry.** No network calls other than the `llama-server` endpoints configured by the
+  user. No analytics, no crash reporter, no remote fonts or CDNs.
+- **Fully offline.** The app must work without a connection.
+- **No secrets in the database.** API keys live in the system keyring; the DB only holds a
+  reference.
+- Prompts and Pandoc templates are **user data**: externalised, copied into the project
+  snapshot, editable. Never hardcode them.
+- Do not introduce dependencies that need a GPU or downloaded models on the default path (the
+  `marker` exception is an optional extra and stays out of the bundle).
 
 ---
 
 ## Definition of done
 
-Un'unità di lavoro è finita quando **tutti** questi passano:
+A unit of work is finished when **all** of these pass:
 
 ```sh
 make lint      # ruff check + pyright + cargo clippy
@@ -187,6 +195,6 @@ make test      # pytest + cargo test
 make check     # lint + test + build UI + cargo check
 ```
 
-Nessuna eccezione. Non lasciare test rossi, non lasciare errori di tipo, non committare con
-`--no-verify`. Se un test esistente si rompe per una tua modifica, aggiustalo nello stesso
-commit o in uno immediatamente successivo — mai lasciarlo rotto.
+No exceptions. Do not leave failing tests, do not leave type errors, do not commit with
+`--no-verify`. If an existing test breaks because of your change, fix it in the same commit or
+in the one immediately after — never leave it broken.

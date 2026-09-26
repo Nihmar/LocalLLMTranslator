@@ -1,44 +1,43 @@
-# LocalLLMTranslator — Piano di architettura e implementazione
+# LocalLLMTranslator — Architecture and Implementation Plan
 
-> Stato: **piano approvato, implementazione non iniziata.**
-> Il `README.md` presente alla radice è residuo di una implementazione precedente, eliminata
-> volontariamente, e va riscritto da zero insieme al codice.
+> Status: **M0 complete, M1 in progress.** This document is the source of truth for the
+> architecture; the code follows it milestone by milestone.
 
 ---
 
-## 1. Decisioni prese
+## 1. Decisions made
 
-| Ambito | Scelta | Motivo |
+| Scope | Choice | Rationale |
 |---|---|---|
-| Shell desktop | **Tauri 2** (Rust) | Binario ~10 MB, RAM idle bassa, packaging cross-platform nativo (deb/AppImage/dmg/msi) |
-| Documenti | **Sidecar Python** (PyInstaller onedir) | PyMuPDF/ebooklib/lxml sono l'ecosistema maturo per EPUB/PDF; riscriverlo in Rust è settimane di lavoro a qualità inferiore |
-| IPC | **stdio, NDJSON, JSON-RPC 2.0** | Nessuna porta da allocare, nessun token da gestire, nessuna superficie di rete aggiuntiva; il sidecar è auto-riavviato dal supervisore Rust |
-| Motore LLM | **`llama-server` esterni** | L'utente avvia e tunna i server; l'app rileva endpoint, salute, modelli e slot |
-| Stato | **SQLite** (sqlx + migrazioni embedded) | Checkpoint, resume, cache, audit, coda job |
-| PDF | **Interfaccia pluggable**: `pymupdf4llm` default, `marker` opzionale | Default senza dipendenze pesanti; marker attivabile dove serve qualità layout |
-| Frontend | React + TS + Vite + Tailwind + CodeMirror 6 | CodeMirror 6 ha `@codemirror/merge` per il diff side-by-side richiesto |
-| Test | pytest + ruff + pyright (Python), cargo test + clippy + rustfmt (Rust), **fake llama-server** | CI deterministica e offline |
+| Desktop shell | **Tauri 2** (Rust) | ~10 MB binary, low idle RAM, native cross-platform packaging (deb/AppImage/dmg/msi) |
+| Documents | **Python sidecar** (PyInstaller onedir) | PyMuPDF/ebooklib/lxml are the mature ecosystem for EPUB/PDF; rewriting it in Rust is weeks of work at lower quality |
+| IPC | **stdio, NDJSON, JSON-RPC 2.0** | No port to allocate, no token to manage, no additional network surface; the sidecar is auto-restarted by the Rust supervisor |
+| LLM engine | **External `llama-server`** | The user starts and tunes the servers; the app detects endpoints, health, models and slots |
+| State | **SQLite** (sqlx + embedded migrations) | Checkpoints, resume, cache, audit, job queue |
+| PDF | **Pluggable interface**: `pymupdf4llm` default, `marker` optional | Default without heavy dependencies; marker can be enabled where layout quality matters |
+| Frontend | React + TS + Vite + Tailwind + CodeMirror 6 | CodeMirror 6 has `@codemirror/merge` for the required side-by-side diff |
+| Tests | pytest + ruff + pyright (Python), cargo test + clippy + rustfmt (Rust), **fake llama-server** | Deterministic, offline CI |
 
-**Vincoli di prodotto**: nessuna telemetria, nessuna chiamata di rete eccetto gli endpoint
-configurati, prompt e template editabili dall'utente, tutto funzionante offline.
+**Product constraints**: no telemetry, no network calls except the configured endpoints,
+user-editable prompts and templates, everything working offline.
 
-### Ambiente verificato sulla macchina di sviluppo
+### Environment verified on the development machine
 
-| Componente | Stato |
+| Component | Status |
 |---|---|
-| Python | 3.12.13 disponibile via `uv` (da preferire; `marker`/`torch` non hanno wheel per 3.14) |
+| Python | 3.12.13 available via `uv` (preferred; `marker`/`torch` have no wheels for 3.14) |
 | Rust / Node | cargo 1.97.1, node v26.8.2 |
 | Pandoc | 3.10.2 |
-| Dipendenze Tauri Linux | webkit2gtk-4.1, gtk+-3.0, libsoup-3.0, javascriptcoregtk-4.1 → tutte presenti |
-| GPU | AMD Radeon RX 9060 XT (Navi 44) — **niente NVIDIA**, VRAM leggibile da `/sys/class/drm/card1/device/mem_info_vram_{used,total}`; `rocm-smi` presente in `/opt/rocm/bin` |
-| `just` | **non installato** → si usa un `Makefile` |
+| Tauri Linux dependencies | webkit2gtk-4.1, gtk+-3.0, libsoup-3.0, javascriptcoregtk-4.1 → all present |
+| GPU | AMD Radeon RX 9060 XT (Navi 44) — **no NVIDIA**, VRAM readable from `/sys/class/drm/card1/device/mem_info_vram_{used,total}`; `rocm-smi` present in `/opt/rocm/bin` |
+| `just` | **not installed** → a `Makefile` is used |
 
-Conseguenza: la rilevazione VRAM deve provare **sysfs → rocm-smi → nvidia-smi**, in
-quest'ordine, e degradare a "sconosciuta" senza errori.
+Consequence: VRAM detection must try **sysfs → rocm-smi → nvidia-smi**, in this order, and
+degrade to "unknown" without errors.
 
 ---
 
-## 2. Architettura
+## 2. Architecture
 
 ```
 ┌────────────────────────────── Tauri 2 (Rust) ──────────────────────────────┐
@@ -46,7 +45,7 @@ quest'ordine, e degradare a "sconosciuta" senza errori.
 │                                                                             │
 │  ┌──────────────┐  ┌───────────────┐  ┌────────────────┐  ┌─────────────┐  │
 │  │  Scheduler   │  │ ResourceGov.  │  │ ContextBuilder │  │  QA Engine  │  │
-│  │ coda+lease   │  │ VRAM/slot cap │  │ budget+prompt  │  │  checks     │  │
+│  │ queue+lease  │  │ VRAM/slot cap │  │ budget+prompt  │  │  checks     │  │
 │  └──────┬───────┘  └───────┬───────┘  └────────┬───────┘  └──────┬──────┘  │
 │         └──────────────────┴───────────┬───────┴─────────────────┘         │
 │                                        │                                    │
@@ -57,7 +56,7 @@ quest'ordine, e degradare a "sconosciuta" senza errori.
 └────────────────────────────┼───────────────────┼─────────────────┼─────────┘
                              │                   │                 │
                       pandoc binary        llama-server ×N     Python sidecar
-                      (+ Lua filters)      (esterni)           (NDJSON RPC)
+                      (+ Lua filters)      (external)          (NDJSON RPC)
                                                                      │
                                     ┌────────────────────────────────┴──────┐
                                     │ extractors · markdown_ir · chunker    │
@@ -65,45 +64,45 @@ quest'ordine, e degradare a "sconosciuta" senza errori.
                                     └───────────────────────────────────────┘
 ```
 
-### Flusso dati
+### Data flow
 
 ```
-sorgente (EPUB/PDF/MD)
-  └─▶ [sidecar] extractor ─▶ markdown canonico + front-matter YAML
-        └─▶ [sidecar] markdown_ir ─▶ Block[] con id stabili
+source (EPUB/PDF/MD)
+  └─▶ [sidecar] extractor ─▶ canonical markdown + YAML front-matter
+        └─▶ [sidecar] markdown_ir ─▶ Block[] with stable ids
               └─▶ [sidecar] chunker ─▶ Chunk[] (block_ids, token_estimate)
                     └─▶ [sidecar] placeholder split ─▶ llm_text + PlaceholderMap
-                          └─▶ [Rust] ContextBuilder ─▶ prompt (prefix stabile)
-                                └─▶ [Rust] LlamaClient SSE ─▶ testo tradotto
-                                      └─▶ [sidecar] reinject + re-parse + allineamento
-                                            └─▶ block_translation[] (mappa originale↔tradotto)
-                                                  ├─▶ editor (bilingue)  ─▶ suggerimenti
-                                                  ├─▶ proofreader (target) ─▶ rifinitura
+                          └─▶ [Rust] ContextBuilder ─▶ prompt (stable prefix)
+                                └─▶ [Rust] LlamaClient SSE ─▶ translated text
+                                      └─▶ [sidecar] reinject + re-parse + alignment
+                                            └─▶ block_translation[] (original↔translated map)
+                                                  ├─▶ editor (bilingual)  ─▶ suggestions
+                                                  ├─▶ proofreader (target) ─▶ polish
                                                   └─▶ QA checks ─▶ qa_finding[]
                                                         └─▶ [Rust] Pandoc Driver ─▶ PDF/EPUB/DOCX
 ```
 
-### Perché il confine Rust/Python è dove è
+### Why the Rust/Python boundary is where it is
 
-- **Rust = control plane**: finestra, DB, coda, lease, budget risorse, chiamate HTTP/SSE,
-  orchestrazione delle fasi, eventi verso la UI. È la parte con concorrenza e stato, dove
-  Rust dà garanzie.
-- **Python = data plane**: formati di file, Markdown IR, chunking, placeholder, Pandoc,
-  euristiche QA. Sono funzioni **pure** (`input → output`): se il sidecar muore, ogni
-  richiesta è ripetibile senza effetti collaterali.
-- Conseguenza: il sidecar non tocca mai il DB e non conosce la coda. Un crash del sidecar
-  non compromette lo stato.
+- **Rust = control plane**: window, DB, queue, lease, resource budget, HTTP/SSE calls,
+  orchestration of the phases, events towards the UI. It is the part with concurrency and
+  state, where Rust provides guarantees.
+- **Python = data plane**: file formats, Markdown IR, chunking, placeholders, Pandoc,
+  QA heuristics. They are **pure** functions (`input → output`): if the sidecar dies, every
+  request is repeatable with no side effects.
+- Consequence: the sidecar never touches the DB and knows nothing about the queue. A sidecar
+  crash does not compromise the state.
 
 ---
 
-## 3. Struttura del repository
+## 3. Repository structure
 
 ```
 LocalLLMTranslator/
-├── README.md                      # riscritto da zero
-├── PLAN.md                        # questo documento
-├── AGENTS.md                      # convenzioni per agenti
-├── Makefile                       # dev, test, lint, build, bundle (just non installato)
+├── README.md                      # rewritten from scratch
+├── PLAN.md                        # this document
+├── AGENTS.md                      # conventions for agents
+├── Makefile                       # dev, test, lint, build, bundle (just not installed)
 ├── .github/workflows/ci.yml
 ├── crates/app/                    # Tauri 2
 │   ├── Cargo.toml
@@ -113,7 +112,7 @@ LocalLLMTranslator/
 │   ├── migrations/                # 0001_init.sql, ...
 │   └── src/
 │       ├── main.rs / lib.rs
-│       ├── commands/              # superficie IPC verso la UI
+│       ├── commands/              # IPC surface towards the UI
 │       ├── db/{mod,repo}.rs
 │       ├── llm/{client,models,health,slots}.rs
 │       ├── scheduler/{queue,lease,worker}.rs
@@ -130,7 +129,7 @@ LocalLLMTranslator/
 ├── sidecar/
 │   ├── pyproject.toml
 │   ├── llmtranslator_sidecar/
-│   │   ├── __main__.py            # server JSON-RPC su stdio
+│   │   ├── __main__.py            # JSON-RPC server over stdio
 │   │   ├── rpc.py
 │   │   ├── extractors/{base,epub,pdf_pymupdf,pdf_marker,markdown_src}.py
 │   │   ├── markdown_ir/{parse,serialize,blocks}.py
@@ -140,7 +139,7 @@ LocalLLMTranslator/
 │   │   ├── qa.py
 │   │   └── langs.py
 │   └── tests/
-├── prompts/                       # default spediti, copiati e resi editabili
+├── prompts/                       # shipped defaults, copied and made editable
 │   ├── translator.md translator.table.md
 │   ├── editor.md proofreader.md
 │   └── summarizer.md orchestrator.md
@@ -149,90 +148,89 @@ LocalLLMTranslator/
 │   ├── filters/{footnotes.lua,tables.lua,epub_cleanup.lua}
 │   └── styles/{book.css,book.tex}
 └── tools/
-    ├── fake_llama_server.py       # server OpenAI-compat deterministico per i test
-    └── make_fixtures.py           # genera EPUB/PDF di prova
+    ├── fake_llama_server.py       # deterministic OpenAI-compatible server for the tests
+    └── make_fixtures.py           # generates test EPUBs/PDFs
 ```
 
 ---
 
-## 4. Modello documentale: blocchi, chunk, placeholder
+## 4. Document model: blocks, chunks, placeholders
 
-Questa è la parte che decide se la struttura sopravvive a tre passaggi LLM.
-**Regola: il testo piatto non attraversa mai la pipeline; attraversa sempre una struttura
-indicizzata.**
+This is the part that decides whether the structure survives three LLM passes.
+**Rule: flat text never crosses the pipeline; it always crosses an indexed structure.**
 
-### 4.1 `Block` — unità atomica con ID stabile
+### 4.1 `Block` — atomic unit with a stable ID
 
 ```python
 @dataclass
 class Block:
-    id: str            # "b000417" — progressivo deterministico dall'ordine nel documento
+    id: str            # "b000417" — deterministic sequence number from the document order
     chapter_id: str
     order: int
     kind: str          # heading|para|list|blockquote|table|code|figure|footnote_def|hr|html
-    level: int         # livello heading o annidamento lista
-    source_md: str     # slice Markdown esatta
-    source_text: str   # testo effettivamente inviato al modello (marker di blocco rimossi dove serve)
+    level: int         # heading level or list nesting
+    source_md: str     # exact Markdown slice
+    source_text: str   # text actually sent to the model (block markers removed where needed)
     translatable: bool
     attrs: dict        # {"text_prefix": "## ", "ordered": true, "align": [...], "lang": "sql", "ref": "^3"}
-    content_hash: str  # sha256(source_text canonico) — per cache e rilevamento modifiche
+    content_hash: str  # sha256(canonical source_text) — for cache and change detection
 ```
 
-- **ID stabili**: `b{order:06d}`. Deterministici, sopravvivono a resume, export/import e
-  ri-estrazione dello stesso file. Nessun UUID casuale.
-- **Non traducibili**: `code`, `hr`, `html`, `figure`. Restano nel flusso, il chunker li
-  attraversa senza inviarli.
-- **Tabelle**: un solo `Block` con `kind="table"`, `source_md` completo, prompt dedicato.
+- **Stable IDs**: `b{order:06d}`. Deterministic, they survive resume, export/import and
+  re-extraction of the same file. No random UUIDs.
+- **Non-translatable**: `code`, `hr`, `html`, `figure`. They stay in the flow; the chunker
+  passes through them without sending them.
+- **Tables**: a single `Block` with `kind="table"`, full `source_md`, dedicated prompt.
 
-**Segmentazione guidata dal sorgente, non da un AST.** Il parser è un line-scanner che conserva
-le slice esatte del Markdown originale, così `serialize(parse(md)) == md` è un'invariante
-testabile. Un parser che produce un AST e lo ri-serializza normalizzerebbe il Markdown,
-rompendo la fedeltà sui blocchi non tradotti.
+**Source-guided segmentation, not AST-guided.** The parser is a line-scanner that preserves
+the exact slices of the original Markdown, so `serialize(parse(md)) == md` is a testable
+invariant. A parser that produces an AST and re-serializes it would normalize the Markdown,
+breaking fidelity on non-translated blocks.
 
-Unità di segmentazione: fenced code block (con info string), heading ATX, tabella GFM
-(riga di celle + riga delimitatrice), lista contigua (tutti gli item, marker preservati),
-blockquote contiguo, definizione di nota, blocco HTML, horizontal rule, paragrafo.
+Segmentation units: fenced code block (with info string), ATX heading, GFM table
+(cell row + delimiter row), contiguous list (all items, markers preserved),
+contiguous blockquote, footnote definition, HTML block, horizontal rule, paragraph.
 
-Scelte di granularità per l'MVP, con motivazione:
+Granularity choices for the MVP, with rationale:
 
-- **Lista intera = un blocco** (non un blocco per item): tradurre la lista come unità mantiene
-  numero di item e marker stabili e lascia al modello i riferimenti incrociati tra item.
-  Il chunker potrà spezzare liste troppo grandi per item in una milestone successiva.
-- **Blockquote intero = un blocco**, stesso ragionamento.
-- **Heading**: i `#` vengono rimossi dal testo inviato e ricostruiti da `attrs.text_prefix`,
-  così il modello non può cambiare il livello del titolo.
+- **Whole list = one block** (not one block per item): translating the list as a unit keeps the
+  number of items and the markers stable and leaves the cross-references between items to the
+  model. The chunker will be able to split lists that are too large by item in a later milestone.
+- **Whole blockquote = one block**, same reasoning.
+- **Heading**: the `#` are removed from the text sent and rebuilt from `attrs.text_prefix`,
+  so the model cannot change the heading level.
 
-Due funzioni distinte:
+Two distinct functions:
 
-- `serialize(blocks) -> str` — ricostruzione **identica** del sorgente (invariante + documenti
-  senza traduzione). Richiede di conservare, per ogni blocco, il numero di righe vuote che lo
-  separavano dal successivo.
-- `render(blocks, translations) -> str` — costruzione dell'output: per ogni blocco traducibile
-  con traduzione disponibile emette `attrs.text_prefix + traduzione`, altrimenti emette
-  `source_md` invariato.
+- `serialize(blocks) -> str` — **identical** reconstruction of the source (invariant + documents
+  without translation). It requires preserving, for each block, the number of blank lines that
+  separated it from the next one.
+- `render(blocks, translations) -> str` — construction of the output: for each translatable block
+  with an available translation it emits `attrs.text_prefix + translation`, otherwise it emits
+  the unchanged `source_md`.
 
-### 4.2 Placeholder inline — perché il Markdown non si corrompe
+### 4.2 Inline placeholders — why the Markdown does not get corrupted
 
-Prima di inviare testo al modello, gli elementi inline vengono sostituiti con token opachi `⟦n⟧`:
+Before sending text to the model, inline elements are replaced with opaque tokens `⟦n⟧`:
 
-| Sorgente | Testo inviato | Mappa |
+| Source | Text sent | Map |
 |---|---|---|
-| `**La città**` | `⟦1⟧La città⟦2⟧` | 1=`**`, 2=`**` (delimitatori) |
-| `[il re](https://x.org/a)` | `⟦3⟧il re⟦4⟧` | 3=`[`, 4=`](https://x.org/a)` — **l'URL non entra mai nel prompt** |
-| `` `x = 1` `` | `⟦5⟧` | 5=span opaco, testo invariato |
-| `[^3]` | `⟦6⟧` | 6=riferimento nota |
-| `$E=mc^2$` | `⟦7⟧` | 7=math opaco |
+| `**The city**` | `⟦1⟧The city⟦2⟧` | 1=`**`, 2=`**` (delimiters) |
+| `[the king](https://x.org/a)` | `⟦3⟧the king⟦4⟧` | 3=`[`, 4=`](https://x.org/a)` — **the URL never enters the prompt** |
+| `` `x = 1` `` | `⟦5⟧` | 5=opaque span, text unchanged |
+| `[^3]` | `⟦6⟧` | 6=footnote reference |
+| `$E=mc^2$` | `⟦7⟧` | 7=opaque math |
 
-Vantaggi: URL, codice inline, math e note non possono essere tradotti né corrotti; il modello
-vede solo prosa. La mappa è una **funzione pura** di `source_text`, quindi non va persistita —
-si rigenera identica.
+Advantages: URLs, inline code, math and notes cannot be translated or corrupted; the model
+sees only prose. The map is a **pure function** of `source_text`, so it does not need to be
+persisted — it is regenerated identically.
 
-Validazione post-traduzione: ogni placeholder deve comparire **esattamente una volta**. Se
-manca o è duplicato → retry con messaggio che elenca i token mancanti → poi fallback a
-"Markdown grezzo, preserva la formattazione" → poi `qa_finding` per revisione manuale. Se
-l'insieme è completo ma l'ordine è alterato, riparazione automatica riordinando per indice.
+Post-translation validation: every placeholder must appear **exactly once**. If it is missing
+or duplicated → retry with a message listing the missing tokens → then fallback to
+"raw Markdown, preserve the formatting" → then `qa_finding` for manual review. If the set
+is complete but the order is altered, automatic repair by reordering by index.
 
-### 4.3 `Chunk` — unità di lavoro e di checkpoint
+### 4.3 `Chunk` — unit of work and of checkpoint
 
 ```python
 @dataclass
@@ -240,18 +238,18 @@ class Chunk:
     id: str                 # "c000123"
     chapter_id: str
     order: int
-    block_ids: list[str]    # blocchi contenuti, in ordine
-    source_md: str          # ricomposizione dei blocchi
+    block_ids: list[str]    # contained blocks, in order
+    source_md: str          # recomposition of the blocks
     token_estimate: int
-    context_carrier: dict   # catena di heading corrente, per orientare il modello
+    context_carrier: dict   # current heading chain, to orient the model
     flags: list[str]        # ["table", "table_part:2/3", "continues", "oversized"]
 ```
 
-Il chunk **non** è mai un taglio a numero fisso di caratteri: è sempre una lista di blocchi interi.
+A chunk is **never** a cut at a fixed number of characters: it is always a list of whole blocks.
 
 ---
 
-## 5. Schema SQLite
+## 5. SQLite schema
 
 ```sql
 CREATE TABLE project (
@@ -259,7 +257,7 @@ CREATE TABLE project (
   source_path TEXT NOT NULL, source_hash TEXT NOT NULL,
   source_format TEXT NOT NULL, source_lang TEXT, target_lang TEXT NOT NULL,
   doc_title TEXT, doc_author TEXT,
-  prompts_snapshot_dir TEXT,            -- copia dei prompt usati → riproducibilità
+  prompts_snapshot_dir TEXT,            -- copy of the prompts used → reproducibility
   settings_json TEXT NOT NULL DEFAULT '{}',
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
@@ -297,13 +295,13 @@ CREATE TABLE chunk (
   flags_json TEXT NOT NULL DEFAULT '[]',
   status TEXT NOT NULL DEFAULT 'pending',   -- pending|running|done|failed|needs_review
   prompt_hash TEXT, model_id TEXT, params_json TEXT,
-  context_manifest_json TEXT,               -- hash dei pezzi di contesto iniettati
+  context_manifest_json TEXT,               -- hash of the injected context pieces
   target_md TEXT, error TEXT,
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
 CREATE INDEX idx_chunk_status ON chunk(status, order_index);
 
-CREATE TABLE block_translation (            -- mappa originale ↔ traduzione
+CREATE TABLE block_translation (            -- original ↔ translation map
   block_id TEXT NOT NULL REFERENCES block(id) ON DELETE CASCADE,
   chunk_id TEXT NOT NULL REFERENCES chunk(id) ON DELETE CASCADE,
   text_md TEXT NOT NULL, placeholders_ok INTEGER NOT NULL DEFAULT 1,
@@ -312,7 +310,7 @@ CREATE TABLE block_translation (            -- mappa originale ↔ traduzione
   PRIMARY KEY (block_id, origin)
 );
 
-CREATE TABLE suggestion (                   -- proposte di editor/proofreader
+CREATE TABLE suggestion (                   -- editor/proofreader proposals
   id TEXT PRIMARY KEY, chunk_id TEXT NOT NULL REFERENCES chunk(id) ON DELETE CASCADE,
   pass TEXT NOT NULL,                       -- editor|proofreader
   block_id TEXT, field TEXT, original TEXT, proposed TEXT,
@@ -335,7 +333,7 @@ CREATE TABLE glossary_term (
   source TEXT NOT NULL, target TEXT NOT NULL, note TEXT,
   kind TEXT NOT NULL DEFAULT 'term',        -- term|proper_noun|do_not_translate
   origin TEXT NOT NULL DEFAULT 'manual',    -- manual|proposed|imported
-  revision INTEGER NOT NULL DEFAULT 1,      -- lock ottimistico
+  revision INTEGER NOT NULL DEFAULT 1,      -- optimistic lock
   status TEXT NOT NULL DEFAULT 'approved',  -- approved|candidate|conflict|rejected
   UNIQUE(project_id, source_lang, target_lang, source)
 );
@@ -348,7 +346,7 @@ CREATE TABLE project_memory (
 
 CREATE TABLE llm_endpoint (
   id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, base_url TEXT NOT NULL,
-  api_key_ref TEXT,                         -- nome nel keyring, mai il segreto in chiaro
+  api_key_ref TEXT,                         -- keyring name, never the secret in plaintext
   max_concurrency INTEGER, notes TEXT,
   last_health_at TEXT, last_health_ok INTEGER, props_json TEXT
 );
@@ -373,7 +371,7 @@ CREATE TABLE job (
 );
 CREATE INDEX idx_job_claim ON job(state, priority, created_at);
 
-CREATE TABLE llm_call (                     -- audit + riproducibilità
+CREATE TABLE llm_call (                     -- audit + reproducibility
   id TEXT PRIMARY KEY, job_id TEXT, chunk_id TEXT, role TEXT NOT NULL,
   endpoint_id TEXT, model TEXT NOT NULL, params_json TEXT NOT NULL,
   seed INTEGER, prompt_hash TEXT NOT NULL, prompt_text TEXT, prompt_compressed INTEGER DEFAULT 0,
@@ -391,87 +389,87 @@ CREATE TABLE translation_cache (
   PRIMARY KEY (prompt_hash, model, params_hash, target_lang)
 );
 
-CREATE TABLE translation_memory (           -- riuso di blocchi identici
+CREATE TABLE translation_memory (           -- reuse of identical blocks
   content_hash TEXT NOT NULL, model TEXT NOT NULL, target_lang TEXT NOT NULL,
   text_md TEXT NOT NULL, hits INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL,
   PRIMARY KEY (content_hash, model, target_lang)
 );
 ```
 
-Cache a due livelli: `translation_cache` è esatta sul prompt completo (copia-incolla su
-retry/resume), `translation_memory` riusa blocchi identici già accettati (testatine, paragrafi
-ripetuti, frontespizi) senza nemmeno chiamare il modello.
+Two-level cache: `translation_cache` is exact on the full prompt (copy-paste on
+retry/resume), `translation_memory` reuses identical blocks already accepted (running heads,
+repeated paragraphs, title pages) without even calling the model.
 
 ---
 
-## 6. Job, checkpoint, idempotenza
+## 6. Jobs, checkpoints, idempotency
 
 - **Claim**: `UPDATE job SET state='leased', lease_owner=?, lease_expires_at=now+90s WHERE id =
   (SELECT id FROM job WHERE state='pending' AND run_after<=now ORDER BY priority, created_at
-  LIMIT 1) RETURNING *`. Lease rinnovato con heartbeat; scaduto → reaper lo riporta a `pending`
-  con `attempts+1`.
-- **Idempotenza**: ogni scrittura di risultato è un upsert chiavato sull'identità del lavoro
-  (`chunk_id` + `prompt_hash`). Rieseguire un job già completato non produce effetti.
-- **Crash recovery**: all'avvio il reaper libera i lease scaduti; ingestione ed export scrivono
-  su file temporanei e fanno `rename` atomico; il sidecar viene riavviato e le richieste in volo
-  (pure) sono re-inviate.
-- **Ripresa selettiva**: si può rilanciare un singolo chunk, un capitolo, o "tutti i chunk
+  LIMIT 1) RETURNING *`. Lease renewed with a heartbeat; expired → the reaper puts it back to
+  `pending` with `attempts+1`.
+- **Idempotency**: every result write is an upsert keyed on the work identity
+  (`chunk_id` + `prompt_hash`). Re-running an already completed job has no effect.
+- **Crash recovery**: on startup the reaper frees the expired leases; ingestion and export write
+  to temporary files and do an atomic `rename`; the sidecar is restarted and the in-flight
+  requests (pure) are re-sent.
+- **Selective resumption**: you can re-run a single chunk, a chapter, or "all chunks
   `failed`/`needs_review`".
-- **Export/import progetto**: `.llmtz` = zip con `project.sqlite` (copia via `VACUUM INTO`),
+- **Project export/import**: `.llmtz` = zip with `project.sqlite` (copy via `VACUUM INTO`),
   `markdown/`, `output/`, `prompts/` snapshot.
 
 ---
 
-## 7. Layer LLM
+## 7. LLM layer
 
 ### 7.1 Client
 
-`LlamaClient` (Rust) su `reqwest`:
+`LlamaClient` (Rust) on `reqwest`:
 
 - `health()` → `GET /health`
 - `props()` → `GET /props` → `total_slots`, `n_ctx`, `default_generation_settings`, `model_path`
 - `models()` → `GET /v1/models`
-- `tokenize(text)` → `POST /tokenize` (**conteggio token esatto**, non euristico), con fallback
-  euristico `len/3.5` quando l'endpoint non lo espone
-- `chat_stream(req) -> Stream<Delta>` → `POST /v1/chat/completions` con `stream: true`, parsing
-  SSE, supporto `response_format: json_schema` e `grammar` (GBNF) per editor e proofreader
+- `tokenize(text)` → `POST /tokenize` (**exact token count**, not heuristic), with a heuristic
+  fallback `len/3.5` when the endpoint does not expose it
+- `chat_stream(req) -> Stream<Delta>` → `POST /v1/chat/completions` with `stream: true`, SSE
+  parsing, support for `response_format: json_schema` and `grammar` (GBNF) for editor and proofreader
 
-Limite di concorrenza per endpoint = `min(role_binding.max_concurrency, props.total_slots)`.
+Concurrency limit per endpoint = `min(role_binding.max_concurrency, props.total_slots)`.
 
-### 7.2 Stabilità del prefisso (importante per le prestazioni)
+### 7.2 Prefix stability (important for performance)
 
-`llama-server` riusa il KV cache del prefisso comune tra richieste. Il prompt è quindi
-strutturato **apposta**:
+`llama-server` reuses the KV cache of the common prefix between requests. The prompt is
+therefore structured **on purpose**:
 
-- **System message byte-identico per tutto il libro**: ruolo, regole, `style_guide`, glossario
-  (ordinato deterministicamente per `source`), metadati libro → cache hit garantito.
-- **User message volatile**: `chapter_title`, `chapter_summary_so_far`, `previous_context`,
-  `text` → è l'unica parte che invalida il cache.
+- **System message byte-identical for the whole book**: role, rules, `style_guide`, glossary
+  (ordered deterministically by `source`), book metadata → guaranteed cache hit.
+- **Volatile user message**: `chapter_title`, `chapter_summary_so_far`, `previous_context`,
+  `text` → it is the only part that invalidates the cache.
 
-Effetto: dal secondo chunk in poi il prefill costa quasi nulla. Conseguenza pratica: **mai**
-inserire timestamp, `chunk_id` o contatori nel system message.
+Effect: from the second chunk onwards the prefill costs almost nothing. Practical consequence:
+**never** put timestamps, `chunk_id` or counters in the system message.
 
-### 7.3 Configurazione consigliata dei server (documentata nel README)
+### 7.3 Recommended server configuration (documented in the README)
 
 ```sh
-# Traduttore — contesto ampio, 4 slot paralleli
+# Translator — large context, 4 parallel slots
 llama-server -m models/qwen2.5-32b-instruct-q5_k_m.gguf \
   --host 127.0.0.1 --port 8080 -c 32768 --parallel 4 --cont-batching \
   --cache-reuse 256 --jinja --n-gpu-layers 999 --flash-attn --metrics
 
-# Editor / proofreader — modello più piccolo, stesso server o secondo endpoint
+# Editor / proofreader — smaller model, same server or second endpoint
 llama-server -m models/qwen2.5-14b-instruct-q6_k.gguf \
   --host 127.0.0.1 --port 8081 -c 16384 --parallel 2 --cont-batching --jinja
 ```
 
 ---
 
-## 8. Prompt template
+## 8. Prompt templates
 
-Formato **Jinja2** (resi in Rust con `minijinja`, così Python e Rust usano gli stessi file).
-Default in `prompts/`, copiati nello snapshot di progetto e resi editabili dalla UI.
+**Jinja2** format (rendered in Rust with `minijinja`, so Python and Rust use the same files).
+Defaults in `prompts/`, copied into the project snapshot and made editable from the UI.
 
-### `prompts/translator.md` (system — stabile)
+### `prompts/translator.md` (system — stable)
 
 ```jinja
 You are a professional literary translator. You translate from {{ source_language }} into {{ target_language }}.
@@ -512,7 +510,7 @@ PASSAGE TO TRANSLATE:
 
 ### `prompts/translator.table.md`
 
-Stessa intestazione, più:
+Same header, plus:
 
 ```
 TABLE RULES
@@ -533,7 +531,7 @@ Report an issue only if you are confident; an empty issue list is a valid answer
 Reply with JSON only.
 ```
 
-Schema di risposta (`response_format: json_schema`):
+Response schema (`response_format: json_schema`):
 
 ```json
 {"type":"object","properties":{
@@ -547,7 +545,7 @@ Schema di risposta (`response_format: json_schema`):
  "required":["verdict","issues"]}
 ```
 
-### `prompts/proofreader.md` (solo lingua target)
+### `prompts/proofreader.md` (target language only)
 
 ```jinja
 You are a monolingual proofreader for {{ target_language }}.
@@ -558,7 +556,7 @@ Do NOT alter Markdown structure, code spans, URLs or table pipes.
 Output only the corrected text, with no commentary and no code fences.
 ```
 
-### `prompts/summarizer.md` (memoria rolling — ruolo orchestrator)
+### `prompts/summarizer.md` (rolling memory — orchestrator role)
 
 ```jinja
 You maintain the memory of a translation project ({{ source_language }} → {{ target_language }}).
@@ -569,115 +567,116 @@ From the chapter excerpt below produce JSON only:
 Output at most 8 new_terms, only terms that recur or matter.
 ```
 
-Le `new_terms` entrano in `glossary_term` come `status='candidate'`: la conferma è dell'utente
-(o automatica, se configurata). È il meccanismo che soddisfa "memoria delle scelte terminologiche
-già fatte".
+The `new_terms` enter `glossary_term` as `status='candidate'`: confirmation is up to the user
+(or automatic, if configured). It is the mechanism that satisfies "memory of the terminological
+choices already made".
 
 ---
 
-## 9. Chunking e gestione del contesto
+## 9. Chunking and context management
 
-### 9.1 Algoritmo di chunking
+### 9.1 Chunking algorithm
 
-1. Raggruppa i blocchi per capitolo.
-2. Accumula blocchi finché `token_estimate ≤ budget` (budget = `n_ctx − riserva_prompt −
-   riserva_output`, default 60% di `n_ctx` — valore letto da `/props`, non da config).
-3. **Mai spezzare** una tabella, un code block o un blockquote con la sua nota; se il blocco è
-   a cavallo del limite, chiudi il chunk prima.
-4. Tabella più grande del budget → split per righe con **header ripetuto** in ogni parte e flag
-   `table_part:i/n`; il prompt lo dichiara esplicitamente.
-5. Paragrafo più grande del budget → split a confini di frase, flag `continues:true`, e il chunk
-   successivo riceve la coda del precedente come contesto.
-6. Ogni chunk porta con sé `context_carrier`: la catena di heading (H1 → H2 → H3) in cui si trova.
+1. Group blocks by chapter.
+2. Accumulate blocks until `token_estimate ≤ budget` (budget = `n_ctx − prompt_reserve −
+   output_reserve`, default 60% of `n_ctx` — a value read from `/props`, not from config).
+3. **Never split** a table, a code block or a blockquote with its footnote; if the block
+   straddles the limit, close the chunk first.
+4. Table larger than the budget → split by rows with the **header repeated** in every part and
+   flag `table_part:i/n`; the prompt states this explicitly.
+5. Paragraph larger than the budget → split at sentence boundaries, flag `continues:true`, and the
+   next chunk receives the tail of the previous one as context.
+6. Each chunk carries `context_carrier`: the chain of headings (H1 → H2 → H3) it sits in.
 
-**Esempio** (budget 6000 token):
+**Example** (budget 6000 tokens):
 
-| Blocco | Tipo | Token | Esito |
+| Block | Type | Token | Outcome |
 |---|---|---|---|
 | b000101 | h2 "Chapter 3 — The Siege" | 12 | chunk c000041 |
 | b000102 | para | 480 | chunk c000041 |
 | b000103 | blockquote + `[^3]` | 320 | chunk c000041 |
 | b000104 | table 4×3 | 380 | chunk c000041 |
-| b000105 | para | 1450 | chunk c000041 (tot. 2642) |
-| b000106 | code ```sql | 210 | attraversato, **non inviato** |
-| b000107 | para | 3900 | chunk c000042 (`continues` se spezzato) |
+| b000105 | para | 1450 | chunk c000041 (total 2642) |
+| b000106 | code ```sql | 210 | skipped, **not sent** |
+| b000107 | para | 3900 | chunk c000042 (`continues` if split) |
 | b000108 | para | 600 | chunk c000043 |
 
-### 9.2 ContextAssembler — budget con priorità
+### 9.2 ContextAssembler — budget with priorities
 
-A parità di token disponibili, il contesto si riempie in quest'ordine e si tronca dall'ultimo:
+With a given number of available tokens, the context is filled in this order and truncated from
+the last:
 
-| Priorità | Componente | Fonte | Persistenza |
+| Priority | Component | Source | Persistence |
 |---|---|---|---|
-| 1 | System prompt + regole + style guide | `prompts/translator.md`, `project_memory.style_guide` | stabile per il libro |
-| 2 | Glossario **pertinente** (solo i termini presenti nel testo di questo chunk) | `glossary_term` | stabile, ordinato |
-| 3 | Sinossi libro | `project_memory.synopsis` | stabile |
-| 4 | Riassunto dei capitoli precedenti (finestra 3) | `chapter.summary` | per capitolo |
-| 5 | Riassunto del capitolo corrente fino a qui | generato ogni N chunk | crescente |
-| 6 | Coda dell'ultimo passaggio tradotto | runtime | volatile |
+| 1 | System prompt + rules + style guide | `prompts/translator.md`, `project_memory.style_guide` | stable for the book |
+| 2 | **Relevant** glossary (only the terms present in the text of this chunk) | `glossary_term` | stable, ordered |
+| 3 | Book synopsis | `project_memory.synopsis` | stable |
+| 4 | Summary of the previous chapters (window 3) | `chapter.summary` | per chapter |
+| 5 | Summary of the current chapter up to here | generated every N chunks | growing |
+| 6 | Tail of the last translated passage | runtime | volatile |
 
-Iniettare l'intero glossario sarebbe un errore: su un libro con 400 termini divora il contesto.
-Il filtro "termini presenti in questo chunk" è ciò che rende il glossario scalabile.
+Injecting the entire glossary would be a mistake: on a book with 400 terms it devours the
+context. The "terms present in this chunk" filter is what makes the glossary scalable.
 
-### 9.3 Contesto e cache
+### 9.3 Context and cache
 
-Il `prompt_hash` copre il prompt completo (system + user): il contesto volatile **fa parte**
-dell'hash, quindi due chunk identici in contesti diversi non condividono la cache esatta, ed è
-corretto. Il riuso economico avviene a livello di `translation_memory` (blocco identico → stessa
-traduzione, zero chiamate) e di KV cache del server (prefisso system identico).
+The `prompt_hash` covers the full prompt (system + user): the volatile context **is part of**
+the hash, so two identical chunks in different contexts do not share the exact cache, and that
+is correct. The cheap reuse happens at the level of `translation_memory` (identical block → same
+translation, zero calls) and of the server's KV cache (identical system prefix).
 
 ---
 
-## 10. Concorrenza e sub-agenti
+## 10. Concurrency and sub-agents
 
-- **Unità di parallelismo**: il chunk. La coda è globale, la concorrenza è per endpoint.
-- **ResourceGovernor** (solo lettura, nessuna dipendenza da driver):
+- **Unit of parallelism**: the chunk. The queue is global, concurrency is per endpoint.
+- **ResourceGovernor** (read-only, no driver dependency):
   - VRAM: sysfs (`/sys/class/drm/card*/device/mem_info_vram_{used,total}`) → `rocm-smi` →
-    `nvidia-smi` → "sconosciuta". *(sulla macchina di sviluppo: AMD, quindi sysfs/rocm)*
-  - Slot: `/props.total_slots`; fallback `llm_endpoint.max_concurrency`.
-  - `max_parallel = min(slot_liberi, floor(headroom_VRAM / costo_stimato_per_slot), limite_utente)`.
-  - Se `max_parallel < 2` → **degradazione a seriale senza errore**, con evento UI e motivo esplicito.
-- **Ordinamento**: priorità = ordine capitolo (la traduzione sequenziale ha senso per la
-  coerenza), i job dell'utente in testa, i retry in coda.
-- **Glossario concorrente**: i sub-agenti **propongono** termini, non li impongono.
-  `glossary_term.revision` + `status='candidate'`; se due agenti propongono rese diverse per lo
-  stesso termine → entrambe salvate come `candidate` e una `qa_finding(kind='glossary_conflict')`
-  da risolvere in UI. Nessun lock bloccante, nessuna scrittura persa.
-- **Determinismo**: il seeding deriva da `hash(chunk_id, role)` → stabile tra esecuzioni seriali
-  e parallele.
+    `nvidia-smi` → "unknown". *(on the development machine: AMD, therefore sysfs/rocm)*
+  - Slots: `/props.total_slots`; fallback `llm_endpoint.max_concurrency`.
+  - `max_parallel = min(free_slots, floor(VRAM_headroom / estimated_cost_per_slot), user_limit)`.
+  - If `max_parallel < 2` → **degradation to serial without error**, with a UI event and an explicit reason.
+- **Ordering**: priority = chapter order (sequential translation makes sense for
+  coherence), the user's jobs at the front, the retries at the back.
+- **Concurrent glossary**: the sub-agents **propose** terms, they do not impose them.
+  `glossary_term.revision` + `status='candidate'`; if two agents propose different renderings for
+  the same term → both saved as `candidate` and a `qa_finding(kind='glossary_conflict')`
+  to be resolved in the UI. No blocking lock, no lost writes.
+- **Determinism**: the seeding derives from `hash(chunk_id, role)` → stable across serial and
+  parallel runs.
 
 ---
 
-## 11. Interfaccia utente
+## 11. User interface
 
-Wizard a 5 step, ma ogni step è una rotta visitabile liberamente (non un vincolo):
+A 5-step wizard, but each step is a freely visitable route (not a constraint):
 
-1. **Ingestione** — drag&drop, rilevamento formato, anteprima capitoli e blocchi, scelta backend
-   PDF, esito estrazione con avvisi.
-2. **Modelli** — CRUD endpoint (URL, health-check, lista modelli da `/v1/models`, `props`),
-   assegnazione ruoli, profili salvabili, indicatore VRAM/slot.
-3. **Traduzione** — tabella chunk (`pending/running/done/failed/needs_review`) con token,
-   tentativi, modello; avvio/pausa/riprendi; log live; gauge risorse; azioni su selezione
-   multipla (retry, salta, ri-traduci con altro modello).
-4. **Revisione** — editor side-by-side a 3 colonne (originale / tradotto / corretto) con diff a
-   livello di blocco e di carattere, navigazione per suggerimento, accetta/rifiuta per singola
-   modifica, e report QA filtrabile.
-5. **Export** — unità per capitolo, `metadata.yaml`, scelta template/CSS/LaTeX, anteprima,
-   rebuild selettivo del solo capitolo modificato, cronologia build.
+1. **Ingestion** — drag&drop, format detection, chapter and block preview, PDF backend
+   choice, extraction result with warnings.
+2. **Models** — endpoint CRUD (URL, health-check, model list from `/v1/models`, `props`),
+   role assignment, savable profiles, VRAM/slot indicator.
+3. **Translation** — chunk table (`pending/running/done/failed/needs_review`) with tokens,
+   attempts, model; start/pause/resume; live log; resource gauge; actions on multiple
+   selection (retry, skip, re-translate with another model).
+4. **Review** — 3-column side-by-side editor (original / translated / corrected) with block-level
+   and character-level diff, navigation by suggestion, accept/reject per individual
+   change, and a filterable QA report.
+5. **Export** — per-chapter unit, `metadata.yaml`, template/CSS/LaTeX choice, preview,
+   selective rebuild of only the modified chapter, build history.
 
-Più: **Dashboard job** (progresso per chunk, ETA calcolata dal throughput reale, log, risorse) e
-**Progetti** (multipli, riprendi, esporta/importa `.llmtz`).
+Plus: **Job dashboard** (per-chunk progress, ETA computed from the real throughput, log, resources)
+and **Projects** (multiple, resume, export/import `.llmtz`).
 
 ---
 
-## 12. Contratto IPC
+## 12. IPC contract
 
-### 12.1 Sidecar (NDJSON su stdio, JSON-RPC 2.0)
+### 12.1 Sidecar (NDJSON over stdio, JSON-RPC 2.0)
 
-Richieste `{"jsonrpc":"2.0","id":N,"method":"...","params":{...}}`; risposte `result` o
-`error`; notifiche server→client per il progresso. Metodi previsti:
+Requests `{"jsonrpc":"2.0","id":N,"method":"...","params":{...}}`; responses `result` or
+`error`; server→client notifications for progress. Planned methods:
 
-| Metodo | Ritorno |
+| Method | Return |
 |---|---|
 | `ping` | `{pong, version, python, platform}` |
 | `detect_format` | `{format, backends[]}` |
@@ -688,10 +687,10 @@ Richieste `{"jsonrpc":"2.0","id":N,"method":"...","params":{...}}`; risposte `re
 | `reinject` | `{blocks_md[], placeholders_ok, missing[], duplicated[]}` |
 | `qa_check` | `{findings[]}` |
 | `pandoc_build` | `{output_path, log}` |
-| `estimate_tokens` | `{counts[]}` (fallback euristico, usato se `/tokenize` non c'è) |
+| `estimate_tokens` | `{counts[]}` (heuristic fallback, used if `/tokenize` is not available) |
 
-Il sidecar è **senza stato** e non tocca il DB: ogni metodo è una funzione pura. Questo è ciò che
-rende sicuro riavviarlo e ri-inviare le richieste in volo.
+The sidecar is **stateless** and does not touch the DB: every method is a pure function. This is
+what makes it safe to restart it and re-send the in-flight requests.
 
 ### 12.2 Tauri (commands + events)
 
@@ -703,58 +702,58 @@ rende sicuro riavviarlo e ri-inviare le richieste in volo.
 
 ---
 
-## 13. Milestone
+## 13. Milestones
 
-| # | Contenuto | Criterio di accettazione |
+| # | Content | Acceptance criterion |
 |---|---|---|
-| **M0** | Repo, `Makefile`, CI (ruff/pyright/pytest + cargo fmt/clippy/test), finestra Tauri, sidecar con `ping`, migrazioni SQLite, `AGENTS.md`, README riscritto | `make check` verde, app vuota che si apre su Linux |
-| **M1** | **Walking skeleton end-to-end**: EPUB → Markdown → `Block[]` → `Chunk[]` → placeholder → traduzione con il solo ruolo *translator* → persistenza + resume → Pandoc → EPUB/PDF. UI minima: crea progetto, scegli file, endpoint, avvia, progresso, apri output | EPUB tradotto; interruzione a metà e ripresa senza perdita di struttura; PDF ed EPUB generati |
-| **M2** | Ingestione robusta: PDF `pymupdf4llm` dietro interfaccia `PdfExtractor`, note a piè di pagina, tavole, immagini, front-matter YAML, ancore e ID stabili, `pdf_marker.py` opzionale | Note e immagini presenti e integre nell'output; ID stabili tra due estrazioni |
-| **M3** | Contesto e memoria: glossario, sinossi, riassunti rolling, style guide, ContextAssembler con budget, `/tokenize`, `translation_cache` + `translation_memory` | Chunk ripetuti non richiamano il modello; il glossario compare nel prompt solo per i termini presenti |
-| **M4** | Revisione bilingue e QA: editor JSON, proofreader, UI diff, accetta/rifiuta per modifica, report QA (non tradotti, incoerenze glossario, placeholder rotti, lunghezze anomale, Markdown malformato) | Il report segnala correttamente non-tradotti e incoerenze su un test controllato |
-| **M5** | Export e impaginazione: split per capitolo, `metadata.yaml`, template Pandoc/CSS/LaTeX, filtri Lua per note e tavole, anteprima, rebuild selettivo | PDF ed EPUB leggibili con indice, note e immagini |
-| **M6** | Concorrenza e sub-agenti: coda con lease, ResourceGovernor, degradazione seriale, glossario con lock ottimistico e merge | I sub-agenti si attivano solo con VRAM/slot sufficienti e degradano senza errori |
-| **M7** | Packaging: PyInstaller onedir, bundle Tauri (deb/AppImage/dmg/msi), primo avvio guidato, export/import `.llmtz`, docs | AppImage e bundle avviabili su macchina pulita |
+| **M0** | Repo, `Makefile`, CI (ruff/pyright/pytest + cargo fmt/clippy/test), Tauri window, sidecar with `ping`, SQLite migrations, `AGENTS.md`, rewritten README | `make check` green, empty app that opens on Linux |
+| **M1** | **Walking skeleton end-to-end**: EPUB → Markdown → `Block[]` → `Chunk[]` → placeholder → translation with only the *translator* role → persistence + resume → Pandoc → EPUB/PDF. Minimal UI: create project, choose file, endpoint, start, progress, open output | Translated EPUB; interruption halfway and resume with no loss of structure; PDF and EPUB generated |
+| **M2** | Robust ingestion: PDF `pymupdf4llm` behind the `PdfExtractor` interface, footnotes, plates, images, YAML front matter, stable anchors and IDs, optional `pdf_marker.py` | Footnotes and images present and intact in the output; stable IDs between two extractions |
+| **M3** | Context and memory: glossary, synopsis, rolling summaries, style guide, ContextAssembler with budget, `/tokenize`, `translation_cache` + `translation_memory` | Repeated chunks do not call the model; the glossary appears in the prompt only for the terms present |
+| **M4** | Bilingual review and QA: JSON editor, proofreader, diff UI, accept/reject per change, QA report (untranslated, glossary inconsistencies, broken placeholders, anomalous lengths, malformed Markdown) | The report correctly flags untranslated text and inconsistencies on a controlled test |
+| **M5** | Export and typesetting: per-chapter split, `metadata.yaml`, Pandoc/CSS/LaTeX templates, Lua filters for footnotes and tables, preview, selective rebuild | Readable PDF and EPUB with table of contents, footnotes and images |
+| **M6** | Concurrency and sub-agents: queue with lease, ResourceGovernor, serial degradation, glossary with optimistic lock and merge | The sub-agents activate only with sufficient VRAM/slots and degrade without errors |
+| **M7** | Packaging: PyInstaller onedir, Tauri bundle (deb/AppImage/dmg/msi), guided first launch, export/import `.llmtz`, docs | AppImage and bundle launchable on a clean machine |
 
-Dipendenze: M1 sblocca tutto; M3 va prima di M4 (l'editor usa glossario e contesto); M6 dopo M3
-(la concorrenza richiede il glossario versionato).
+Dependencies: M1 unblocks everything; M3 comes before M4 (the editor uses the glossary and
+context); M6 after M3 (concurrency requires the versioned glossary).
 
 ---
 
-## 14. Verifica
+## 14. Verification
 
-- **`tools/fake_llama_server.py`**: server OpenAI-compatibile deterministico
-  (`/v1/models`, `/v1/chat/completions` con SSE, `/props`, `/tokenize`, `/health`). Traduzioni
-  finte ma strutturalmente fedeli; può iniettare guasti (drop di placeholder, troncamenti,
-  timeout) per esercitare i rami di errore. È la base della CI offline.
-- **Fixture**: `tools/make_fixtures.py` genera EPUB e PDF di prova con tabelle, note, immagini,
-  blocchi di codice e capitoli annidati; un EPUB "grande" (~1M caratteri) per i test di
-  robustezza e memoria.
-- **Invariante chiave**: `serialize(parse(md)) == md` su tutti i fixture — è il test che
-  garantisce che l'IR non normalizzi il Markdown.
-- **Test Python**: `test_markdown_ir` (round-trip), `test_placeholders` (round-trip e
-  riparazione), `test_chunker` (nessun blocco perso, nessuna tabella spezzata, somma token),
+- **`tools/fake_llama_server.py`**: deterministic OpenAI-compatible server
+  (`/v1/models`, `/v1/chat/completions` with SSE, `/props`, `/tokenize`, `/health`). Fake
+  translations but structurally faithful; it can inject faults (placeholder drops, truncations,
+  timeouts) to exercise the error branches. It is the basis of the offline CI.
+- **Fixtures**: `tools/make_fixtures.py` generates test EPUBs and PDFs with tables, footnotes, images,
+  code blocks and nested chapters; a "large" EPUB (~1M characters) for the robustness and
+  memory tests.
+- **Key invariant**: `serialize(parse(md)) == md` on all the fixtures — it is the test that
+  guarantees the IR does not normalize the Markdown.
+- **Python tests**: `test_markdown_ir` (round-trip), `test_placeholders` (round-trip and
+  repair), `test_chunker` (no block lost, no table split, token sum),
   `test_pandoc`, `test_qa`.
-- **Test Rust**: `test_queue` (claim, lease scaduto, retry, concorrenza), `test_context_builder`
-  (budget e priorità), `test_cache` (hit/miss), `test_resources` (degradazione seriale con
-  profilo VRAM finto), `test_scheduler` (idempotenza su riesecuzione).
-- **Test di integrazione end-to-end**: EPUB → traduzione (fake server) → export; interruzione a
-  metà via `SIGTERM` e ripresa; verifica che il Markdown tradotto abbia la stessa sequenza di
-  tipi di blocco dell'originale.
-- **Manuale**: tradurre un EPUB reale di ~300 pagine con `llama-server` vero, interrompere,
-  riprendere, esportare PDF ed EPUB.
+- **Rust tests**: `test_queue` (claim, expired lease, retry, concurrency), `test_context_builder`
+  (budget and priorities), `test_cache` (hit/miss), `test_resources` (serial degradation with a
+  fake VRAM profile), `test_scheduler` (idempotency on re-run).
+- **End-to-end integration tests**: EPUB → translation (fake server) → export; interruption
+  halfway via `SIGTERM` and resume; verification that the translated Markdown has the same sequence
+  of block types as the original.
+- **Manual**: translate a real ~300-page EPUB with a real `llama-server`, interrupt,
+  resume, export PDF and EPUB.
 
 ---
 
-## 15. Rischi e mitigazioni
+## 15. Risks and mitigations
 
-| Rischio | Mitigazione |
+| Risk | Mitigation |
 |---|---|
-| Il modello perde placeholder o riscrive la struttura | Validazione strutturale per chunk + retry mirato + fallback a Markdown grezzo + `qa_finding` per revisione manuale (M1, M4) |
-| Allineamento blocchi originale↔traduzione fallisce su output irregolare | Confronto del numero di blocchi; se diverso → `needs_review` invece di allineare a forza (M1) |
-| Packaging del sidecar Python su 3 OS | Sidecar `onedir` (non `onefile`: avvio più rapido, meno falsi positivi AV), bundlato come resource Tauri; smoke test in CI su Linux, build manuale su macOS/Windows (M0, M7) |
-| Python 3.14 senza wheel PyInstaller/torch | Pinnare **Python 3.12** nel sidecar (già disponibile via uv) |
-| Marker trascina torch (GB) | Extra opzionale, mai nel bundle di default; l'interfaccia `PdfExtractor` lo tiene fuori dal core (M2) |
-| VRAM insufficiente con modelli diversi per ruolo | ResourceGovernor + degradazione seriale + UI che mostra il motivo (M6) |
-| `n_ctx` del server diverso da quello atteso | Il budget si calcola da `/props`, non da config; avviso se incoerente (M3) |
-| Granularità lista/blockquote (blocco unico) penalizza liste molto lunghe | Accettato nell'MVP; split per item previsto in M2 se i test su libri reali lo richiedono |
+| The model loses placeholders or rewrites the structure | Structural validation per chunk + targeted retry + fallback to raw Markdown + `qa_finding` for manual review (M1, M4) |
+| Original↔translation block alignment fails on irregular output | Compare the number of blocks; if different → `needs_review` instead of aligning by force (M1) |
+| Packaging of the Python sidecar on 3 OSes | `onedir` sidecar (not `onefile`: faster startup, fewer AV false positives), bundled as a Tauri resource; smoke test in CI on Linux, manual build on macOS/Windows (M0, M7) |
+| Python 3.14 without PyInstaller/torch wheels | Pin **Python 3.12** in the sidecar (already available via uv) |
+| Marker drags in torch (GB) | Optional extra, never in the default bundle; the `PdfExtractor` interface keeps it out of the core (M2) |
+| Insufficient VRAM with different models per role | ResourceGovernor + serial degradation + UI that shows the reason (M6) |
+| `n_ctx` of the server different from the expected one | The budget is computed from `/props`, not from config; warning if inconsistent (M3) |
+| List/blockquote granularity (single block) penalizes very long lists | Accepted in the MVP; per-item split planned in M2 if the tests on real books require it |

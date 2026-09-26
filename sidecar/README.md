@@ -1,21 +1,21 @@
 # llmtranslator-sidecar
 
-Il **data plane** di LocalLLMTranslator: formati di documento, Markdown IR, chunking,
-placeholder e impaginazione Pandoc.
+The **data plane** of LocalLLMTranslator: document formats, Markdown IR, chunking, placeholders
+and Pandoc typesetting.
 
-Regole che il pacchetto non viola mai:
+Rules the package never breaks:
 
-- **Senza stato.** Nessuna cache tra chiamate, nessun database, nessun file temporaneo fuori da
-  quelli dichiarati in `work_dir`. Ogni metodo RPC è una funzione pura `input → output`, quindi
-  è sempre sicuro riavviare il processo e ri-inviare le richieste in volo.
-- **Solo dati.** Non conosce la coda dei job, non sa cosa sia un progetto, non parla mai con un
-  LLM. Tutto ciò appartiene al control plane in Rust.
-- **Fedeltà alla sorgente.** `serialize(split_blocks(md)) == md`, byte per byte.
+- **Stateless.** No cache between calls, no database, no temporary files beyond those declared
+  in `work_dir`. Every RPC method is a pure `input → output` function, so restarting the process
+  and re-sending in-flight requests is always safe.
+- **Data only.** It does not know about the job queue, it does not know what a project is, and
+  it never talks to an LLM. All of that belongs to the Rust control plane.
+- **Faithful to the source.** `serialize(split_blocks(md)) == md`, byte for byte.
 
-Uso:
+Usage:
 
 ```sh
 uv sync --all-groups
-uv run python -m llmtranslator_sidecar    # server JSON-RPC 2.0 su stdio, NDJSON
+uv run python -m llmtranslator_sidecar    # JSON-RPC 2.0 server over stdio, NDJSON
 uv run pytest
 ```
