@@ -417,6 +417,12 @@ async fn walking_skeleton_end_to_end() -> Result<()> {
         chunks_re.len()
     );
 
+    // M3 acceptance: re-translating already completed chunks is served by the
+    // block-level translation memory, so the model is not called again.
+    let calls_before: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM llm_call WHERE role = 'translator'")
+            .fetch_one(&pool_b)
+            .await?;
     for chunk in &chunks_re {
         with_timeout(
             run_translate_chunk(&deps_b, None, &chunk.id),
@@ -424,6 +430,15 @@ async fn walking_skeleton_end_to_end() -> Result<()> {
         )
         .await??;
     }
+    let calls_after: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM llm_call WHERE role = 'translator'")
+            .fetch_one(&pool_b)
+            .await?;
+    ensure!(
+        calls_after == calls_before,
+        "re-running completed chunks called the model again ({calls_before} -> {calls_after}): \
+         the translation memory did not reuse the accepted blocks"
+    );
     let translations_re = assert_translation_complete(&pool_b, &project_b, &document_re).await?;
     ensure!(
         translations_re == translations_b,
