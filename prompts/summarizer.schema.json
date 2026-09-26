@@ -1,0 +1,27 @@
+{
+  "$comment": "Rolling-memory schema for prompts/summarizer.md (PLAN.md section 8). The control plane clamps every value again before persisting it: the summary to 200 words, the term list to 8 entries, the style notes to 8 candidates.",
+  "type": "object",
+  "properties": {
+    "summary": { "type": "string", "maxLength": 1600 },
+    "new_terms": {
+      "type": "array",
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "properties": {
+          "source": { "type": "string", "maxLength": 120 },
+          "target": { "type": "string", "maxLength": 120 },
+          "kind": { "enum": ["term", "proper_noun", "do_not_translate"] },
+          "note": { "type": "string", "maxLength": 200 }
+        },
+        "required": ["source", "target", "kind"]
+      }
+    },
+    "style_notes": {
+      "type": "array",
+      "maxItems": 8,
+      "items": { "type": "string", "maxLength": 240 }
+    }
+  },
+  "required": ["summary", "new_terms", "style_notes"]
+}
