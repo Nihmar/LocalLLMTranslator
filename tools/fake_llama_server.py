@@ -71,6 +71,7 @@ CLI                     Environment                                Effect
 ``--delay-ms MS``        ``FAKE_LLAMA_DELAY_MS=MS``                 sleep before answering chat requests
 ``--merge-paragraphs``   ``FAKE_LLAMA_MERGE_PARAGRAPHS=1``          drop blank lines (corrupt block structure)
 ``--echo-prompt-prefix`` ``FAKE_LLAMA_ECHO_PROMPT_PREFIX=1``        echo the prompt preface before the passage (an irregular answer)
+``--recon-broken``       ``FAKE_LLAMA_RECON_BROKEN=1``               answer a book-profile request with prose, not JSON
 ``--total-slots N``      ``FAKE_LLAMA_TOTAL_SLOTS=N``               value reported by ``/props``
 ``--n-ctx N``            ``FAKE_LLAMA_N_CTX=N``                     value reported by ``/props``
 ``--port PORT``          ``FAKE_LLAMA_PORT=PORT``                   listen port (default 8080, 0 = ephemeral)
@@ -107,6 +108,38 @@ FIXED_CREATED = 1_700_000_000
 
 #: Fixed model id reported by ``/v1/models`` and echoed in completions.
 FAKE_MODEL = "fake-model"
+
+#: ``response_format.json_schema.name`` that marks a book-reconnaissance request
+#: (PLAN.md section 9.4). The fake answers with :data:`BOOK_PROFILE`.
+BOOK_PROFILE_SCHEMA_NAME = "book_profile"
+
+#: Deterministic candidate book profile, shaped like the schema in
+#: ``prompts/analyze_book.schema.json``. Deliberately includes one
+#: ``do_not_translate`` and one ``proper_noun`` entry so both glossary branches
+#: are exercised.
+BOOK_PROFILE: dict[str, Any] = {
+    "source_language": "English",
+    "genre": "literary fiction",
+    "audience": "adult readers",
+    "era": "late nineteenth century",
+    "narrative_voice": "third-person limited",
+    "register": "formal, slightly archaic",
+    "style_notes": [
+        "Prefer period vocabulary over modern synonyms.",
+        "Keep the long, flowing sentence rhythm of the source.",
+    ],
+    "themes": ["loyalty", "the sea"],
+    "synopsis": "A harbour keeper guards his light while the town around him changes.",
+    "proper_nouns": [
+        {"source": "Harbour Light", "kind": "do_not_translate", "note": "name of the lighthouse"},
+        {"source": "Elena", "kind": "proper_noun", "note": "the keeper's daughter"},
+    ],
+    "field_basis": {"genre": "from_text", "synopsis": "from_text"},
+}
+
+#: Non-JSON answer used by ``FAKE_LLAMA_RECON_BROKEN`` to exercise the
+#: control plane's parse-failure branch.
+RECON_BROKEN_TEXT = "I could not decide, so here is a short essay about lighthouses instead."
 
 #: Line that introduces the passage to translate inside the user message.
 PASSAGE_MARKER = "PASSAGE TO TRANSLATE:"
@@ -277,6 +310,7 @@ class TranslationConfig:
     delay_ms: int = 0
     merge_paragraphs: bool = False
     echo_prompt_prefix: bool = False
+    recon_broken: bool = False
 
     def generation_settings(self) -> dict[str, Any]:
         """Return a ``default_generation_settings``-shaped dict."""
@@ -591,11 +625,24 @@ def make_handler(cfg: TranslationConfig) -> type[BaseHTTPRequestHandler]:
                     last_user = content
 
             response_format = body.get("response_format") or {}
+            schema_name = ""
+            if isinstance(response_format, dict):
+                spec = response_format.get("json_schema")
+                if isinstance(spec, dict) and isinstance(spec.get("name"), str):
+                    schema_name = spec["name"]
             wants_json = isinstance(response_format, dict) and response_format.get("type") in (
                 "json_object",
                 "json_schema",
             )
-            if wants_json:
+            if wants_json and schema_name == BOOK_PROFILE_SCHEMA_NAME:
+                # book reconnaissance (PLAN.md section 9.4): a candidate profile
+                text = (
+                    RECON_BROKEN_TEXT
+                    if cfg.recon_broken
+                    else json.dumps(BOOK_PROFILE, ensure_ascii=False)
+                )
+                finish_reason = "stop"
+            elif wants_json:
                 # editor/proofreader JSON mode
                 text = json.dumps({"verdict": "ok", "issues": []}, ensure_ascii=False)
                 finish_reason = "stop"
@@ -714,6 +761,9 @@ def build_config(args: argparse.Namespace) -> TranslationConfig:
         echo_prompt_prefix=(
             args.echo_prompt_prefix or _env("FAKE_LLAMA_ECHO_PROMPT_PREFIX") not in (None, "0")
         ),
+        recon_broken=(
+            args.recon_broken or _env("FAKE_LLAMA_RECON_BROKEN") not in (None, "0")
+        ),
     )
 
 
@@ -734,6 +784,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--delay-ms", type=int, default=None, metavar="MS", help="sleep MS before answering chat requests")
     parser.add_argument("--merge-paragraphs", action="store_true", help="drop blank lines (corrupt structure)")
     parser.add_argument("--echo-prompt-prefix", action="store_true", help="echo the prompt preface before the passage")
+    parser.add_argument("--recon-broken", action="store_true", help="answer a book-profile request with prose, not JSON")
     parser.add_argument("--selftest", action="store_true", help="run internal assertions and exit")
     return parser
 
@@ -854,6 +905,23 @@ def _selftest() -> int:
             translate_content(message, TranslationConfig(echo_prompt_prefix=True))
             == preface + translate(passage),
             "echo-prompt-prefix restores the preface",
+        )
+
+        # book reconnaissance: the json_schema name selects the candidate profile
+        recon = post(
+            "/v1/chat/completions",
+            {
+                "model": FAKE_MODEL,
+                "messages": [{"role": "user", "content": "analyse this book"}],
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {"name": BOOK_PROFILE_SCHEMA_NAME},
+                },
+            },
+        )
+        check(
+            json.loads(recon["choices"][0]["message"]["content"]) == BOOK_PROFILE,
+            "book-profile answer",
         )
 
         # fail rate 1.0 over HTTP

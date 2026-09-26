@@ -308,6 +308,49 @@ def test_json_response_format_mode(start_server):
     assert content["issues"] == []
 
 
+def test_book_profile_json_schema_returns_the_candidate_profile(start_server):
+    """A ``book_profile`` schema request answers with the deterministic profile."""
+    base = start_server()
+    response = http_post(
+        base,
+        "/v1/chat/completions",
+        {
+            "messages": [{"role": "user", "content": "analyse this book"}],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": fake.BOOK_PROFILE_SCHEMA_NAME},
+            },
+        },
+    )
+    content = json.loads(response["choices"][0]["message"]["content"])
+    assert content == fake.BOOK_PROFILE
+    # Both glossary branches must be present for the pipeline tests.
+    assert {entry["kind"] for entry in content["proper_nouns"]} == {
+        "proper_noun",
+        "do_not_translate",
+    }
+
+
+def test_recon_broken_answers_prose_not_json(start_server):
+    """``--recon-broken`` exercises the control plane's parse-failure branch."""
+    base = start_server(fake.TranslationConfig(recon_broken=True))
+    response = http_post(
+        base,
+        "/v1/chat/completions",
+        {
+            "messages": [{"role": "user", "content": "analyse this book"}],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": fake.BOOK_PROFILE_SCHEMA_NAME},
+            },
+        },
+    )
+    content = response["choices"][0]["message"]["content"]
+    assert content == fake.RECON_BROKEN_TEXT
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(content)
+
+
 def test_default_returns_only_the_translated_passage(start_server):
     """A compliant model answers with the passage alone; the preface is not echoed."""
     base = start_server()
