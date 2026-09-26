@@ -441,6 +441,21 @@ def make_handler(cfg: TranslationConfig) -> type[BaseHTTPRequestHandler]:
         protocol_version = "HTTP/1.1"
         server_version = "fake-llama-server/" + __version__
 
+        def end_headers(self) -> None:
+            """Every response closes its connection.
+
+            HTTP/1.1 would otherwise keep the socket alive, and those lingering sockets get
+            reclaimed by the garbage collector after the test that owned them has already
+            finished. With warnings promoted to errors in the test suite that surfaces as an
+            unraisable-exception failure attributed to an unrelated test.
+
+            Note this runs after the ``Connection`` header has been sent, so it also wins
+            over the explicit ``keep-alive`` the SSE path emits: close_connection is what
+            the request loop actually consults.
+            """
+            self.close_connection = True
+            super().end_headers()
+
         # -- helpers ------------------------------------------------------- #
         def log_message(self, fmt: str, *args: Any) -> None:  # noqa: A003
             if os.environ.get("FAKE_LLAMA_LOG"):
@@ -476,7 +491,7 @@ def make_handler(cfg: TranslationConfig) -> type[BaseHTTPRequestHandler]:
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream")
                 self.send_header("Cache-Control", "no-cache")
-                self.send_header("Connection", "keep-alive")
+                self.send_header("Connection", "close")
                 self.send_header("Transfer-Encoding", "chunked")
                 self.end_headers()
                 for event in events:
