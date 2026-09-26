@@ -38,6 +38,9 @@ import type {
   ModelInfo,
   Project,
   ProjectDetail,
+  ReconConfirmRequest,
+  ReconSnapshot,
+  ReconStartRequest,
   RoleBinding,
   RoleBindingSet,
   SidecarStatus,
@@ -62,6 +65,9 @@ const COMMANDS = {
   translationStart: "translation_start",
   translationPause: "translation_pause",
   translationCancel: "translation_cancel",
+  reconStart: "recon_start",
+  reconGet: "recon_get",
+  reconConfirm: "recon_confirm",
   jobList: "job_list",
   chunkList: "chunk_list",
   chunkGet: "chunk_get",
@@ -214,6 +220,26 @@ export function translationPause(): Promise<Ack> {
  */
 export function translationCancel(projectId: string | null): Promise<Ack> {
   return call<Ack>(COMMANDS.translationCancel, { req: { project_id: projectId } });
+}
+
+// --- book reconnaissance (PLAN.md §9.4) ------------------------------------------------------
+
+/**
+ * Enqueues the `book_recon` job and returns its id immediately. The call runs on the orchestrator
+ * role; follow it through `job://progress`, then read the candidate back with `reconGet`.
+ */
+export function reconStart(request: ReconStartRequest): Promise<JobStarted> {
+  return call<JobStarted>(COMMANDS.reconStart, { req: request });
+}
+
+/** Candidate profile, already-confirmed values and glossary of a project. */
+export function reconGet(projectId: string): Promise<ReconSnapshot> {
+  return call<ReconSnapshot>(COMMANDS.reconGet, { project_id: projectId });
+}
+
+/** Writes the fields the user confirmed into project memory and the glossary. */
+export function reconConfirm(request: ReconConfirmRequest): Promise<ReconSnapshot> {
+  return call<ReconSnapshot>(COMMANDS.reconConfirm, { req: request });
 }
 
 // --- jobs and chunks -----------------------------------------------------------------------

@@ -256,6 +256,108 @@ export interface TranslationStartResult {
   running: boolean;
 }
 
+// --- book reconnaissance (PLAN.md §9.4) -----------------------------------------------------
+
+/**
+ * One profile value with its provenance (`pipeline::recon::ProfileField`). `basis` is one of
+ * `from_text`, `metadata`, `inferred` (or `user` for a value typed by hand): an `inferred`
+ * field is shown as such and is not confirmed by default.
+ */
+export interface ProfileField<T> {
+  value: T;
+  basis: string;
+}
+
+/** A name the profile proposes for the glossary (`pipeline::recon::ProperNoun`). */
+export interface ProperNoun {
+  source: string;
+  kind: string;
+  note: string;
+}
+
+/** Where the candidate came from (`pipeline::recon::ProfileProvenance`). */
+export interface ProfileProvenance {
+  generated_at: string;
+  model: string;
+  prompt_hash: string;
+  excerpt_blocks: number;
+  metadata: boolean;
+  pasted_chars: number;
+}
+
+/** The candidate book profile (`pipeline::recon::BookProfile`). */
+export interface BookProfile {
+  source_language: ProfileField<string>;
+  genre: ProfileField<string>;
+  audience: ProfileField<string>;
+  era: ProfileField<string>;
+  narrative_voice: ProfileField<string>;
+  register: ProfileField<string>;
+  style_notes: ProfileField<string[]>;
+  themes: ProfileField<string[]>;
+  synopsis: ProfileField<string>;
+  proper_nouns: ProperNoun[];
+  provenance: ProfileProvenance;
+}
+
+/** Row of `glossary_term` (`db::models::GlossaryTerm`). */
+export interface GlossaryTerm {
+  id: string;
+  project_id: string;
+  source_lang: string | null;
+  target_lang: string | null;
+  source: string;
+  target: string;
+  note: string | null;
+  kind: string;
+  origin: string;
+  revision: number;
+  status: string;
+}
+
+/** Result of `recon_get` and `recon_confirm` (`pipeline::recon::ReconSnapshot`). */
+export interface ReconSnapshot {
+  project_id: string;
+  /** The last candidate, still unconfirmed; `null` when none was generated. */
+  profile: BookProfile | null;
+  /** Confirmed values the translator prompt already reads. */
+  style_guide: string;
+  synopsis: string;
+  book_meta: JsonValue | null;
+  glossary: GlossaryTerm[];
+  orchestrator_bound: boolean;
+  /** Id of a pending/running `book_recon` job, when there is one. */
+  running_job: string | null;
+  /** Last failure of a `book_recon` job, when there is one. */
+  last_error: string | null;
+}
+
+/** Request body of `recon_start` (`commands::recon::ReconStartRequest`). */
+export interface ReconStartRequest {
+  project_id: string;
+  /** Text the user pasted themselves; the app never fetches a page. */
+  pasted_text?: string | null;
+}
+
+/** One accepted proper noun in `recon_confirm` (`pipeline::recon::ConfirmedTerm`). */
+export interface ConfirmedTerm {
+  source: string;
+  target?: string | null;
+  kind: string;
+  note?: string | null;
+}
+
+/** Request body of `recon_confirm` (`pipeline::recon::ConfirmRequest`). */
+export interface ReconConfirmRequest {
+  project_id: string;
+  profile: BookProfile;
+  /** Profile keys the user accepted; only those are written. */
+  confirmed_fields: string[];
+  /** Style guide assembled and edited in the UI. */
+  style_guide: string;
+  proper_nouns: ConfirmedTerm[];
+}
+
 // --- jobs ----------------------------------------------------------------------------------
 
 /** Row of `job` (`db::models::Job`); `payload_json` is the raw column. */
