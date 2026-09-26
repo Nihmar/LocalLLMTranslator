@@ -127,6 +127,17 @@ pub async fn glossary_upsert(
     }
 
     repo::upsert_glossary_term(&state.pool, &term).await?;
+    // Read the persisted row back: when the unique key collided with an existing row the
+    // upsert updated *that* row and bumped its revision, so returning the constructed
+    // value would report a stale id/revision and the next optimistic write would fail.
+    if let Some(stored) = repo::get_glossary_term(&state.pool, &term.id).await? {
+        return Ok(stored);
+    }
+    if let Some(stored) =
+        repo::get_glossary_term_by_source(&state.pool, &term.project_id, &term.source).await?
+    {
+        return Ok(stored);
+    }
     Ok(term)
 }
 

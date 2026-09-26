@@ -1127,6 +1127,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_glossary_upsert_on_the_unique_key_keeps_the_existing_id_and_bumps_revision() {
+        // Why `glossary_upsert` re-reads the row it wrote: the ON CONFLICT target is the
+        // unique key, so a second write with a different id updates the *first* row and
+        // leaves the constructed value's id and revision stale.
+        let pool = connect_memory().await.expect("pool");
+        seed(&pool).await;
+        let first = GlossaryTerm {
+            id: "t1".to_string(),
+            project_id: "p".to_string(),
+            source_lang: Some("en".to_string()),
+            target_lang: Some("it".to_string()),
+            source: "keeper".to_string(),
+            target: "guardiano".to_string(),
+            note: None,
+            kind: "term".to_string(),
+            origin: "manual".to_string(),
+            revision: 1,
+            status: "approved".to_string(),
+        };
+        upsert_glossary_term(&pool, &first).await.expect("first");
+        let second = GlossaryTerm {
+            id: "t2".to_string(),
+            target: "custode".to_string(),
+            ..first
+        };
+        upsert_glossary_term(&pool, &second).await.expect("second");
+
+        let stored = get_glossary_term(&pool, "t1")
+            .await
+            .expect("get")
+            .expect("row");
+        assert_eq!(stored.target, "custode");
+        assert_eq!(stored.revision, 2, "the existing row was updated in place");
+        assert!(get_glossary_term(&pool, "t2").await.expect("get").is_none());
+    }
+
+    #[tokio::test]
     async fn app_state_round_trips_upserts_and_deletes() {
         let pool = connect_memory().await.expect("pool");
         assert!(get_app_state(&pool, KEY_WORKER_PAUSED)
