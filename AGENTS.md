@@ -106,13 +106,13 @@ Codes: `-32700` parse, `-32600` invalid request, `-32601` method not found,
 |---|---|---|
 | `ping` | `{}` | `{pong, version, python, platform}` |
 | `detect_format` | `{path}` | `{format: "epub"\|"pdf"\|"markdown", backends: [str]}` |
-| `ingest` | `{path, work_dir, pdf_backend?}` | `{markdown_path, metadata{}, chapters[{title,level,order}], warnings[str]}` |
+| `ingest` | `{path, work_dir, pdf_backend?}` | `{markdown_path, metadata{}, chapters[{title,level,order}], warnings[str], assets_dir?, assets[]}` |
 | `parse_document` | `{markdown_path}` | `{blocks[Block], chapters[Chapter]}` |
 | `build_chunks` | `{blocks[], budget_tokens}` | `{chunks[Chunk]}` |
 | `prepare_text` | `{block_ids?, text}` | `{llm_text, placeholders[[n,literal]], used_blocks[int]}` |
 | `reinject` | `{text, placeholders, expected_blocks}` | `{blocks_md[], placeholders_ok, missing[int], duplicated[int], block_count_ok}` |
 | `qa_check` | `{source_text, target_text, glossary{}, placeholders[[n,literal]]}` | `{findings[Finding]}` |
-| `pandoc_build` | `{units[{path,title}], metadata{}, output_path, output_format, template?, css?}` | `{output_path, log, duration_ms}` |
+| `pandoc_build` | `{units[{path,title}], metadata{}, output_path, output_format, template?, css?, resource_path[]}` | `{output_path, log, duration_ms}` |
 | `estimate_tokens` | `{texts[]}` | `{counts[int]}` |
 
 `Block` = `{id, chapter_id, order, kind, level, source_md, source_text, translatable, attrs{}, content_hash}`
@@ -121,7 +121,12 @@ Codes: `-32700` parse, `-32600` invalid request, `-32601` method not found,
 `Finding` = `{kind, severity, block_id?, details{}}`
 
 Block `kind` values:
-`heading|para|list|blockquote|table|code|figure|footnote_def|hr|html`.
+`heading|para|list|blockquote|table|code|figure|footnote_def|frontmatter|hr|html`.
+
+`ingest` extracts embedded media (images) into `<work_dir>/assets/`, rewrites the markdown to
+reference them as `assets/<name>` relative to `document.md`, and reports `assets_dir` (absolute,
+`null` when there is none) plus the rewritten hrefs in `assets`. `pandoc_build` receives
+`resource_path` so the writer can resolve those hrefs.
 
 The sidecar is **stateless**: no cache between calls, no DB, no temporary files beyond those
 declared in `work_dir`. Every method must be repeatable with no side effects — that is what

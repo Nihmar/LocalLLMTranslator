@@ -130,19 +130,22 @@ LocalLLMTranslator/
 │   ├── pyproject.toml
 │   ├── llmtranslator_sidecar/
 │   │   ├── __main__.py            # JSON-RPC server over stdio
-│   │   ├── rpc.py
-│   │   ├── extractors/{base,epub,pdf_pymupdf,pdf_marker,markdown_src}.py
-│   │   ├── markdown_ir/{parse,serialize,blocks}.py
+│   │   ├── rpc.py                 # transport, dispatch, error codes
+│   │   ├── errors.py              # shared domain errors (1001/1002/1003)
+│   │   ├── extractors/{__init__,base,epub,pdf_pymupdf,pdf_marker,markdown_src}.py
+│   │   ├── blocks.py              # Block, Chapter, Chunk
+│   │   ├── parse.py               # source-preserving segmentation
+│   │   ├── serialize.py           # byte-exact reconstruction and render
 │   │   ├── placeholders.py
 │   │   ├── chunker.py
 │   │   ├── pandoc.py
-│   │   ├── qa.py
-│   │   └── langs.py
+│   │   └── qa.py
 │   └── tests/
 ├── prompts/                       # shipped defaults, copied and made editable
 │   ├── translator.md translator.table.md
 │   ├── editor.md proofreader.md
-│   └── summarizer.md orchestrator.md
+│   ├── summarizer.md orchestrator.md
+│   └── analyze_book.md            # book reconnaissance (§9.4, M3)
 ├── pandoc/
 │   ├── templates/{book.tex,book.html}
 │   ├── filters/{footnotes.lua,tables.lua,epub_cleanup.lua}
@@ -167,7 +170,7 @@ class Block:
     id: str            # "b000417" — deterministic sequence number from the document order
     chapter_id: str
     order: int
-    kind: str          # heading|para|list|blockquote|table|code|figure|footnote_def|hr|html
+    kind: str          # heading|para|list|blockquote|table|code|figure|footnote_def|frontmatter|hr|html
     level: int         # heading level or list nesting
     source_md: str     # exact Markdown slice
     source_text: str   # text actually sent to the model (block markers removed where needed)
@@ -625,6 +628,52 @@ the hash, so two identical chunks in different contexts do not share the exact c
 is correct. The cheap reuse happens at the level of `translation_memory` (identical block → same
 translation, zero calls) and of the server's KV cache (identical system prefix).
 
+### 9.4 Book reconnaissance — acquiring the style guide and the synopsis (M3)
+
+An empty "style guide" box is a bad interface: the user does not know what to write, yet the
+quality of a literary translation depends mostly on knowing the register, the period and the
+audience of the book. M3 therefore opens with a *reconnaissance* step that produces a
+**candidate** book profile, which the user confirms before any translation runs. The confirmed
+profile is prefix 1 of the context budget: it is the stable head of the system message, so it
+costs nothing in KV-cache terms and improves every chunk.
+
+Sources, in order of preference — **all of them local**:
+
+1. the book itself: the incipit and a few paragraphs per chapter, which is where register,
+   narrative voice and recurring constructions actually live;
+2. the metadata the extractor already produces (title/author/language from the EPUB OPF or the
+   PDF document info) — the first consumer of `document.front_matter_json`, written since M1 and
+   never read;
+3. optionally, text the user **pastes** from a page they found themselves. The app never fetches
+   it: "no network calls other than the configured `llama-server` endpoints" stays true.
+
+The call runs on the `orchestrator` role with a user-editable template
+(`prompts/analyze_book.md`) and a JSON schema — finally using the `response_format: json_schema`
+support the LLM client has had since M1 — so the answer is structured:
+
+```json
+{"source_language": "", "genre": "", "audience": "", "era": "", "narrative_voice": "",
+ "register": "", "style_notes": [""], "themes": [""], "synopsis": "3-5 sentences",
+ "proper_nouns": [{"source": "", "kind": "proper_noun|do_not_translate", "note": ""}],
+ "field_basis": {"genre": "from_text|inferred"}}
+```
+
+Rules that make it safe to inject into every prompt:
+
+- **Everything is a candidate.** The profile is reviewed field by field; a field marked
+  `inferred` never silently becomes a fact in the system prompt.
+- **The length caps live in the schema** (synopsis ≤ 120 words, style guide ≤ 200): the profile
+  is paid on every single chunk, so it cannot grow unbound.
+- The injected block carries an explicit "context only — do not add content from it" clause,
+  alongside rule 6 of the translator prompt.
+- Confirmed values land where the builder already reads them: `style_guide` and `synopsis` in
+  `project_memory`, the rest as a `book_meta` JSON document, proper nouns as `glossary_term`
+  candidates and `do_not_translate` entries. The provenance travels with the value.
+- Reproducible like everything else: seeded, audited in `llm_call`, and snapshotted into the
+  project.
+- Degrades cleanly: with no orchestrator model bound the step is skipped and the fields stay
+  editable by hand.
+
 ---
 
 ## 10. Concurrency and sub-agents
@@ -655,7 +704,8 @@ A 5-step wizard, but each step is a freely visitable route (not a constraint):
    choice, extraction result with warnings.
 2. **Models** — endpoint CRUD (URL, health-check, model list from `/v1/models`, `props`),
    role assignment, savable profiles, VRAM/slot indicator.
-3. **Translation** — chunk table (`pending/running/done/failed/needs_review`) with tokens,
+3. **Translation** — book profile panel (the reconnaissance result of §9.4, confirmed field by
+   field) plus chunk table (`pending/running/done/failed/needs_review`) with tokens,
    attempts, model; start/pause/resume; live log; resource gauge; actions on multiple
    selection (retry, skip, re-translate with another model).
 4. **Review** — 3-column side-by-side editor (original / translated / corrected) with block-level
@@ -680,13 +730,13 @@ Requests `{"jsonrpc":"2.0","id":N,"method":"...","params":{...}}`; responses `re
 |---|---|
 | `ping` | `{pong, version, python, platform}` |
 | `detect_format` | `{format, backends[]}` |
-| `ingest` | `{markdown_path, metadata, chapters[], warnings[]}` |
+| `ingest` | `{markdown_path, metadata, chapters[], warnings[], assets_dir, assets[]}` |
 | `parse_document` | `{blocks[], chapters[]}` |
 | `build_chunks` | `{chunks[]}` |
 | `prepare_text` | `{llm_text, placeholders[]}` |
 | `reinject` | `{blocks_md[], placeholders_ok, missing[], duplicated[]}` |
 | `qa_check` | `{findings[]}` |
-| `pandoc_build` | `{output_path, log}` |
+| `pandoc_build` | `{output_path, log, duration_ms}` |
 | `estimate_tokens` | `{counts[]}` (heuristic fallback, used if `/tokenize` is not available) |
 
 The sidecar is **stateless** and does not touch the DB: every method is a pure function. This is
@@ -714,7 +764,7 @@ forwards the sidecar's out-of-band `progress` notifications unchanged, and `log:
 | **M0** | Repo, `Makefile`, CI (ruff/pyright/pytest + cargo fmt/clippy/test), Tauri window, sidecar with `ping`, SQLite migrations, `AGENTS.md`, rewritten README | `make check` green, empty app that opens on Linux |
 | **M1** | **Walking skeleton end-to-end**: EPUB → Markdown → `Block[]` → `Chunk[]` → placeholder → translation with only the *translator* role → persistence + resume → Pandoc → EPUB/PDF. Minimal UI: create project, choose file, endpoint, start, progress, open output | Translated EPUB; interruption halfway and resume with no loss of structure; PDF and EPUB generated |
 | **M2** | Robust ingestion: PDF `pymupdf4llm` behind the `PdfExtractor` interface, footnotes, plates, images, YAML front matter, stable anchors and IDs, optional `pdf_marker.py` | Footnotes and images present and intact in the output; stable IDs between two extractions |
-| **M3** | Context and memory: glossary, synopsis, rolling summaries, style guide, ContextAssembler with budget, `/tokenize`, `translation_cache` + `translation_memory` | Repeated chunks do not call the model; the glossary appears in the prompt only for the terms present |
+| **M3** | Context and memory: glossary, synopsis, rolling summaries, style guide, ContextAssembler with budget, `/tokenize`, `translation_cache` + `translation_memory`, **book reconnaissance** (§9.4: a candidate book profile the user confirms before translating) | Repeated chunks do not call the model; the glossary appears in the prompt only for the terms present; the confirmed book profile is the stable head of every prompt |
 | **M4** | Bilingual review and QA: JSON editor, proofreader, diff UI, accept/reject per change, QA report (untranslated, glossary inconsistencies, broken placeholders, anomalous lengths, malformed Markdown) | The report correctly flags untranslated text and inconsistencies on a controlled test |
 | **M5** | Export and typesetting: per-chapter split, `metadata.yaml`, Pandoc/CSS/LaTeX templates, Lua filters for footnotes and tables, preview, selective rebuild | Readable PDF and EPUB with table of contents, footnotes and images |
 | **M6** | Concurrency and sub-agents: queue with lease, ResourceGovernor, serial degradation, glossary with optimistic lock and merge | The sub-agents activate only with sufficient VRAM/slots and degrade without errors |
