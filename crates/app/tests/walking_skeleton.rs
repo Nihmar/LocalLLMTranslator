@@ -932,6 +932,8 @@ async fn seed_environment(
             target_lang: "it".to_string(),
             doc_title: None,
             doc_author: None,
+            series_id: None,
+            series_order: None,
             prompts_snapshot_dir: None,
             settings_json: "{}".to_string(),
             created_at: timestamp.clone(),

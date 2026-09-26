@@ -69,6 +69,9 @@ pub struct GlossaryEntry {
     pub target: String,
     #[serde(default)]
     pub kind: String,
+    /// Surface forms that also trigger the entry (series terms, PLAN.md §9.5).
+    #[serde(default)]
+    pub aliases: Vec<String>,
 }
 
 /// Everything the builder needs to render a chunk prompt.
@@ -248,7 +251,11 @@ pub fn filter_glossary(glossary: &[GlossaryEntry], chunk_text: &str) -> Vec<Glos
         .iter()
         .filter(|entry| {
             let term = entry.source.trim().to_lowercase();
-            !term.is_empty() && contains_term(&haystack, &term)
+            let main = !term.is_empty() && contains_term(&haystack, &term);
+            main || entry.aliases.iter().any(|alias| {
+                let alias = alias.trim().to_lowercase();
+                !alias.is_empty() && contains_term(&haystack, &alias)
+            })
         })
         .cloned()
         .collect();
@@ -344,11 +351,13 @@ mod tests {
                     source: "king".into(),
                     target: "re".into(),
                     kind: "term".into(),
+                    aliases: Vec::new(),
                 },
                 GlossaryEntry {
                     source: "dragon".into(),
                     target: "drago".into(),
                     kind: "term".into(),
+                    aliases: Vec::new(),
                 },
             ],
             previous_chapter_summaries: vec!["Chapter one summary.".into()],
@@ -369,11 +378,13 @@ mod tests {
                 source: "king".into(),
                 target: "re".into(),
                 kind: "term".into(),
+                aliases: Vec::new(),
             },
             GlossaryEntry {
                 source: "dragon".into(),
                 target: "drago".into(),
                 kind: "term".into(),
+                aliases: Vec::new(),
             },
         ];
         let filtered = filter_glossary(&glossary, "The king spoke to the court.");
@@ -389,11 +400,13 @@ mod tests {
                 source: "king".into(),
                 target: "re".into(),
                 kind: "term".into(),
+                aliases: Vec::new(),
             },
             GlossaryEntry {
                 source: "sea".into(),
                 target: "mare".into(),
                 kind: "term".into(),
+                aliases: Vec::new(),
             },
         ];
         // Substrings inside longer words are not occurrences.
@@ -408,9 +421,38 @@ mod tests {
             source: "old town".into(),
             target: "città vecchia".into(),
             kind: "term".into(),
+            aliases: Vec::new(),
         }];
         assert_eq!(filter_glossary(&multi, "the (old town), at dawn").len(), 1);
         assert!(filter_glossary(&multi, "the oldtown clock").is_empty());
+    }
+
+    #[test]
+    fn glossary_aliases_trigger_the_entry() {
+        let glossary = vec![GlossaryEntry {
+            source: "Keeper".into(),
+            target: "Custode".into(),
+            kind: "term".into(),
+            aliases: vec!["the Keeper".into(), "Keeper's".into()],
+        }];
+        // The canonical form and every alias match...
+        assert_eq!(
+            filter_glossary(&glossary, "The Keeper watched the light.").len(),
+            1
+        );
+        assert_eq!(filter_glossary(&glossary, "the Keeper's log").len(), 1);
+        assert_eq!(
+            filter_glossary(&glossary, "A keeper of secrets").len(),
+            1,
+            "the canonical source still matches directly"
+        );
+        // ...but a longer word containing one of them does not.
+        assert!(filter_glossary(&glossary, "The keepers were many.").is_empty());
+        // The rendered pair is the canonical one, never the alias.
+        assert_eq!(
+            render_glossary(&filter_glossary(&glossary, "the Keeper's log")),
+            "Keeper => Custode"
+        );
     }
 
     #[test]
@@ -431,6 +473,7 @@ mod tests {
             source: "dragon".into(),
             target: "drago".into(),
             kind: "term".into(),
+            aliases: Vec::new(),
         }];
         second.synopsis = "A totally different synopsis.".into();
 

@@ -262,11 +262,20 @@ async fn copy_rows_in_transaction(
         .await?;
     let copy = async {
         // Foreign-key-safe order: parents before children. The statements are
-        // literal on purpose: sqlx 0.9 refuses dynamically built SQL.
-        sqlx::query("INSERT INTO project SELECT * FROM imported.project WHERE id = ?1")
-            .bind(project_id)
-            .execute(&mut *connection)
-            .await?;
+        // literal on purpose: sqlx 0.9 refuses dynamically built SQL. `project` uses an
+        // explicit column list with NULL series values so an archive written before the
+        // series columns existed still imports (a `SELECT *` would not line up).
+        sqlx::query(
+            "INSERT INTO project (id, name, source_path, source_hash, source_format, \
+             source_lang, target_lang, doc_title, doc_author, series_id, series_order, \
+             prompts_snapshot_dir, settings_json, created_at, updated_at) \
+             SELECT id, name, source_path, source_hash, source_format, source_lang, target_lang, \
+             doc_title, doc_author, NULL, NULL, prompts_snapshot_dir, settings_json, created_at, \
+             updated_at FROM imported.project WHERE id = ?1",
+        )
+        .bind(project_id)
+        .execute(&mut *connection)
+        .await?;
         sqlx::query("INSERT INTO document SELECT * FROM imported.document WHERE project_id = ?1")
             .bind(project_id)
             .execute(&mut *connection)

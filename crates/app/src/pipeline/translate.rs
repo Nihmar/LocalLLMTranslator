@@ -93,9 +93,22 @@ async fn translate_chunk_inner(
         .iter()
         .filter_map(|id| by_id.get(id.as_str()).copied())
         .collect();
+    // ---- Effective glossary: project terms override the series canon -----
+    // Resolved before the memory check because the effective glossary is part of the
+    // memory identity: a canon change must not keep serving old renderings.
+    let glossary_terms = crate::pipeline::glossary::effective_terms(pool, &project_id).await?;
+    let glossary_hash = crate::pipeline::glossary::effective_glossary_hash(&glossary_terms);
+
     // ---- Two-level cache: block-level memory first ----------------------
-    if let Some(reused) =
-        try_memory_reuse(deps, &chunk.id, &chunk_blocks, &model, &target_lang).await?
+    if let Some(reused) = try_memory_reuse(
+        deps,
+        &chunk.id,
+        &chunk_blocks,
+        &model,
+        &target_lang,
+        &glossary_hash,
+    )
+    .await?
     {
         // Compose the chunk's markdown from the rows just written: each
         // translatable block takes its reused translation and every other block
@@ -125,16 +138,21 @@ async fn translate_chunk_inner(
     // ---- Context --------------------------------------------------------
     let prompts_dir = deps.prompts_dir(&project_id);
     let builder = ContextBuilder::load(&prompts_dir);
-    let glossary = load_glossary(pool, &project_id).await?;
+    let glossary: Vec<GlossaryEntry> = glossary_terms
+        .into_iter()
+        .map(|term| GlossaryEntry {
+            source: term.source,
+            target: term.target,
+            kind: term.kind,
+            aliases: term.aliases,
+        })
+        .collect();
     let inputs = ContextInputs {
         source_language: project.source_lang.clone().unwrap_or_default(),
         target_language: target_lang.clone(),
-        style_guide: repo::get_memory(pool, &project_id, "style_guide")
-            .await?
-            .unwrap_or_default(),
-        synopsis: repo::get_memory(pool, &project_id, "synopsis")
-            .await?
-            .unwrap_or_default(),
+        style_guide: crate::pipeline::glossary::memory_with_series(pool, &project, "style_guide")
+            .await?,
+        synopsis: crate::pipeline::glossary::memory_with_series(pool, &project, "synopsis").await?,
         book_title: project.doc_title.clone().unwrap_or_default(),
         book_author: project.doc_author.clone().unwrap_or_default(),
         glossary,
@@ -331,8 +349,15 @@ async fn translate_chunk_inner(
                     continue;
                 }
                 if let Some(text_md) = reinject.blocks_md.get(index) {
-                    repo::memory_put(pool, &block.content_hash, &model, &target_lang, text_md)
-                        .await?;
+                    repo::memory_put(
+                        pool,
+                        &block.content_hash,
+                        &model,
+                        &target_lang,
+                        &glossary_hash,
+                        text_md,
+                    )
+                    .await?;
                 }
             }
             repo::cache_put(
@@ -430,6 +455,7 @@ async fn try_memory_reuse(
     chunk_blocks: &[&Block],
     model: &str,
     target_lang: &str,
+    glossary_hash: &str,
 ) -> Result<Option<HashMap<String, String>>> {
     let translatable: Vec<&&Block> = chunk_blocks.iter().filter(|b| b.translatable).collect();
     if translatable.is_empty() {
@@ -437,7 +463,15 @@ async fn try_memory_reuse(
     }
     let mut reused: HashMap<String, String> = HashMap::new();
     for block in translatable {
-        match repo::memory_get(&deps.pool, &block.content_hash, model, target_lang).await? {
+        match repo::memory_get(
+            &deps.pool,
+            &block.content_hash,
+            model,
+            target_lang,
+            glossary_hash,
+        )
+        .await?
+        {
             Some(text_md) => {
                 repo::upsert_block_translation(
                     &deps.pool,
@@ -556,19 +590,6 @@ fn describe_placeholders(missing: &[u32], duplicated: &[u32], unknown: &[u32]) -
     } else {
         parts.join("; ")
     }
-}
-
-async fn load_glossary(pool: &sqlx::SqlitePool, project_id: &str) -> Result<Vec<GlossaryEntry>> {
-    let terms = repo::list_glossary_terms(pool, project_id).await?;
-    Ok(terms
-        .into_iter()
-        .filter(|t| t.status != "rejected")
-        .map(|t| GlossaryEntry {
-            source: t.source,
-            target: t.target,
-            kind: t.kind,
-        })
-        .collect())
 }
 
 /// The human-readable title of the chunk's chapter, or an empty string when the

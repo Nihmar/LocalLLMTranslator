@@ -18,6 +18,10 @@ pub struct Project {
     pub target_lang: String,
     pub doc_title: Option<String>,
     pub doc_author: Option<String>,
+    /// Series the book belongs to (PLAN.md §9.5); `None` for a standalone book.
+    pub series_id: Option<String>,
+    /// Position inside the series, for ordering the books in the UI and the exports.
+    pub series_order: Option<i64>,
     pub prompts_snapshot_dir: Option<String>,
     pub settings_json: String,
     pub created_at: String,
@@ -151,6 +155,52 @@ pub struct ProjectMemory {
     pub updated_at: String,
 }
 
+/// A book series: the shared canon a project inherits (PLAN.md §9.5).
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct Series {
+    pub id: String,
+    pub name: String,
+    /// Pinned language pair every member book shares.
+    pub source_lang: Option<String>,
+    pub target_lang: Option<String>,
+    pub settings_json: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// A series glossary term. Same shape as [`GlossaryTerm`], scoped to a series.
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct SeriesGlossaryTerm {
+    pub id: String,
+    pub series_id: String,
+    pub source_lang: Option<String>,
+    pub target_lang: Option<String>,
+    pub source: String,
+    pub target: String,
+    pub note: Option<String>,
+    pub kind: String,
+    pub origin: String,
+    pub revision: i64,
+    pub status: String,
+}
+
+/// A surface form of a series term (`the Keeper`, `Keeper's`).
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct SeriesGlossaryVariant {
+    pub id: String,
+    pub term_id: String,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct SeriesMemory {
+    pub series_id: String,
+    pub key: String,
+    pub value: String,
+    pub revision: i64,
+    pub updated_at: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct LlmEndpoint {
     pub id: String,
@@ -231,6 +281,8 @@ pub struct TranslationMemoryRow {
     pub content_hash: String,
     pub model: String,
     pub target_lang: String,
+    /// Hash of the effective glossary the row was produced with.
+    pub glossary_hash: String,
     pub text_md: String,
     pub hits: i64,
     pub updated_at: String,

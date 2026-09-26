@@ -72,6 +72,8 @@ pub async fn seed_project(
             target_lang: "Italian".to_string(),
             doc_title: Some("The Lantern Keeper".to_string()),
             doc_author: Some("Fixture Author".to_string()),
+            series_id: None,
+            series_order: None,
             prompts_snapshot_dir: None,
             settings_json: "{}".to_string(),
             created_at: timestamp.clone(),

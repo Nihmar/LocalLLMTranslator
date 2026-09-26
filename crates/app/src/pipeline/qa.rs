@@ -27,15 +27,12 @@ pub struct QaScanPayload {
     pub chunk_id: String,
 }
 
-/// The glossary as the sidecar expects it: a `{source: target}` object of the
-/// non-rejected terms.
+/// The glossary as the sidecar expects it: a `{source: target}` object of the effective,
+/// non-rejected terms (project terms override the series canon; PLAN.md §9.5).
 pub async fn glossary_object(pool: &SqlitePool, project_id: &str) -> Result<Value> {
     let mut map = serde_json::Map::new();
-    for term in repo::list_glossary_terms(pool, project_id).await? {
-        if term.status == "rejected"
-            || term.source.trim().is_empty()
-            || term.target.trim().is_empty()
-        {
+    for term in crate::pipeline::glossary::effective_terms(pool, project_id).await? {
+        if term.source.trim().is_empty() || term.target.trim().is_empty() {
             continue;
         }
         map.insert(term.source, Value::String(term.target));

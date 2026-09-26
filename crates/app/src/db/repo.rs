@@ -28,8 +28,9 @@ pub struct ChunkOutcome {
 pub async fn insert_project(pool: &SqlitePool, p: &Project) -> Result<()> {
     sqlx::query(
         "INSERT INTO project (id, name, source_path, source_hash, source_format, source_lang, \
-         target_lang, doc_title, doc_author, prompts_snapshot_dir, settings_json, created_at, updated_at) \
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
+         target_lang, doc_title, doc_author, series_id, series_order, prompts_snapshot_dir, \
+         settings_json, created_at, updated_at) \
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
     )
     .bind(p.id.as_str())
     .bind(p.name.as_str())
@@ -40,6 +41,8 @@ pub async fn insert_project(pool: &SqlitePool, p: &Project) -> Result<()> {
     .bind(p.target_lang.as_str())
     .bind(p.doc_title.as_deref())
     .bind(p.doc_author.as_deref())
+    .bind(p.series_id.as_deref())
+    .bind(p.series_order)
     .bind(p.prompts_snapshot_dir.as_deref())
     .bind(p.settings_json.as_str())
     .bind(p.created_at.as_str())
@@ -318,6 +321,276 @@ pub async fn delete_glossary_term(pool: &SqlitePool, id: &str) -> Result<u64> {
         .execute(pool)
         .await?;
     Ok(res.rows_affected())
+}
+
+// ---------------------------------------------------------------------------
+// series (PLAN.md §9.5)
+// ---------------------------------------------------------------------------
+
+pub async fn upsert_series(pool: &SqlitePool, s: &Series) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO series (id, name, source_lang, target_lang, settings_json, created_at, updated_at) \
+         VALUES (?1,?2,?3,?4,?5,?6,?7) \
+         ON CONFLICT(id) DO UPDATE SET name=excluded.name, source_lang=excluded.source_lang, \
+         target_lang=excluded.target_lang, settings_json=excluded.settings_json, \
+         updated_at=excluded.updated_at",
+    )
+    .bind(s.id.as_str())
+    .bind(s.name.as_str())
+    .bind(s.source_lang.as_deref())
+    .bind(s.target_lang.as_deref())
+    .bind(s.settings_json.as_str())
+    .bind(s.created_at.as_str())
+    .bind(s.updated_at.as_str())
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn list_series(pool: &SqlitePool) -> Result<Vec<Series>> {
+    let rows = sqlx::query_as::<_, Series>("SELECT * FROM series ORDER BY name")
+        .fetch_all(pool)
+        .await?;
+    Ok(rows)
+}
+
+pub async fn get_series(pool: &SqlitePool, id: &str) -> Result<Option<Series>> {
+    let row = sqlx::query_as::<_, Series>("SELECT * FROM series WHERE id = ?1")
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row)
+}
+
+pub async fn delete_series(pool: &SqlitePool, id: &str) -> Result<u64> {
+    let res = sqlx::query("DELETE FROM series WHERE id = ?1")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(res.rows_affected())
+}
+
+/// Place a project in a series (or remove it with `series_id = None`).
+pub async fn set_project_series(
+    pool: &SqlitePool,
+    project_id: &str,
+    series_id: Option<&str>,
+    series_order: Option<i64>,
+) -> Result<u64> {
+    let res = sqlx::query(
+        "UPDATE project SET series_id = ?2, series_order = ?3, updated_at = ?4 WHERE id = ?1",
+    )
+    .bind(project_id)
+    .bind(series_id)
+    .bind(series_order)
+    .bind(now())
+    .execute(pool)
+    .await?;
+    Ok(res.rows_affected())
+}
+
+pub async fn list_projects_for_series(pool: &SqlitePool, series_id: &str) -> Result<Vec<Project>> {
+    let rows = sqlx::query_as::<_, Project>(
+        "SELECT * FROM project WHERE series_id = ?1 ORDER BY series_order, created_at",
+    )
+    .bind(series_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+pub async fn upsert_series_term(pool: &SqlitePool, t: &SeriesGlossaryTerm) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO series_glossary_term (id, series_id, source_lang, target_lang, source, target, \
+         note, kind, origin, revision, status) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11) \
+         ON CONFLICT(series_id, source_lang, target_lang, source) DO UPDATE SET \
+         target=excluded.target, note=excluded.note, kind=excluded.kind, origin=excluded.origin, \
+         revision=series_glossary_term.revision+1, status=excluded.status",
+    )
+    .bind(t.id.as_str())
+    .bind(t.series_id.as_str())
+    .bind(t.source_lang.as_deref())
+    .bind(t.target_lang.as_deref())
+    .bind(t.source.as_str())
+    .bind(t.target.as_str())
+    .bind(t.note.as_deref())
+    .bind(t.kind.as_str())
+    .bind(t.origin.as_str())
+    .bind(t.revision)
+    .bind(t.status.as_str())
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn list_series_terms(
+    pool: &SqlitePool,
+    series_id: &str,
+) -> Result<Vec<SeriesGlossaryTerm>> {
+    let rows = sqlx::query_as::<_, SeriesGlossaryTerm>(
+        "SELECT * FROM series_glossary_term WHERE series_id = ?1 ORDER BY source",
+    )
+    .bind(series_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+pub async fn get_series_term(pool: &SqlitePool, id: &str) -> Result<Option<SeriesGlossaryTerm>> {
+    let row =
+        sqlx::query_as::<_, SeriesGlossaryTerm>("SELECT * FROM series_glossary_term WHERE id = ?1")
+            .bind(id)
+            .fetch_optional(pool)
+            .await?;
+    Ok(row)
+}
+
+/// The series term matching `source` case-insensitively, if any.
+pub async fn get_series_term_by_source(
+    pool: &SqlitePool,
+    series_id: &str,
+    source: &str,
+) -> Result<Option<SeriesGlossaryTerm>> {
+    let row = sqlx::query_as::<_, SeriesGlossaryTerm>(
+        "SELECT * FROM series_glossary_term WHERE series_id = ?1 AND lower(source) = lower(?2) LIMIT 1",
+    )
+    .bind(series_id)
+    .bind(source)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}
+
+/// Optimistic update of a series term: only writes when `revision` still matches.
+pub async fn update_series_term_checked(
+    pool: &SqlitePool,
+    term: &SeriesGlossaryTerm,
+    expected_revision: i64,
+) -> Result<bool> {
+    let result = sqlx::query(
+        "UPDATE series_glossary_term SET target = ?2, note = ?3, kind = ?4, status = ?5, \
+         origin = 'manual', revision = revision + 1 WHERE id = ?1 AND revision = ?6",
+    )
+    .bind(term.id.as_str())
+    .bind(term.target.as_str())
+    .bind(term.note.as_deref())
+    .bind(term.kind.as_str())
+    .bind(term.status.as_str())
+    .bind(expected_revision)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() == 1)
+}
+
+pub async fn set_series_term_status(pool: &SqlitePool, id: &str, status: &str) -> Result<()> {
+    sqlx::query("UPDATE series_glossary_term SET status = ?2 WHERE id = ?1")
+        .bind(id)
+        .bind(status)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn delete_series_term(pool: &SqlitePool, id: &str) -> Result<u64> {
+    let res = sqlx::query("DELETE FROM series_glossary_term WHERE id = ?1")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(res.rows_affected())
+}
+
+pub async fn upsert_series_variant(pool: &SqlitePool, v: &SeriesGlossaryVariant) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO series_glossary_variant (id, term_id, text) VALUES (?1,?2,?3) \
+         ON CONFLICT(term_id, text) DO NOTHING",
+    )
+    .bind(v.id.as_str())
+    .bind(v.term_id.as_str())
+    .bind(v.text.as_str())
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn delete_series_variant(pool: &SqlitePool, id: &str) -> Result<u64> {
+    let res = sqlx::query("DELETE FROM series_glossary_variant WHERE id = ?1")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(res.rows_affected())
+}
+
+pub async fn list_series_variants(
+    pool: &SqlitePool,
+    term_id: &str,
+) -> Result<Vec<SeriesGlossaryVariant>> {
+    let rows = sqlx::query_as::<_, SeriesGlossaryVariant>(
+        "SELECT * FROM series_glossary_variant WHERE term_id = ?1 ORDER BY text",
+    )
+    .bind(term_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// Every variant of a series, so the effective glossary can be resolved in one query.
+pub async fn list_variants_for_series(
+    pool: &SqlitePool,
+    series_id: &str,
+) -> Result<Vec<SeriesGlossaryVariant>> {
+    let rows = sqlx::query_as::<_, SeriesGlossaryVariant>(
+        "SELECT v.* FROM series_glossary_variant v \
+         JOIN series_glossary_term t ON t.id = v.term_id WHERE t.series_id = ?1 ORDER BY v.text",
+    )
+    .bind(series_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+pub async fn set_series_memory(
+    pool: &SqlitePool,
+    series_id: &str,
+    key: &str,
+    value: &str,
+) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO series_memory (series_id, key, value, revision, updated_at) \
+         VALUES (?1,?2,?3,1,?4) \
+         ON CONFLICT(series_id, key) DO UPDATE SET value=excluded.value, \
+         revision=series_memory.revision+1, updated_at=excluded.updated_at",
+    )
+    .bind(series_id)
+    .bind(key)
+    .bind(value)
+    .bind(now())
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn get_series_memory(
+    pool: &SqlitePool,
+    series_id: &str,
+    key: &str,
+) -> Result<Option<String>> {
+    let row: Option<(String,)> =
+        sqlx::query_as("SELECT value FROM series_memory WHERE series_id = ?1 AND key = ?2")
+            .bind(series_id)
+            .bind(key)
+            .fetch_optional(pool)
+            .await?;
+    Ok(row.map(|r| r.0))
+}
+
+pub async fn list_series_memory(pool: &SqlitePool, series_id: &str) -> Result<Vec<SeriesMemory>> {
+    let rows = sqlx::query_as::<_, SeriesMemory>(
+        "SELECT * FROM series_memory WHERE series_id = ?1 ORDER BY key",
+    )
+    .bind(series_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
 }
 
 // ---------------------------------------------------------------------------
@@ -894,23 +1167,27 @@ pub async fn memory_get(
     content_hash: &str,
     model: &str,
     target_lang: &str,
+    glossary_hash: &str,
 ) -> Result<Option<String>> {
     let row: Option<(String,)> = sqlx::query_as(
-        "SELECT text_md FROM translation_memory WHERE content_hash=?1 AND model=?2 AND target_lang=?3",
+        "SELECT text_md FROM translation_memory WHERE content_hash=?1 AND model=?2 AND target_lang=?3 \
+         AND glossary_hash=?4",
     )
     .bind(content_hash)
     .bind(model)
     .bind(target_lang)
+    .bind(glossary_hash)
     .fetch_optional(pool)
     .await?;
     if row.is_some() {
         sqlx::query(
-            "UPDATE translation_memory SET hits=hits+1, updated_at=?4 WHERE content_hash=?1 \
-             AND model=?2 AND target_lang=?3",
+            "UPDATE translation_memory SET hits=hits+1, updated_at=?5 WHERE content_hash=?1 \
+             AND model=?2 AND target_lang=?3 AND glossary_hash=?4",
         )
         .bind(content_hash)
         .bind(model)
         .bind(target_lang)
+        .bind(glossary_hash)
         .bind(now())
         .execute(pool)
         .await?;
@@ -923,17 +1200,19 @@ pub async fn memory_put(
     content_hash: &str,
     model: &str,
     target_lang: &str,
+    glossary_hash: &str,
     text_md: &str,
 ) -> Result<()> {
     sqlx::query(
-        "INSERT INTO translation_memory (content_hash, model, target_lang, text_md, hits, updated_at) \
-         VALUES (?1,?2,?3,?4,0,?5) \
-         ON CONFLICT(content_hash, model, target_lang) DO UPDATE SET text_md=excluded.text_md, \
-         updated_at=excluded.updated_at",
+        "INSERT INTO translation_memory (content_hash, model, target_lang, glossary_hash, text_md, hits, updated_at) \
+         VALUES (?1,?2,?3,?4,?5,0,?6) \
+         ON CONFLICT(content_hash, model, target_lang, glossary_hash) DO UPDATE SET \
+         text_md=excluded.text_md, updated_at=excluded.updated_at",
     )
     .bind(content_hash)
     .bind(model)
     .bind(target_lang)
+    .bind(glossary_hash)
     .bind(text_md)
     .bind(now())
     .execute(pool)
@@ -1161,6 +1440,45 @@ mod tests {
         assert_eq!(stored.target, "custode");
         assert_eq!(stored.revision, 2, "the existing row was updated in place");
         assert!(get_glossary_term(&pool, "t2").await.expect("get").is_none());
+    }
+
+    #[tokio::test]
+    async fn translation_memory_is_scoped_to_the_effective_glossary() {
+        let pool = connect_memory().await.expect("pool");
+        memory_put(&pool, "h1", "m", "it", "glossary-a", "Ciao")
+            .await
+            .expect("put");
+        assert_eq!(
+            memory_get(&pool, "h1", "m", "it", "glossary-a")
+                .await
+                .expect("get")
+                .as_deref(),
+            Some("Ciao")
+        );
+        // A different canon must not reuse the old rendering.
+        assert!(memory_get(&pool, "h1", "m", "it", "glossary-b")
+            .await
+            .expect("get")
+            .is_none());
+
+        memory_put(&pool, "h1", "m", "it", "glossary-b", "Salve")
+            .await
+            .expect("put");
+        assert_eq!(
+            memory_get(&pool, "h1", "m", "it", "glossary-b")
+                .await
+                .expect("get")
+                .as_deref(),
+            Some("Salve")
+        );
+        assert_eq!(
+            memory_get(&pool, "h1", "m", "it", "glossary-a")
+                .await
+                .expect("get")
+                .as_deref(),
+            Some("Ciao"),
+            "the two canons coexist"
+        );
     }
 
     #[tokio::test]
