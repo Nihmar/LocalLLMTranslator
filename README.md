@@ -149,7 +149,7 @@ cargo test --test summarize -- --nocapture                 # rolling memory end 
 cargo test --test review -- --nocapture                    # editor/proofreader passes and accept
 cargo test --test qa -- --nocapture                        # QA findings, real sidecar
 cargo test --test walking_skeleton -- --nocapture          # end-to-end, real sidecar
-cd ui && npm run test                                      # IPC and diff unit tests
+cd ui && npm run test                                      # IPC unit tests
 ```
 
 ### Offline verification
