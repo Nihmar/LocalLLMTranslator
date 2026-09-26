@@ -1063,6 +1063,8 @@ mod tests {
             target_lang: "it".into(),
             doc_title: None,
             doc_author: None,
+            series_id: None,
+            series_order: None,
             prompts_snapshot_dir: None,
             settings_json: "{}".into(),
             created_at: String::new(),
