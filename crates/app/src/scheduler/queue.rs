@@ -301,6 +301,21 @@ pub async fn cancel_active(pool: &SqlitePool, project_id: Option<&str>) -> Resul
     Ok(rows)
 }
 
+/// Cancel every unfinished job of a project. Deleting a project makes its queued work
+/// meaningless, so it is cancelled before the rows disappear instead of failing later
+/// with "project not found".
+pub async fn cancel_project_jobs(pool: &SqlitePool, project_id: &str) -> Result<Vec<Job>> {
+    let rows = sqlx::query_as::<_, Job>(
+        "UPDATE job SET state='cancelled', finished_at=?1, lease_owner=NULL, lease_expires_at=NULL \
+         WHERE project_id = ?2 AND state IN ('pending','leased','running') RETURNING *",
+    )
+    .bind(now())
+    .bind(project_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
 /// Fetch a single job by id.
 pub async fn get_job(pool: &SqlitePool, id: &str) -> Result<Option<Job>> {
     let row = sqlx::query_as::<_, Job>("SELECT * FROM job WHERE id = ?1")
@@ -514,6 +529,45 @@ mod tests {
         }
         assert_eq!(
             get_job(&pool, &other_pending)
+                .await
+                .expect("get")
+                .expect("some")
+                .state,
+            "pending"
+        );
+    }
+
+    #[tokio::test]
+    async fn cancel_project_jobs_leaves_finished_work_and_other_projects_alone() {
+        let (pool, _dir) = connect_temp_file().await.expect("pool");
+        insert_test_project(&pool, "proj").await;
+        insert_test_project(&pool, "other").await;
+
+        let pending = enqueue(&pool, &NewJob::new("proj", "translate_chunk", Value::Null))
+            .await
+            .expect("enqueue");
+        let done = enqueue(&pool, &NewJob::new("proj", "summarize", Value::Null))
+            .await
+            .expect("enqueue");
+        complete(&pool, &done).await.expect("complete");
+        let other = enqueue(&pool, &NewJob::new("other", "translate_chunk", Value::Null))
+            .await
+            .expect("enqueue");
+
+        let cancelled = cancel_project_jobs(&pool, "proj").await.expect("cancel");
+        assert_eq!(cancelled.len(), 1, "only the unfinished job of proj");
+        assert_eq!(cancelled[0].id, pending);
+        assert_eq!(cancelled[0].state, "cancelled");
+        assert_eq!(
+            get_job(&pool, &done)
+                .await
+                .expect("get")
+                .expect("some")
+                .state,
+            "done"
+        );
+        assert_eq!(
+            get_job(&pool, &other)
                 .await
                 .expect("get")
                 .expect("some")

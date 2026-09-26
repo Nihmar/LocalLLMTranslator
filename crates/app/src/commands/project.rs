@@ -7,6 +7,7 @@ use super::{Ack, CreateProjectRequest};
 use crate::db::models::{Chapter, Project};
 use crate::db::{new_id, now, repo};
 use crate::error::Result;
+use crate::scheduler::queue;
 use crate::util::{sha256_hex, sha256_hex_str};
 use crate::AppState;
 
@@ -97,7 +98,22 @@ pub async fn project_get(state: State<'_, AppState>, id: String) -> Result<Proje
 
 #[tauri::command]
 pub async fn project_delete(state: State<'_, AppState>, id: String) -> Result<Ack> {
+    // Queued work for a project that is about to disappear would only fail later.
+    let cancelled = queue::cancel_project_jobs(&state.pool, &id).await?;
+    for job in &cancelled {
+        crate::events::emit_job(&*state.emitter, job);
+    }
+
     repo::delete_project(&state.pool, &id).await?;
+
+    // The rows are the source of truth; the files are cleaned up best effort, so a
+    // locked or missing directory cannot fail the deletion itself.
+    let project_dir = state.data_dir.join("projects").join(&id);
+    if let Err(error) = tokio::fs::remove_dir_all(&project_dir).await {
+        if error.kind() != std::io::ErrorKind::NotFound {
+            tracing::warn!(project_id = %id, %error, "could not remove the project directory");
+        }
+    }
     Ok(Ack::done())
 }
 

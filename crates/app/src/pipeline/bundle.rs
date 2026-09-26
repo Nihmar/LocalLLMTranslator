@@ -8,7 +8,7 @@
 //! that already exists is rejected, and no other project's rows are touched.
 
 use std::fs::File;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -23,6 +23,11 @@ pub const FORMAT_VERSION: u32 = 1;
 
 const MANIFEST_NAME: &str = "manifest.json";
 const DATABASE_NAME: &str = "project.sqlite";
+
+/// Caps for extraction: a bundle is a project snapshot, not an arbitrary archive.
+/// `enclosed_name` stops path traversal but not a decompression bomb.
+const MAX_ARCHIVE_ENTRIES: usize = 20_000;
+const MAX_ARCHIVE_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BundleManifest {
@@ -430,8 +435,27 @@ fn add_tree(
 }
 
 fn extract_archive(archive: &Path, destination: &Path) -> Result<()> {
+    extract_archive_with_limits(archive, destination, MAX_ARCHIVE_ENTRIES, MAX_ARCHIVE_BYTES)
+}
+
+/// Extract `archive` into `destination`, refusing an archive that is too large or holds
+/// too many entries. The byte budget is enforced while copying, so a header that lies
+/// about its entry size cannot smuggle a bomb past it.
+fn extract_archive_with_limits(
+    archive: &Path,
+    destination: &Path,
+    max_entries: usize,
+    max_bytes: u64,
+) -> Result<()> {
     let file = File::open(archive)?;
     let mut zip = zip::ZipArchive::new(file)?;
+    if zip.len() > max_entries {
+        return Err(AppError::Invalid(format!(
+            "the archive has {} entries; the supported maximum is {max_entries}",
+            zip.len()
+        )));
+    }
+    let mut extracted: u64 = 0;
     for index in 0..zip.len() {
         let mut entry = zip.by_index(index)?;
         // `enclosed_name` rejects absolute paths and `..` traversal.
@@ -448,8 +472,17 @@ fn extract_archive(archive: &Path, destination: &Path) -> Result<()> {
         if let Some(parent) = out.parent() {
             std::fs::create_dir_all(parent)?;
         }
+        let allowed = max_bytes.saturating_sub(extracted);
         let mut target = File::create(&out)?;
-        std::io::copy(&mut entry, &mut target)?;
+        // Read at most one byte past the remaining budget: if it is consumed, the
+        // archive is larger than the cap and the staging directory is discarded.
+        let copied = std::io::copy(&mut (&mut entry).take(allowed + 1), &mut target)?;
+        extracted = extracted.saturating_add(copied);
+        if extracted > max_bytes {
+            return Err(AppError::Invalid(format!(
+                "the archive expands to more than {max_bytes} bytes; it is not a supported .llmtz bundle"
+            )));
+        }
     }
     Ok(())
 }
@@ -464,4 +497,57 @@ fn sanitize(name: &str) -> String {
             }
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    fn zip_with(entries: &[(&str, &[u8])]) -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("bundle.zip");
+        let mut writer = zip::ZipWriter::new(File::create(&path).expect("create"));
+        let options = zip::write::SimpleFileOptions::default();
+        for (name, body) in entries {
+            writer.start_file(*name, options).expect("start");
+            writer.write_all(body).expect("write");
+        }
+        writer.finish().expect("finish");
+        (dir, path)
+    }
+
+    #[test]
+    fn extraction_refuses_a_too_large_archive() {
+        let (dir, archive) = zip_with(&[("work/document.md", b"0123456789")]);
+        let destination = dir.path().join("out");
+
+        // Five bytes are allowed: the copy reads one past the budget and fails.
+        let error = extract_archive_with_limits(&archive, &destination, 10, 5)
+            .expect_err("the byte cap must reject the archive");
+        assert!(
+            error.to_string().contains("expands to more than"),
+            "{error}"
+        );
+
+        // The same archive is fine with a budget above its size.
+        extract_archive_with_limits(&archive, &destination, 10, 64).expect("under the cap");
+    }
+
+    #[test]
+    fn extraction_refuses_too_many_entries() {
+        let (dir, archive) = zip_with(&[("a", b"a"), ("b", b"b"), ("c", b"c")]);
+        let error = extract_archive_with_limits(&archive, &dir.path().join("out"), 2, 1024)
+            .expect_err("the entry cap must reject the archive");
+        assert!(error.to_string().contains("entries"), "{error}");
+    }
+
+    #[test]
+    fn extraction_refuses_an_unsafe_path() {
+        let (dir, archive) = zip_with(&[("../escape.txt", b"x")]);
+        let error = extract_archive_with_limits(&archive, &dir.path().join("out"), 10, 1024)
+            .expect_err("traversal must be rejected");
+        assert!(error.to_string().contains("unsafe path"), "{error}");
+        assert!(!dir.path().join("escape.txt").exists());
+    }
 }
