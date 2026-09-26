@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { DiffText } from "../components/DiffText";
+import { MergeDiff, ReadOnlyCode } from "../components/CodeEditor";
 import { EmptyState } from "../components/EmptyState";
 import { onJobProgress } from "../lib/events";
 import { formatNumber } from "../lib/format";
-import { diffWords } from "../lib/diff";
 import {
   chunkGet,
   chunkList,
@@ -158,6 +157,7 @@ export function ReviewView({ project, onNavigate }: ReviewViewProps) {
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [findings, setFindings] = useState<QaFinding[]>([]);
   const [selectedSuggestionId, setSelectedSuggestionId] = useState<string | null>(null);
+  const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
   const [passFilter, setPassFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("pending");
   const [qaKindFilter, setQaKindFilter] = useState("all");
@@ -281,6 +281,17 @@ export function ReviewView({ project, onNavigate }: ReviewViewProps) {
 
   const blockTexts = useMemo(() => preferredByBlock(detail?.translations ?? []), [detail]);
 
+  const blocks = useMemo(() => detail?.blocks ?? [], [detail]);
+  useEffect(() => {
+    if (blocks.length === 0) {
+      setSelectedBlockId(null);
+      return;
+    }
+    if (selectedBlockId === null || !blocks.some((block) => block.id === selectedBlockId)) {
+      setSelectedBlockId(blocks[0]?.id ?? null);
+    }
+  }, [blocks, selectedBlockId]);
+
   if (project === null) {
     return (
       <div className="section-stack">
@@ -339,7 +350,12 @@ export function ReviewView({ project, onNavigate }: ReviewViewProps) {
   }
 
   const selected = selectedSuggestion;
-  const blocks = detail?.blocks ?? [];
+  const selectedBlock = blocks.find((block) => block.id === selectedBlockId) ?? null;
+  const selectedBlockIndex = blocks.findIndex((block) => block.id === selectedBlockId);
+  const currentText =
+    selectedBlock === null ? "" : (blockTexts.get(selectedBlock.id) ?? selectedBlock.source_md);
+  const proposalActive = selected !== null && selectedBlock !== null && selected.block_id === selectedBlock.id;
+  const proposedText = proposalActive && selected !== null ? applyProposal(currentText, selected) : currentText;
 
   return (
     <div className="section-stack">
@@ -460,47 +476,83 @@ export function ReviewView({ project, onNavigate }: ReviewViewProps) {
               <div className="panel-pad">
                 <EmptyState tone="loading" compact title="Lettura del chunk…" />
               </div>
+            ) : blocks.length === 0 ? (
+              <div className="panel-pad">
+                <EmptyState compact title="Il chunk non ha blocchi leggibili" />
+              </div>
+            ) : selectedBlock === null ? (
+              <div className="panel-pad">
+                <EmptyState tone="loading" compact title="Selezione del blocco…" />
+              </div>
             ) : (
               <div className="panel-pad section-stack">
+                <div className="flex flex-wrap items-center gap-1">
+                  {blocks.map((block, index) => (
+                    <button
+                      key={block.id}
+                      type="button"
+                      className="btn btn-sm"
+                      data-selected={block.id === selectedBlockId}
+                      style={{ fontWeight: block.id === selectedBlockId ? 700 : 400 }}
+                      onClick={() => {
+                        setSelectedBlockId(block.id);
+                      }}
+                    >
+                      {index + 1}. {block.kind}
+                      {block.translatable ? "" : " · fisso"}
+                    </button>
+                  ))}
+                  <span className="ml-auto flex items-center gap-1">
+                    <button
+                      type="button"
+                      className="btn btn-sm"
+                      disabled={selectedBlockIndex <= 0}
+                      onClick={() => {
+                        setSelectedBlockId(blocks[selectedBlockIndex - 1]?.id ?? selectedBlockId);
+                      }}
+                    >
+                      ◀
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-sm"
+                      disabled={selectedBlockIndex < 0 || selectedBlockIndex >= blocks.length - 1}
+                      onClick={() => {
+                        setSelectedBlockId(blocks[selectedBlockIndex + 1]?.id ?? selectedBlockId);
+                      }}
+                    >
+                      ▶
+                    </button>
+                  </span>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2 text-[0.68rem] text-faint">
+                  <span className="mono-chip">{selectedBlock.id}</span>
+                  <span>{selectedBlock.kind}</span>
+                  {proposalActive && selected !== null ? (
+                    <>
+                      <span className={severityClass(selected.severity)}>
+                        {selected.severity ?? "nota"}
+                      </span>
+                      <span className="badge badge-warning">modifica selezionata</span>
+                    </>
+                  ) : (
+                    <span className="badge badge-neutral">nessun suggerimento su questo blocco</span>
+                  )}
+                </div>
+
                 <div className="grid grid-cols-3 gap-3">
                   <div className="field-label">Originale</div>
-                  <div className="field-label">Tradotto</div>
-                  <div className="field-label">Corretto</div>
+                  <div className="field-label col-span-2">
+                    Tradotto (sinistra) → Corretto (destra), diff a caratteri
+                  </div>
                 </div>
-                {blocks.map((block) => {
-                  const current = blockTexts.get(block.id) ?? block.source_md;
-                  const isTarget = selected !== null && selected.block_id === block.id;
-                  const proposed = isTarget && selected !== null ? applyProposal(current, selected) : current;
-                  const segments = diffWords(current, proposed);
-                  return (
-                    <div key={block.id} className="rounded border border-line">
-                      <div className="flex items-center justify-between gap-2 px-2 py-1">
-                        <span className="flex items-center gap-1 text-[0.68rem] text-faint">
-                          <span className="mono-chip">{block.id}</span>
-                          {block.kind}
-                          {block.translatable ? "" : " · non traducibile"}
-                        </span>
-                        {isTarget ? (
-                          <span className="badge badge-warning">modifica selezionata</span>
-                        ) : null}
-                      </div>
-                      <div className="grid grid-cols-3 gap-3 px-2 pb-2">
-                        <pre className="max-w-prose font-mono text-[0.72rem] whitespace-pre-wrap text-ink-soft">
-                          {block.source_md}
-                        </pre>
-                        <pre className="max-w-prose font-mono text-[0.72rem] whitespace-pre-wrap text-ink-soft">
-                          <DiffText segments={segments} side="before" fallback={current} />
-                        </pre>
-                        <pre className="max-w-prose font-mono text-[0.72rem] whitespace-pre-wrap text-ink">
-                          <DiffText segments={segments} side="after" fallback={proposed} />
-                        </pre>
-                      </div>
-                    </div>
-                  );
-                })}
-                {blocks.length === 0 ? (
-                  <EmptyState compact title="Il chunk non ha blocchi leggibili" />
-                ) : null}
+                <div className="grid grid-cols-3 gap-3">
+                  <ReadOnlyCode text={selectedBlock.source_md} />
+                  <div className="col-span-2">
+                    <MergeDiff before={currentText} after={proposedText} />
+                  </div>
+                </div>
               </div>
             )}
           </div>
@@ -566,6 +618,9 @@ export function ReviewView({ project, onNavigate }: ReviewViewProps) {
                             setSelectedSuggestionId(suggestion.id);
                             if (suggestion.chunk_id !== chunkId) {
                               setChunkId(suggestion.chunk_id);
+                            }
+                            if (suggestion.block_id !== null) {
+                              setSelectedBlockId(suggestion.block_id);
                             }
                           }}
                         >
