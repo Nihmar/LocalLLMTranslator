@@ -30,7 +30,14 @@
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.ico"
-    ]
+    ],
+    "resources": {
+      "../../sidecar/dist/llmtranslator_sidecar": "llmtranslator_sidecar",
+      "../../prompts": "prompts",
+      "../../pandoc/templates": "pandoc/templates",
+      "../../pandoc/filters": "pandoc/filters",
+      "../../pandoc/styles": "pandoc/styles"
+    }
   },
   "plugins": {}
 }

@@ -16,6 +16,8 @@ dependencies = [
 
 [project.optional-dependencies]
 marker = ["marker-pdf>=1.0.0"]
+# Packaging only: `uv run --extra package python -m build_sidecar`.
+package = ["pyinstaller>=6.10"]
 
 [dependency-groups]
 dev = [
@@ -50,6 +52,8 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
+# A packaging script prints its progress; that is its user interface.
+"build_sidecar.py" = ["T201"]
 "tests/*" = [
     "ANN",
     "C901",     # a long end-to-end test is still one test

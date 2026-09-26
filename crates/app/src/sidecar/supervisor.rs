@@ -468,20 +468,30 @@ async fn writer_task(mut stdin: ChildStdin, mut rx: mpsc::UnboundedReceiver<Vec<
     // Dropping `stdin` closes the pipe, signalling EOF to the sidecar.
 }
 
-/// The bundled sidecar resource directory/file, if the app is running from a
-/// packaged bundle. Kept as a free function so it can be unit tested.
+/// The bundled sidecar executable, if the app is running from a packaged
+/// bundle. The Tauri resource is the PyInstaller `onedir` directory, so the
+/// executable lives inside it (`<resources>/llmtranslator_sidecar/llmtranslator_sidecar`);
+/// a single-file resource is also accepted. Kept as a free function so it can be
+/// unit tested.
 pub fn bundled_sidecar_path(resource_dir: Option<&PathBuf>) -> Option<PathBuf> {
     let dir = resource_dir?;
-    let candidates = ["llmtranslator_sidecar", "llmtranslator_sidecar.exe"];
-    for name in candidates {
+    let names: [&str; 2] = ["llmtranslator_sidecar", "llmtranslator_sidecar.exe"];
+
+    // A single-file resource.
+    for name in names {
         let direct = dir.join(name);
-        if direct.exists() {
+        if direct.is_file() {
             return Some(direct);
         }
     }
-    let nested = dir.join("llmtranslator_sidecar");
-    if nested.exists() {
-        return Some(nested);
+
+    // The onedir layout: `<resources>/llmtranslator_sidecar/<exe>`.
+    let nested_dir = dir.join("llmtranslator_sidecar");
+    for name in names {
+        let executable = nested_dir.join(name);
+        if executable.is_file() {
+            return Some(executable);
+        }
     }
     None
 }
@@ -510,6 +520,24 @@ mod tests {
     fn bundled_path_is_none_when_absent() {
         let dir = tempfile::tempdir().expect("tempdir");
         assert!(bundled_sidecar_path(Some(&dir.path().to_path_buf())).is_none());
+    }
+
+    #[test]
+    fn bundled_path_finds_the_onedir_executable() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let nested = dir.path().join("llmtranslator_sidecar");
+        std::fs::create_dir_all(&nested).expect("nested dir");
+        let executable = nested.join("llmtranslator_sidecar");
+        std::fs::write(&executable, b"").expect("touch");
+        assert_eq!(
+            bundled_sidecar_path(Some(&dir.path().to_path_buf())),
+            Some(executable)
+        );
+
+        // The directory alone is not an executable.
+        let empty = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(empty.path().join("llmtranslator_sidecar")).expect("dir");
+        assert!(bundled_sidecar_path(Some(&empty.path().to_path_buf())).is_none());
     }
 
     fn test_supervisor() -> Arc<Supervisor> {
