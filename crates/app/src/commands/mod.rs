@@ -13,6 +13,7 @@ pub mod project;
 pub mod recon;
 pub mod review;
 pub mod role_binding;
+pub mod series;
 pub mod sidecar;
 pub mod translation;
 
@@ -79,6 +80,11 @@ pub struct CreateProjectRequest {
     pub doc_author: Option<String>,
     #[serde(default)]
     pub settings: Option<Value>,
+    /// Series the book belongs to when it is created inside a saga (PLAN.md §9.5).
+    #[serde(default)]
+    pub series_id: Option<String>,
+    #[serde(default)]
+    pub series_order: Option<i64>,
 }
 
 /// Generic ok/err acknowledgement for commands with no interesting payload.

@@ -102,6 +102,10 @@ export interface Project {
   target_lang: string;
   doc_title: string | null;
   doc_author: string | null;
+  /** Series the book belongs to; `null` for a standalone book (PLAN.md §9.5). */
+  series_id: string | null;
+  /** Position inside the series, for ordering. */
+  series_order: number | null;
   prompts_snapshot_dir: string | null;
   settings_json: string;
   created_at: string;
@@ -118,6 +122,9 @@ export interface CreateProjectRequest {
   doc_title?: string | null;
   doc_author?: string | null;
   settings?: JsonValue;
+  /** Series to create the book in, when it belongs to a saga. */
+  series_id?: string | null;
+  series_order?: number | null;
 }
 
 /** Row of `chapter` (`db::models::Chapter`). */
@@ -757,4 +764,114 @@ export interface ExportProgressEvent {
   format?: string;
   output_path?: string;
   units?: number;
+}
+
+// --- series (PLAN.md §9.5) ------------------------------------------------------------------
+
+/** Row of `series` (`db::models::Series`); the language pair is shared by its books. */
+export interface Series {
+  id: string;
+  name: string;
+  source_lang: string | null;
+  target_lang: string | null;
+  settings_json: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Row of `series_glossary_term` (`db::models::SeriesGlossaryTerm`). */
+export interface SeriesGlossaryTerm {
+  id: string;
+  series_id: string;
+  source_lang: string | null;
+  target_lang: string | null;
+  source: string;
+  target: string;
+  note: string | null;
+  kind: string;
+  origin: string;
+  revision: number;
+  status: string;
+}
+
+/** Row of `series_glossary_variant` (`db::models::SeriesGlossaryVariant`). */
+export interface SeriesGlossaryVariant {
+  id: string;
+  term_id: string;
+  text: string;
+}
+
+/** Row of `series_memory` (`db::models::SeriesMemory`). */
+export interface SeriesMemory {
+  series_id: string;
+  key: string;
+  value: string;
+  revision: number;
+  updated_at: string;
+}
+
+/** Result of `series_get` (`commands::series::SeriesDetail`). */
+export interface SeriesDetail {
+  series: Series;
+  projects: Project[];
+  memory: SeriesMemory[];
+}
+
+/** Request body of `series_create` (`commands::series::SeriesCreate`). */
+export interface SeriesCreateRequest {
+  name: string;
+  source_lang?: string | null;
+  target_lang?: string | null;
+}
+
+/** Request body of `series_update` (`commands::series::SeriesUpdate`). */
+export interface SeriesUpdateRequest {
+  id: string;
+  name?: string | null;
+  source_lang?: string | null;
+  target_lang?: string | null;
+  settings?: JsonValue | null;
+  style_guide?: string | null;
+  synopsis?: string | null;
+}
+
+/** Request body of `project_set_series` (`commands::series::ProjectSetSeries`). */
+export interface ProjectSetSeriesRequest {
+  project_id: string;
+  series_id?: string | null;
+  series_order?: number | null;
+}
+
+/** Request body of `series_glossary_upsert` (`commands::series::SeriesGlossaryUpsert`). */
+export interface SeriesGlossaryUpsertRequest {
+  id?: string | null;
+  series_id: string;
+  source: string;
+  target?: string | null;
+  kind?: string | null;
+  note?: string | null;
+  status?: string | null;
+  source_lang?: string | null;
+  target_lang?: string | null;
+  expected_revision?: number | null;
+}
+
+/** Request body of `series_variant_upsert` (`commands::series::SeriesVariantUpsert`). */
+export interface SeriesVariantUpsertRequest {
+  term_id: string;
+  text: string;
+}
+
+/** Request body of `series_promote_term` (`commands::series::SeriesPromote`). */
+export interface SeriesPromoteRequest {
+  project_id: string;
+  term_id: string;
+}
+
+/** Outcome of a promotion (`pipeline::glossary::ProposalOutcome`, serde `snake_case`). */
+export type ProposalOutcome = "added" | "unchanged" | "conflict";
+
+/** Result of `series_promote_term` (`commands::series::PromoteOutcome`). */
+export interface PromoteOutcome {
+  outcome: ProposalOutcome;
 }

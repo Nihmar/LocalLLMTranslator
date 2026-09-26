@@ -44,6 +44,8 @@ pub async fn project_create(
         target_lang: req.target_lang,
         doc_title: req.doc_title,
         doc_author: req.doc_author,
+        series_id: req.series_id,
+        series_order: req.series_order,
         prompts_snapshot_dir: None,
         settings_json: req
             .settings

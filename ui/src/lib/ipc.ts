@@ -37,6 +37,17 @@ import type {
   ExportBundleRequest,
   GlossaryTerm,
   GlossaryUpsertRequest,
+  ProjectSetSeriesRequest,
+  PromoteOutcome,
+  Series,
+  SeriesCreateRequest,
+  SeriesDetail,
+  SeriesGlossaryTerm,
+  SeriesGlossaryUpsertRequest,
+  SeriesGlossaryVariant,
+  SeriesPromoteRequest,
+  SeriesUpdateRequest,
+  SeriesVariantUpsertRequest,
   IngestStartRequest,
   ImportBundleRequest,
   Job,
@@ -87,6 +98,18 @@ const COMMANDS = {
   glossaryList: "glossary_list",
   glossaryUpsert: "glossary_upsert",
   glossaryDelete: "glossary_delete",
+  seriesList: "series_list",
+  seriesCreate: "series_create",
+  seriesGet: "series_get",
+  seriesUpdate: "series_update",
+  seriesDelete: "series_delete",
+  projectSetSeries: "project_set_series",
+  seriesGlossaryList: "series_glossary_list",
+  seriesGlossaryUpsert: "series_glossary_upsert",
+  seriesGlossaryDelete: "series_glossary_delete",
+  seriesVariantUpsert: "series_variant_upsert",
+  seriesVariantDelete: "series_variant_delete",
+  seriesPromoteTerm: "series_promote_term",
   reviewStart: "review_start",
   suggestionList: "suggestion_list",
   suggestionAccept: "suggestion_accept",
@@ -293,6 +316,69 @@ export function glossaryUpsert(request: GlossaryUpsertRequest): Promise<Glossary
 /** Remove a term. The translator prompt stops seeing it immediately. */
 export function glossaryDelete(id: string): Promise<Ack> {
   return call<Ack>(COMMANDS.glossaryDelete, { id });
+}
+
+// --- series (PLAN.md §9.5) -----------------------------------------------------------------
+
+/** Every series, ordered by name. */
+export function seriesList(): Promise<Series[]> {
+  return call<Series[]>(COMMANDS.seriesList);
+}
+
+export function seriesCreate(request: SeriesCreateRequest): Promise<Series> {
+  return call<Series>(COMMANDS.seriesCreate, { req: request });
+}
+
+/** Series row, member books and memory values. */
+export function seriesGet(id: string): Promise<SeriesDetail> {
+  return call<SeriesDetail>(COMMANDS.seriesGet, { id });
+}
+
+/** Updates the row and, when given, the series `style_guide`/`synopsis` memory. */
+export function seriesUpdate(request: SeriesUpdateRequest): Promise<Series> {
+  return call<Series>(COMMANDS.seriesUpdate, { req: request });
+}
+
+/** Deletes the series; its books survive, detached (the glossary cascade goes with it). */
+export function seriesDelete(id: string): Promise<Ack> {
+  return call<Ack>(COMMANDS.seriesDelete, { id });
+}
+
+/** Places a book in a series (or detaches it with `series_id: null`). */
+export function projectSetSeries(request: ProjectSetSeriesRequest): Promise<Project> {
+  return call<Project>(COMMANDS.projectSetSeries, { req: request });
+}
+
+/** The series glossary; the translator prompt sees it merged with the book's own. */
+export function seriesGlossaryList(seriesId: string): Promise<SeriesGlossaryTerm[]> {
+  return call<SeriesGlossaryTerm[]>(COMMANDS.seriesGlossaryList, { series_id: seriesId });
+}
+
+/** Create or update a series term; a change flags every book rendering it differently. */
+export function seriesGlossaryUpsert(
+  request: SeriesGlossaryUpsertRequest,
+): Promise<SeriesGlossaryTerm> {
+  return call<SeriesGlossaryTerm>(COMMANDS.seriesGlossaryUpsert, { req: request });
+}
+
+export function seriesGlossaryDelete(id: string): Promise<Ack> {
+  return call<Ack>(COMMANDS.seriesGlossaryDelete, { id });
+}
+
+/** Add a surface form (`the Keeper`) that also triggers the term in a chunk. */
+export function seriesVariantUpsert(
+  request: SeriesVariantUpsertRequest,
+): Promise<SeriesGlossaryVariant> {
+  return call<SeriesGlossaryVariant>(COMMANDS.seriesVariantUpsert, { req: request });
+}
+
+export function seriesVariantDelete(id: string): Promise<Ack> {
+  return call<Ack>(COMMANDS.seriesVariantDelete, { id });
+}
+
+/** Copies a book term into its series; a differing canon rendering is flagged, not overwritten. */
+export function seriesPromoteTerm(request: SeriesPromoteRequest): Promise<PromoteOutcome> {
+  return call<PromoteOutcome>(COMMANDS.seriesPromoteTerm, { req: request });
 }
 
 // --- review and QA (PLAN.md §11.4) -----------------------------------------------------------
