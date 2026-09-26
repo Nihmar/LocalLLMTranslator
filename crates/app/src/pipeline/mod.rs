@@ -2,7 +2,9 @@
 
 pub mod export;
 pub mod ingest;
+pub mod json_call;
 pub mod recon;
+pub mod summarize;
 pub mod translate;
 
 use std::path::PathBuf;

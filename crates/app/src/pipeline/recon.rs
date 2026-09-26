@@ -13,20 +13,18 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
-use std::time::Instant;
 
-use futures_util::StreamExt;
 use minijinja::{context, Environment};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::SqlitePool;
 
+use super::json_call::{run_json_call, JsonCall};
 use super::PipelineDeps;
 use crate::db::models::{Block, Chapter, GlossaryTerm};
 use crate::db::{new_id, now, repo};
 use crate::error::{AppError, Result};
-use crate::llm::{ChatMessage, ChatRequest, LlamaClient, ResponseFormat};
-use crate::util::sha256_hex_str;
+use crate::util::{clamp_chars, clamp_list, clamp_words, sha256_hex_str};
 
 /// Role binding used for the reconnaissance call.
 pub const ROLE: &str = "orchestrator";
@@ -180,6 +178,9 @@ pub struct ReconSnapshot {
     pub synopsis: String,
     pub book_meta: Option<Value>,
     pub glossary: Vec<GlossaryTerm>,
+    /// Style-note candidates proposed by the summarizer; the user decides which
+    /// ones enter the style guide.
+    pub style_notes: Vec<String>,
     pub orchestrator_bound: bool,
     /// Id of a pending/leased/running `book_recon` job, when there is one.
     pub running_job: Option<String>,
@@ -400,52 +401,6 @@ fn metadata_text(front_matter_json: &str) -> String {
 // Clamping helpers
 // ---------------------------------------------------------------------------
 
-/// Trim and cap at `max` characters (ellipsis included).
-fn clamp_chars(value: &str, max: usize) -> String {
-    let trimmed = value.trim();
-    if trimmed.chars().count() <= max {
-        return trimmed.to_string();
-    }
-    if max == 0 {
-        return String::new();
-    }
-    let mut capped: String = trimmed.chars().take(max - 1).collect();
-    capped = capped.trim_end().to_string();
-    capped.push('…');
-    capped
-}
-
-/// Join whitespace-separated words with single spaces and cap the count.
-fn clamp_words(value: &str, max: usize) -> String {
-    let words: Vec<&str> = value.split_whitespace().collect();
-    if words.len() <= max {
-        return words.join(" ");
-    }
-    let mut capped = words[..max].join(" ");
-    capped.push('…');
-    capped
-}
-
-/// Trim, drop empties, dedupe case-insensitively, cap count and length.
-fn clamp_list(items: &[String], max_items: usize, max_chars: usize) -> Vec<String> {
-    let mut seen: BTreeSet<String> = BTreeSet::new();
-    let mut out = Vec::new();
-    for item in items {
-        let value = clamp_chars(item, max_chars);
-        if value.is_empty() {
-            continue;
-        }
-        if !seen.insert(value.to_lowercase()) {
-            continue;
-        }
-        out.push(value);
-        if out.len() >= max_items {
-            break;
-        }
-    }
-    out
-}
-
 fn sanitize_terms(terms: &[ProperNoun]) -> Vec<ProperNoun> {
     let mut seen: BTreeSet<String> = BTreeSet::new();
     let mut out = Vec::new();
@@ -547,136 +502,6 @@ fn load_schema(dir: &Path) -> Value {
 }
 
 // ---------------------------------------------------------------------------
-// The call
-// ---------------------------------------------------------------------------
-
-struct ModelCall<'a> {
-    job_id: Option<&'a str>,
-    project_id: &'a str,
-    endpoint_id: &'a str,
-    base_url: &'a str,
-    model: &'a str,
-    params_json: &'a str,
-    prompt_hash: &'a str,
-    system: &'a str,
-    user: &'a str,
-    schema: Value,
-}
-
-async fn call_model(deps: &PipelineDeps, call: &ModelCall<'_>) -> Result<String> {
-    let client = LlamaClient::new(call.base_url)?;
-    let params: Value = serde_json::from_str(call.params_json).unwrap_or(Value::Null);
-    let seed = crate::pipeline::translate::derive_seed(call.project_id, ROLE);
-
-    let mut request = ChatRequest::new(
-        call.model,
-        vec![
-            ChatMessage::system(call.system),
-            ChatMessage::user(call.user),
-        ],
-    );
-    request.seed = Some(seed);
-    request.temperature = params
-        .get("temperature")
-        .and_then(Value::as_f64)
-        .map(|value| value as f32);
-    request.top_p = params
-        .get("top_p")
-        .and_then(Value::as_f64)
-        .map(|value| value as f32);
-    request.max_tokens = Some(
-        params
-            .get("max_tokens")
-            .and_then(Value::as_u64)
-            .map_or(DEFAULT_MAX_TOKENS, |value| value as u32),
-    );
-    request.response_format = Some(ResponseFormat::json_schema(
-        SCHEMA_NAME,
-        call.schema.clone(),
-    ));
-
-    let started = Instant::now();
-    let mut content = String::new();
-    let mut finish_reason = None;
-    let mut usage = None;
-
-    let stream_result: Result<()> = async {
-        let mut stream = client.chat_stream(request).await?;
-        while let Some(item) = stream.next().await {
-            let delta = item?;
-            if delta.done {
-                break;
-            }
-            content.push_str(&delta.content);
-            if delta.finish_reason.is_some() {
-                finish_reason = delta.finish_reason;
-            }
-            if delta.usage.is_some() {
-                usage = delta.usage;
-            }
-        }
-        Ok(())
-    }
-    .await;
-    let latency_ms = started.elapsed().as_millis() as i64;
-
-    match stream_result {
-        Ok(()) => {
-            repo::insert_llm_call(
-                &deps.pool,
-                call.job_id,
-                None,
-                ROLE,
-                Some(call.endpoint_id),
-                call.model,
-                call.params_json,
-                Some(seed),
-                call.prompt_hash,
-                Some(call.user),
-                Some(&content),
-                finish_reason.as_deref(),
-                usage
-                    .as_ref()
-                    .and_then(|value| value.prompt_tokens)
-                    .map(|value| value as i64),
-                usage
-                    .as_ref()
-                    .and_then(|value| value.completion_tokens)
-                    .map(|value| value as i64),
-                Some(latency_ms),
-                1,
-                None,
-            )
-            .await?;
-            Ok(content)
-        }
-        Err(error) => {
-            repo::insert_llm_call(
-                &deps.pool,
-                call.job_id,
-                None,
-                ROLE,
-                Some(call.endpoint_id),
-                call.model,
-                call.params_json,
-                None,
-                call.prompt_hash,
-                Some(call.user),
-                None,
-                None,
-                None,
-                None,
-                Some(latency_ms),
-                1,
-                Some(&error.to_string()),
-            )
-            .await?;
-            Err(error)
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Run
 // ---------------------------------------------------------------------------
 
@@ -737,11 +562,12 @@ pub async fn run_recon(
     )?;
     let prompt_hash = sha256_hex_str(&format!("{system}\n\u{0}\n{user}"));
 
-    let response = call_model(
+    let response = run_json_call(
         deps,
-        &ModelCall {
+        &JsonCall {
             job_id,
-            project_id: &project.id,
+            chunk_id: None,
+            role: ROLE,
             endpoint_id: &endpoint.id,
             base_url: &endpoint.base_url,
             model: &binding.model,
@@ -749,7 +575,10 @@ pub async fn run_recon(
             prompt_hash: &prompt_hash,
             system: &system,
             user: &user,
+            schema_name: SCHEMA_NAME,
             schema,
+            seed: crate::pipeline::translate::derive_seed(&project.id, ROLE),
+            default_max_tokens: DEFAULT_MAX_TOKENS,
         },
     )
     .await?;
@@ -808,6 +637,7 @@ pub async fn snapshot(pool: &SqlitePool, project_id: &str) -> Result<ReconSnapsh
         .await?
         .and_then(|json| serde_json::from_str::<Value>(&json).ok());
     let glossary = repo::list_glossary_terms(pool, project_id).await?;
+    let style_notes = crate::pipeline::summarize::stored_style_notes(pool, project_id).await?;
     let orchestrator_bound = repo::role_binding_for(pool, ROLE).await?.is_some();
 
     let latest: Option<LatestJob> = sqlx::query_as(
@@ -833,6 +663,7 @@ pub async fn snapshot(pool: &SqlitePool, project_id: &str) -> Result<ReconSnapsh
         synopsis,
         book_meta,
         glossary,
+        style_notes,
         orchestrator_bound,
         running_job,
         last_error,

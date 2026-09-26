@@ -97,6 +97,18 @@ impl JobDispatcher for PipelineDispatcher {
                 .await?;
                 Ok(())
             }
+            "summarize" => {
+                let request: crate::pipeline::summarize::SummarizePayload =
+                    serde_json::from_value(payload)?;
+                crate::pipeline::summarize::run_summarize(
+                    &self.deps,
+                    Some(&job.id),
+                    &job.project_id,
+                    &request,
+                )
+                .await?;
+                Ok(())
+            }
             "export_unit" => {
                 let request: crate::pipeline::export::ExportRequest =
                     serde_json::from_value(payload)?;

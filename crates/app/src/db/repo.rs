@@ -373,6 +373,36 @@ pub async fn list_chapters(pool: &SqlitePool, document_id: &str) -> Result<Vec<C
     Ok(rows)
 }
 
+pub async fn get_chapter(pool: &SqlitePool, id: &str) -> Result<Option<Chapter>> {
+    let row = sqlx::query_as::<_, Chapter>("SELECT * FROM chapter WHERE id = ?1")
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row)
+}
+
+/// Store the chapter summary produced by a final `summarize` run and mark the
+/// chapter as summarized.
+pub async fn update_chapter_summary(
+    pool: &SqlitePool,
+    chapter_id: &str,
+    summary: &str,
+    model: &str,
+    summary_hash: &str,
+) -> Result<()> {
+    sqlx::query(
+        "UPDATE chapter SET summary = ?2, summary_model = ?3, summary_hash = ?4, status = 'done' \
+         WHERE id = ?1",
+    )
+    .bind(chapter_id)
+    .bind(summary)
+    .bind(model)
+    .bind(summary_hash)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 pub async fn list_blocks(pool: &SqlitePool, document_id: &str) -> Result<Vec<Block>> {
     let rows = sqlx::query_as::<_, Block>(
         "SELECT * FROM block WHERE document_id = ?1 ORDER BY order_index",

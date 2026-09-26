@@ -146,9 +146,13 @@ async fn translate_chunk_inner(
             chunk.chapter_id.as_deref(),
         )
         .await?,
-        rolling_summary: repo::get_memory(pool, &project_id, "rolling_summary")
-            .await?
-            .unwrap_or_default(),
+        rolling_summary: repo::get_memory(
+            pool,
+            &project_id,
+            crate::pipeline::summarize::ROLLING_SUMMARY_KEY,
+        )
+        .await?
+        .unwrap_or_default(),
         previous_tail: previous_tail(pool, &chunk.document_id, chunk.order_index).await?,
         chapter_title: chunk.chapter_id.clone().unwrap_or_default(),
         chunk_text: chunk.source_md.clone(),
@@ -357,6 +361,18 @@ async fn translate_chunk_inner(
         },
     )
     .await?;
+
+    // Rolling memory: enqueue a chapter summary once the chapter's progress
+    // warrants one (PLAN.md section 8). Without an orchestrator binding this is
+    // a no-op and translation continues exactly as before; a failure here must
+    // never fail the chunk itself.
+    if let Some(chapter_id) = chunk.chapter_id.as_deref() {
+        if let Err(error) =
+            crate::pipeline::summarize::maybe_enqueue_summaries(pool, &project_id, chapter_id).await
+        {
+            tracing::warn!(chapter_id, %error, "could not enqueue a chapter summary");
+        }
+    }
 
     Ok(TranslateOutcome {
         chunk_id: chunk.id,
