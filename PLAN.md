@@ -791,14 +791,15 @@ book, and a series adds a shared layer that **evolves after the books are transl
 - No sidecar change: the series is control-plane state (DB + prompt assembly), and the sidecar
   keeps receiving the already-filtered glossary.
 
-IPC (`series_export`/`series_import` land with S4): `series_list`, `series_create`, `series_get`,
-`series_update`, `series_delete`, `project_set_series`, `series_glossary_list`,
-`series_glossary_upsert`, `series_glossary_delete`, `series_variant_upsert`,
-`series_variant_delete`, `series_promote_term`. Events: none new — the existing
-`job://progress` and `log://line` cover the work, and conflicts are read through
+IPC: `series_list`, `series_create`, `series_get`, `series_update`, `series_delete`,
+`project_set_series`, `series_glossary_list`, `series_glossary_upsert`,
+`series_glossary_delete`, `series_variant_upsert`, `series_variant_delete`,
+`series_promote_term`, `series_export`, `series_import`, `series_qa_scan`. Events: none new —
+the existing `job://progress` and `log://line` cover the work, and conflicts are read through
 `qa_report`.
 
-Milestones (S1–S5) are in §13.
+Milestones (S1–S5) are in §13. S1–S4 are implemented: the Series view authors the canon, the
+bundle merge and the cross-book QA scan exist, and `series_recon` (S5) is future work.
 
 ---
 
@@ -903,6 +904,7 @@ what makes it safe to restart it and re-send the in-flight requests.
   `series_list`, `series_create`, `series_get`, `series_update`, `series_delete`, `project_set_series`,
   `series_glossary_list`, `series_glossary_upsert`, `series_glossary_delete`,
   `series_variant_upsert`, `series_variant_delete`, `series_promote_term`,
+  `series_export`, `series_import`, `series_qa_scan`,
   `job_list`, `chunk_get`, `review_start`, `suggestion_list/accept/reject`, `qa_report`,
   `export_build`, `export_preview`, `export_history`, `metrics_get`.
 - Events: `job://progress`, `log://line`, `metrics://tick`, `sidecar://status`,

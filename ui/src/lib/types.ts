@@ -878,3 +878,38 @@ export type ProposalOutcome = "added" | "unchanged" | "conflict";
 export interface PromoteOutcome {
   outcome: ProposalOutcome;
 }
+
+/** Request body of `series_export` (`commands::series::SeriesExportRequest`). */
+export interface SeriesExportRequest {
+  series_id: string;
+  /** Destination `.llmtsz`; `null` writes it under `<app data>/series/`. */
+  output_path?: string | null;
+}
+
+/** Result of `series_export` (`pipeline::series_bundle::SeriesExportOutcome`). */
+export interface SeriesExportOutcome {
+  output_path: string;
+  bytes: number;
+  terms: number;
+  variants: number;
+}
+
+/** Request body of `series_import` (`commands::series::SeriesImportRequest`). */
+export interface SeriesImportRequest {
+  archive_path: string;
+}
+
+/** Result of `series_import` (`pipeline::series_bundle::SeriesImportOutcome`). */
+export interface SeriesImportOutcome {
+  series: Series;
+  terms_added: number;
+  terms_updated: number;
+  conflicts: number;
+  variants_added: number;
+  memory_updated: number;
+}
+
+/** Result of `series_qa_scan` (`commands::series::SeriesQaScanResult`). */
+export interface SeriesQaScanResult {
+  enqueued: number;
+}

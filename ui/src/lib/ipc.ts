@@ -45,7 +45,12 @@ import type {
   SeriesGlossaryTerm,
   SeriesGlossaryUpsertRequest,
   SeriesGlossaryVariant,
+  SeriesImportOutcome,
+  SeriesImportRequest,
+  SeriesExportOutcome,
+  SeriesExportRequest,
   SeriesPromoteRequest,
+  SeriesQaScanResult,
   SeriesUpdateRequest,
   SeriesVariantUpsertRequest,
   IngestStartRequest,
@@ -110,6 +115,9 @@ const COMMANDS = {
   seriesVariantUpsert: "series_variant_upsert",
   seriesVariantDelete: "series_variant_delete",
   seriesPromoteTerm: "series_promote_term",
+  seriesExport: "series_export",
+  seriesImport: "series_import",
+  seriesQaScan: "series_qa_scan",
   reviewStart: "review_start",
   suggestionList: "suggestion_list",
   suggestionAccept: "suggestion_accept",
@@ -379,6 +387,21 @@ export function seriesVariantDelete(id: string): Promise<Ack> {
 /** Copies a book term into its series; a differing canon rendering is flagged, not overwritten. */
 export function seriesPromoteTerm(request: SeriesPromoteRequest): Promise<PromoteOutcome> {
   return call<PromoteOutcome>(COMMANDS.seriesPromoteTerm, { req: request });
+}
+
+/** Writes the series canon as a `.llmtsz` bundle (mergeable on import). */
+export function seriesExport(request: SeriesExportRequest): Promise<SeriesExportOutcome> {
+  return call<SeriesExportOutcome>(COMMANDS.seriesExport, { req: request });
+}
+
+/** Merges a series bundle: never overwrites a differing rendering. */
+export function seriesImport(request: SeriesImportRequest): Promise<SeriesImportOutcome> {
+  return call<SeriesImportOutcome>(COMMANDS.seriesImport, { req: request });
+}
+
+/** Re-runs the QA scan on every translated chunk of the member books. */
+export function seriesQaScan(seriesId: string): Promise<SeriesQaScanResult> {
+  return call<SeriesQaScanResult>(COMMANDS.seriesQaScan, { series_id: seriesId });
 }
 
 // --- review and QA (PLAN.md §11.4) -----------------------------------------------------------

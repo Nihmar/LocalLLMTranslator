@@ -13,6 +13,7 @@ use crate::db::models::{Project, Series, SeriesGlossaryTerm, SeriesGlossaryVaria
 use crate::db::{new_id, now, repo};
 use crate::error::{AppError, Result};
 use crate::pipeline::glossary::{self, ProposalOutcome};
+use crate::pipeline::series_bundle;
 use crate::AppState;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -386,4 +387,95 @@ pub async fn series_promote_term(
 ) -> Result<PromoteOutcome> {
     let outcome = glossary::promote_term(&state.pool, &req.project_id, &req.term_id).await?;
     Ok(PromoteOutcome { outcome })
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SeriesExportRequest {
+    pub series_id: String,
+    /// Destination `.llmtsz`; when absent it goes under `<app data>/series/`.
+    #[serde(default)]
+    pub output_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SeriesImportRequest {
+    pub archive_path: String,
+}
+
+/// Write the series canon as a `.llmtsz` bundle.
+#[tauri::command]
+pub async fn series_export(
+    state: State<'_, AppState>,
+    req: SeriesExportRequest,
+) -> Result<series_bundle::SeriesExportOutcome> {
+    series_bundle::export_series(
+        &state.pool,
+        &state.data_dir,
+        &req.series_id,
+        req.output_path.as_deref(),
+    )
+    .await
+}
+
+/// Merge a series bundle into the local database (never overwriting a rendering).
+#[tauri::command]
+pub async fn series_import(
+    state: State<'_, AppState>,
+    req: SeriesImportRequest,
+) -> Result<series_bundle::SeriesImportOutcome> {
+    series_bundle::import_series(&state.pool, &req.archive_path).await
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SeriesQaScanResult {
+    pub enqueued: usize,
+}
+
+/// Re-run the QA scan on every translated chunk of every member book, for example after a
+/// canon change. Uses the existing `qa_scan` job, so the worker pool and the events are the
+/// usual ones.
+#[tauri::command]
+pub async fn series_qa_scan(
+    state: State<'_, AppState>,
+    series_id: String,
+) -> Result<SeriesQaScanResult> {
+    repo::get_series(&state.pool, &series_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("series {series_id}")))?;
+    let projects = repo::list_projects_for_series(&state.pool, &series_id).await?;
+    let mut enqueued = 0usize;
+    for project in projects {
+        for chunk in repo::list_chunks_by_project(&state.pool, &project.id, None).await? {
+            if !matches!(chunk.status.as_str(), "done" | "needs_review") {
+                continue;
+            }
+            if chunk
+                .target_md
+                .as_deref()
+                .is_none_or(|text| text.trim().is_empty())
+            {
+                continue;
+            }
+            let payload = serde_json::json!({ "chunk_id": chunk.id });
+            if crate::scheduler::queue::has_pending(
+                &state.pool,
+                &project.id,
+                crate::pipeline::qa::JOB_KIND,
+                &payload,
+            )
+            .await?
+            {
+                continue;
+            }
+            let job =
+                crate::scheduler::NewJob::new(&project.id, crate::pipeline::qa::JOB_KIND, payload)
+                    .with_priority(60 + chunk.order_index);
+            super::enqueue_and_emit(&state, &job).await?;
+            enqueued += 1;
+        }
+    }
+    if enqueued > 0 {
+        state.worker.start();
+    }
+    Ok(SeriesQaScanResult { enqueued })
 }

@@ -8,6 +8,7 @@ pub mod ingest;
 pub mod qa;
 pub mod recon;
 pub mod review;
+pub mod series_bundle;
 pub mod summarize;
 pub mod translate;
 

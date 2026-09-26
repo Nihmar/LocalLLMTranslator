@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { EmptyState } from "../components/EmptyState";
 import { FormField } from "../components/FormField";
 import { StatusBadge } from "../components/StatusBadge";
+import { pickSeriesBundleFile } from "../lib/dialog";
 import {
   glossaryList,
   openPath,
@@ -10,11 +11,14 @@ import {
   qaReport,
   seriesCreate,
   seriesDelete,
+  seriesExport,
   seriesGet,
   seriesGlossaryDelete,
   seriesGlossaryUpsert,
+  seriesImport,
   seriesList,
   seriesPromoteTerm,
+  seriesQaScan,
   seriesUpdate,
   seriesVariantDelete,
   seriesVariantUpsert,
@@ -75,6 +79,12 @@ function draftFrom(term: SeriesGlossaryTerm): TermDraft {
   };
 }
 
+/** Directory of a path, for revealing the exported bundle in the OS file manager. */
+function parentDirectory(path: string): string {
+  const index = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+  return index > 0 ? path.slice(0, index) : path;
+}
+
 export function SeriesView() {
   const [series, setSeries] = useState<Series[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -107,6 +117,8 @@ export function SeriesView() {
   const [termSource, setTermSource] = useState("");
   const [termTarget, setTermTarget] = useState("");
   const [termKind, setTermKind] = useState("term");
+  // Last exported bundle, so the view can reveal it.
+  const [exportedPath, setExportedPath] = useState<string | null>(null);
 
   const selected = useMemo(
     () => series.find((entry) => entry.id === selectedId) ?? null,
@@ -382,6 +394,51 @@ export function SeriesView() {
           : result.outcome === "conflict"
             ? `«${term.source}»: il canone ha già un rendering diverso; il conflitto è stato registrato.`
             : `«${term.source}» era già nel canone con lo stesso rendering.`,
+      );
+    });
+  }
+
+  async function handleExport(): Promise<void> {
+    if (selected === null) {
+      return;
+    }
+    await run("export", async () => {
+      const outcome = await seriesExport({ series_id: selected.id, output_path: null });
+      setExportedPath(outcome.output_path);
+      setNotice(
+        `Canone esportato (${outcome.terms} termini, ${outcome.variants} alias): ${outcome.output_path}`,
+      );
+    });
+  }
+
+  async function handleImport(): Promise<void> {
+    const path = await pickSeriesBundleFile();
+    if (path === null) {
+      setNotice("Importazione annullata o selettore file non disponibile.");
+      return;
+    }
+    await run("import", async () => {
+      const outcome = await seriesImport({ archive_path: path });
+      await loadSeries();
+      setSelectedId(outcome.series.id);
+      setNotice(
+        `Serie «${outcome.series.name}» importata: ${outcome.terms_added} termini aggiunti, ` +
+          `${outcome.terms_updated} aggiornati, ${outcome.conflicts} conflitti da rivedere, ` +
+          `${outcome.memory_updated} valori di memoria.`,
+      );
+    });
+  }
+
+  async function handleQaScan(): Promise<void> {
+    if (selected === null) {
+      return;
+    }
+    await run("qa-scan", async () => {
+      const outcome = await seriesQaScan(selected.id);
+      setNotice(
+        outcome.enqueued === 0
+          ? "Nessun chunk da scansionare: i libri non hanno traduzioni complete."
+          : `${outcome.enqueued} job di scansione QA accodati su tutti i libri della serie.`,
       );
     });
   }
@@ -1003,6 +1060,55 @@ export function SeriesView() {
                       })}
                     </ul>
                   )}
+                </div>
+              </div>
+
+              <div className="panel">
+                <div className="panel-head">
+                  <span className="panel-title">Bundle e coerenza</span>
+                </div>
+                <div className="panel-pad section-stack">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      className="btn"
+                      disabled={busy !== null}
+                      onClick={() => void handleExport()}
+                    >
+                      Esporta canone (.llmtsz)
+                    </button>
+                    <button
+                      type="button"
+                      className="btn"
+                      disabled={busy !== null}
+                      onClick={() => void handleImport()}
+                    >
+                      Importa canone…
+                    </button>
+                    <button
+                      type="button"
+                      className="btn"
+                      disabled={busy !== null || detail.projects.length === 0}
+                      onClick={() => void handleQaScan()}
+                    >
+                      Scansiona QA tutti i libri
+                    </button>
+                    {exportedPath !== null ? (
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-ghost"
+                        onClick={() => void openPath(parentDirectory(exportedPath))}
+                      >
+                        Apri cartella
+                      </button>
+                    ) : null}
+                  </div>
+                  <p className="field-hint">
+                    L&apos;import fonde per revisione: rendering uguali aggiornati, rendering
+                    diversi mai sovrascritti (restano come conflitto). La scansione QA riusa i job
+                    <span className="mono-chip ml-1">qa_scan</span> sulle traduzioni esistenti di
+                    tutti i libri della serie.
+                  </p>
                 </div>
               </div>
             </>

@@ -17,6 +17,9 @@ export const DOCUMENT_EXTENSIONS: readonly string[] = ["epub", "pdf", "md", "mar
 /** Extension of the project bundle archives. */
 export const BUNDLE_EXTENSION = "llmtz";
 
+/** Extension of the series canon bundles (`PLAN.md` §9.5). */
+export const SERIES_BUNDLE_EXTENSION = "llmtsz";
+
 /**
  * Opens the OS document picker and returns the chosen absolute path, or `null` when the user
  * cancels or the dialog is unavailable. Failures are logged and reported as `null` so a broken
@@ -29,6 +32,11 @@ export async function pickDocumentFile(): Promise<string | null> {
 /** Opens the OS picker for a `.llmtz` project bundle. */
 export async function pickBundleFile(): Promise<string | null> {
   return pickFile("Importa progetto (.llmtz)", [BUNDLE_EXTENSION], "Bundle progetto");
+}
+
+/** Opens the OS picker for a `.llmtsz` series bundle. */
+export async function pickSeriesBundleFile(): Promise<string | null> {
+  return pickFile("Importa serie (.llmtsz)", [SERIES_BUNDLE_EXTENSION], "Bundle serie");
 }
 
 async function pickFile(
