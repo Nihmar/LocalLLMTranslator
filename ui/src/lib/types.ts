@@ -892,6 +892,8 @@ export interface SeriesExportOutcome {
   bytes: number;
   terms: number;
   variants: number;
+  /** Member books carried by the bundle. */
+  books: number;
 }
 
 /** Request body of `series_import` (`commands::series::SeriesImportRequest`). */
@@ -907,6 +909,10 @@ export interface SeriesImportOutcome {
   conflicts: number;
   variants_added: number;
   memory_updated: number;
+  /** Member books carried by the bundle and copied locally. */
+  books_imported: number;
+  /** Member books the bundle carried but that already existed locally. */
+  books_skipped: number;
 }
 
 /** Result of `series_qa_scan` (`commands::series::SeriesQaScanResult`). */

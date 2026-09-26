@@ -784,10 +784,15 @@ book, and a series adds a shared layer that **evolves after the books are transl
   were produced with, so a glossary change stops reusing blocks translated under the old
   canon (the exact `translation_cache` already keys on `prompt_hash`, which includes the
   glossary text).
-- **Bundles.** A `.llmtz` stays self-contained: it snapshots the resolved series glossary in
-  the archive. Series export/import (`series_export`/`series_import`) moves the canon between
-  machines and **merges** on import by revision — same rendering updates the row, a different
-  rendering is kept with `status='conflict'` and a finding, never silently dropped.
+- **Bundles.** A `.llmtz` stays self-contained. Series export/import
+  (`series_export`/`series_import`) moves the canon between machines: the archive carries
+  `manifest.json`, `series.json` and — when the series has member books — **one** database
+  snapshot plus a `projects/<id>/` tree per book, so the bundle stays proportional to the
+  canon, not to the number of books. Import **merges** by revision: a missing term is added,
+  the same rendering only updates its note/kind, a different rendering is kept with
+  `status='conflict'` (and flags the member books) and is never silently dropped; memory
+  values are taken only when newer. A book whose id already exists locally is skipped, so
+  importing the same bundle twice is safe. Version 1 bundles (canon only) still import.
 - No sidecar change: the series is control-plane state (DB + prompt assembly), and the sidecar
   keeps receiving the already-filtered glossary.
 

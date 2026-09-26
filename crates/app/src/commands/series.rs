@@ -417,13 +417,14 @@ pub async fn series_export(
     .await
 }
 
-/// Merge a series bundle into the local database (never overwriting a rendering).
+/// Merge a series bundle into the local database (never overwriting a rendering, never
+/// overwriting an existing book).
 #[tauri::command]
 pub async fn series_import(
     state: State<'_, AppState>,
     req: SeriesImportRequest,
 ) -> Result<series_bundle::SeriesImportOutcome> {
-    series_bundle::import_series(&state.pool, &req.archive_path).await
+    series_bundle::import_series(&state.pool, &state.data_dir, &req.archive_path).await
 }
 
 #[derive(Debug, Clone, Serialize)]

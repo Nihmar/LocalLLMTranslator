@@ -168,8 +168,11 @@ source/target language pair its books share. Series terms live in `series_glossa
 adds a surface form, `series_promote_term` copies a project term into its series (a different
 existing rendering is kept and flagged, never overwritten). Any series term change opens a
 `glossary_conflict` finding for every member book that renders the same source differently.
-Series bundles (`series_export`/`series_import`) move a series between machines and merge on
-import by revision: a differing rendering becomes `status='conflict'`, never a silent drop.
+Series bundles (`series_export`/`series_import`) move a series between machines — the canon
+plus, when there are member books, one database snapshot and a `projects/<id>/` tree per book.
+Import merges by revision (a differing rendering becomes `status='conflict'`, never a silent
+drop) and skips a book whose id already exists locally, so the same bundle can be imported
+twice. Version 1 bundles (canon only) still import.
 `series_qa_scan` re-runs the QA heuristics on every translated chunk of every member book,
 and `series_recon_start` (`{req: {series_id, force?}}`) enqueues a `series_recon` job on the
 orchestrator role whose output is a **candidate** profile under

@@ -496,7 +496,8 @@ export function SeriesView() {
       const outcome = await seriesExport({ series_id: selected.id, output_path: null });
       setExportedPath(outcome.output_path);
       setNotice(
-        `Canone esportato (${outcome.terms} termini, ${outcome.variants} alias): ${outcome.output_path}`,
+        `Canone esportato (${outcome.terms} termini, ${outcome.variants} alias, ` +
+          `${outcome.books} libri): ${outcome.output_path}`,
       );
     });
   }
@@ -514,7 +515,7 @@ export function SeriesView() {
       setNotice(
         `Serie «${outcome.series.name}» importata: ${outcome.terms_added} termini aggiunti, ` +
           `${outcome.terms_updated} aggiornati, ${outcome.conflicts} conflitti da rivedere, ` +
-          `${outcome.memory_updated} valori di memoria.`,
+          `${outcome.books_imported} libri importati, ${outcome.books_skipped} già presenti.`,
       );
     });
   }
@@ -1286,8 +1287,10 @@ export function SeriesView() {
                     ) : null}
                   </div>
                   <p className="field-hint">
-                    L&apos;import fonde per revisione: rendering uguali aggiornati, rendering
-                    diversi mai sovrascritti (restano come conflitto). La scansione QA riusa i job
+                    L&apos;export include il canone e i libri della serie (una istantanea del
+                    database e le loro cartelle di lavoro). L&apos;import fonde per revisione:
+                    rendering uguali aggiornati, rendering diversi mai sovrascritti (restano come
+                    conflitto) e libri già presenti saltati. La scansione QA riusa i job
                     <span className="mono-chip ml-1">qa_scan</span> sulle traduzioni esistenti di
                     tutti i libri della serie.
                   </p>
