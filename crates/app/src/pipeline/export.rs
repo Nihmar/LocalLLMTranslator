@@ -396,17 +396,33 @@ pub async fn run_export_preview(
         metadata_yaml: book_metadata(&project, &document).to_yaml(),
         units: units
             .into_iter()
-            .map(|unit| PreviewUnit {
-                key: unit.key,
-                title: unit.title,
-                markdown: unit.markdown,
-                chunks: unit.chunks,
-                untranslated: unit.untranslated,
+            .map(|unit| {
+                let markdown = preview_markdown(&unit);
+                PreviewUnit {
+                    key: unit.key,
+                    title: unit.title,
+                    markdown,
+                    chunks: unit.chunks,
+                    untranslated: unit.untranslated,
+                }
             })
             .collect(),
         total_chunks,
         untranslated_chunks,
     })
+}
+
+/// The markdown a unit contributes to the built document: pandoc receives `# <title>`
+/// followed by the body (the sidecar prepends the same heading when it combines the
+/// units), so the preview shows exactly that instead of a body with no heading.
+fn preview_markdown(unit: &ComposedUnit) -> String {
+    if unit.title.trim().is_empty() {
+        return unit.markdown.clone();
+    }
+    if unit.markdown.trim().is_empty() {
+        return format!("# {}\n", unit.title);
+    }
+    format!("# {}\n\n{}", unit.title, unit.markdown)
 }
 
 /// Recent build records, newest first.
@@ -451,31 +467,50 @@ fn compose_units(
         if chapter_chunks.is_empty() {
             continue;
         }
-        units.push(ComposedUnit {
-            key: chapter.id.clone(),
-            title: chapter.title.clone(),
-            markdown: render_chunks(&chapter_chunks),
-            chunks: chapter_chunks.len(),
-            untranslated: chapter_chunks
-                .iter()
-                .filter(|chunk| !chunk_has_translation(chunk))
-                .count(),
-        });
+        units.push(composed(&chapter.id, &chapter.title, &chapter_chunks));
     }
     units
 }
 
 fn composed(key: &str, title: &str, chunks: &[&Chunk]) -> ComposedUnit {
+    let (title, markdown) = split_title(title, render_chunks(chunks));
     ComposedUnit {
         key: key.to_string(),
-        title: title.to_string(),
-        markdown: render_chunks(chunks),
+        title,
+        markdown,
         chunks: chunks.len(),
         untranslated: chunks
             .iter()
             .filter(|chunk| !chunk_has_translation(chunk))
             .count(),
     }
+}
+
+/// Split a composed unit into its title and body.
+///
+/// A chapter unit opens with the chapter's heading block, whose translation is the title the
+/// reader should see. Using it as the unit title is what keeps the exported heading single
+/// (pandoc adds `# <title>` when it combines the units) *and* translated: the `chapter.title`
+/// column still holds the source-language heading. When the unit does not open with a heading,
+/// the fallback title is used and the body is left untouched.
+fn split_title(fallback_title: &str, markdown: String) -> (String, String) {
+    let Some((first, rest)) = markdown.split_once('\n') else {
+        return (fallback_title.to_string(), markdown);
+    };
+    let candidate = first.trim();
+    let after_hashes = candidate.trim_start_matches('#');
+    let hash_count = candidate.len() - after_hashes.len();
+    // CommonMark ATX heading: one to six `#`, then a space or end of line. `#hashtag`
+    // is a paragraph, not a heading.
+    if !(1..=6).contains(&hash_count) || !(after_hashes.is_empty() || after_hashes.starts_with(' '))
+    {
+        return (fallback_title.to_string(), markdown);
+    }
+    let title = after_hashes.trim();
+    if title.is_empty() {
+        return (fallback_title.to_string(), markdown);
+    }
+    (title.to_string(), rest.trim_start().to_string())
 }
 
 /// Book metadata: the project row wins over the source document's front matter.
@@ -793,6 +828,71 @@ mod tests {
         assert_eq!(only[0].key, "ch2");
         assert_eq!(only[0].title, "Two");
         assert!(only[0].markdown.contains("Tre"));
+    }
+
+    #[test]
+    fn compose_units_takes_the_translated_heading_as_the_title_and_removes_it() {
+        let mut chapter_one = chunk(
+            "c1",
+            Some("## Chapter One: The Harbour\n\nIl porto era quieto.\n"),
+            "## Chapter One: The Harbour\n\nThe harbour was quiet.\n",
+        );
+        chapter_one.chapter_id = Some("ch1".into());
+        let chunks = [chapter_one];
+        let chapters = [chapter("ch1", 1, "Chapter One: The Harbour")];
+
+        let units = compose_units(&chunks, &chapters, None);
+        assert_eq!(units.len(), 1);
+        // The title is the *translated* heading, and the body no longer repeats it:
+        // the sidecar prepends `# <title>` when it combines the units, so keeping
+        // the heading in both places produced two headings and two TOC entries.
+        assert_eq!(units[0].title, "Chapter One: The Harbour");
+        assert!(!units[0].markdown.contains("Chapter One"));
+        assert!(units[0].markdown.contains("Il porto era quieto."));
+    }
+
+    #[test]
+    fn compose_units_keeps_the_source_title_when_the_unit_has_no_heading() {
+        let mut plain = chunk(
+            "c1",
+            Some("Il porto era quieto.\n"),
+            "The harbour was quiet.\n",
+        );
+        plain.chapter_id = Some("ch1".into());
+        let chunks = [plain];
+        let chapters = [chapter("ch1", 1, "Chapter One")];
+
+        let units = compose_units(&chunks, &chapters, None);
+        assert_eq!(units[0].title, "Chapter One");
+        assert_eq!(units[0].markdown.trim(), "Il porto era quieto.");
+    }
+
+    #[test]
+    fn a_hashtag_is_not_a_heading_for_the_title_split() {
+        let (title, body) = split_title("Fallback", "#hashtag sentence\n\nBody".to_string());
+        assert_eq!(title, "Fallback");
+        assert!(body.starts_with("#hashtag"));
+    }
+
+    #[test]
+    fn preview_markdown_rebuilds_the_heading_pandoc_will_add() {
+        let unit = ComposedUnit {
+            key: "ch1".into(),
+            title: "Il porto".into(),
+            markdown: "Il porto era quieto.".into(),
+            chunks: 1,
+            untranslated: 0,
+        };
+        assert_eq!(
+            preview_markdown(&unit),
+            "# Il porto\n\nIl porto era quieto."
+        );
+
+        let untitled = ComposedUnit {
+            title: String::new(),
+            ..unit
+        };
+        assert_eq!(preview_markdown(&untitled), "Il porto era quieto.");
     }
 
     #[test]

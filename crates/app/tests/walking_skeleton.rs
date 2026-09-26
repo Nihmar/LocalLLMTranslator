@@ -296,6 +296,16 @@ async fn walking_skeleton_end_to_end() -> Result<()> {
         html_document.contains("id=\"book-body\""),
         "the HTML build did not use pandoc/templates/book.html"
     );
+    // One `<h1>` per unit (the chapter heading pandoc prepends) plus the title block:
+    // a second heading was what the old composition produced, because the unit body
+    // still carried the chapter's heading block.
+    let heading_count = html_document.matches("<h1").count();
+    ensure!(
+        heading_count == html.units + 1,
+        "expected one <h1> per unit plus the title block, found {heading_count} for {} units: \
+         a chapter heading is duplicated or missing",
+        html.units
+    );
 
     let blocks_a = block_signature(&pool_a, &document_a).await?;
 
