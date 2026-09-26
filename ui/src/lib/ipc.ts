@@ -51,6 +51,8 @@ import type {
   SeriesExportRequest,
   SeriesPromoteRequest,
   SeriesQaScanResult,
+  SeriesConfirmOutcome,
+  SeriesConfirmRequest,
   SeriesUpdateRequest,
   SeriesVariantUpsertRequest,
   IngestStartRequest,
@@ -119,6 +121,7 @@ const COMMANDS = {
   seriesImport: "series_import",
   seriesQaScan: "series_qa_scan",
   seriesReconStart: "series_recon_start",
+  seriesReconConfirm: "series_recon_confirm",
   reviewStart: "review_start",
   suggestionList: "suggestion_list",
   suggestionAccept: "suggestion_accept",
@@ -408,6 +411,11 @@ export function seriesQaScan(seriesId: string): Promise<SeriesQaScanResult> {
 /** Enqueues the `series_recon` job: a candidate series profile from the confirmed books. */
 export function seriesReconStart(seriesId: string): Promise<JobStarted> {
   return call<JobStarted>(COMMANDS.seriesReconStart, { series_id: seriesId });
+}
+
+/** Applies the accepted candidate fields and remembers the rejected sources. */
+export function seriesReconConfirm(request: SeriesConfirmRequest): Promise<SeriesConfirmOutcome> {
+  return call<SeriesConfirmOutcome>(COMMANDS.seriesReconConfirm, { req: request });
 }
 
 // --- review and QA (PLAN.md §11.4) -----------------------------------------------------------

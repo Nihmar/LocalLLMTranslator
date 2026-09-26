@@ -931,12 +931,38 @@ export interface SeriesReconProvenance {
 
 /**
  * Candidate series profile, stored in `series_memory['series_profile']`.
- * The view parses the stored JSON and degrades to this shape rather than hiding an older
- * candidate, so `characters` is always present and `provenance` may be missing.
+ * `rejected` lists the sources the user refused: a later reconnaissance skips them.
  */
 export interface SeriesProfile {
   synopsis: string;
   style_notes: string[];
   characters: SeriesReconCharacter[];
+  rejected: string[];
   provenance?: SeriesReconProvenance;
+}
+
+/** One character the user accepted from the candidate (`pipeline::series_recon::ConfirmedCharacter`). */
+export interface ConfirmedSeriesCharacter {
+  source: string;
+  target: string;
+  note?: string | null;
+}
+
+/** Request body of `series_recon_confirm` (`pipeline::series_recon::ConfirmRequest`). */
+export interface SeriesConfirmRequest {
+  series_id: string;
+  synopsis?: string | null;
+  style_guide?: string | null;
+  characters: ConfirmedSeriesCharacter[];
+  rejected_characters: string[];
+  discard?: boolean;
+}
+
+/** Result of `series_recon_confirm` (`pipeline::series_recon::ConfirmOutcome`). */
+export interface SeriesConfirmOutcome {
+  synopsis_updated: boolean;
+  style_guide_updated: boolean;
+  characters_accepted: number;
+  characters_rejected: number;
+  discarded: boolean;
 }

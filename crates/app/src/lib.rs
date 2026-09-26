@@ -209,6 +209,7 @@ pub fn run() {
             commands::series::series_import,
             commands::series::series_qa_scan,
             commands::series::series_recon_start,
+            commands::series::series_recon_confirm,
             commands::review::review_start,
             commands::review::suggestion_list,
             commands::review::suggestion_accept,

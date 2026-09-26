@@ -20,6 +20,7 @@ import {
   seriesList,
   seriesPromoteTerm,
   seriesQaScan,
+  seriesReconConfirm,
   seriesReconStart,
   seriesUpdate,
   seriesVariantDelete,
@@ -27,6 +28,7 @@ import {
   toErrorMessage,
 } from "../lib/ipc";
 import type {
+  ConfirmedSeriesCharacter,
   GlossaryTerm,
   Project,
   QaFinding,
@@ -122,7 +124,10 @@ function parseSeriesProfile(json: string): SeriesProfile | null {
           ];
         })
       : [];
-    return { synopsis, style_notes: styleNotes, characters };
+    const rejected = Array.isArray(record["rejected"])
+      ? record["rejected"].filter((source): source is string => typeof source === "string")
+      : [];
+    return { synopsis, style_notes: styleNotes, characters, rejected };
   } catch {
     return null;
   }
@@ -162,6 +167,15 @@ export function SeriesView() {
   const [termKind, setTermKind] = useState("term");
   // Last exported bundle, so the view can reveal it.
   const [exportedPath, setExportedPath] = useState<string | null>(null);
+  // Candidate confirmation drafts: `undefined` means "use the candidate value", so a new
+  // candidate is picked up automatically without a reset effect.
+  const [synopsisDraft, setSynopsisDraft] = useState<string | undefined>(undefined);
+  const [styleDraft, setStyleDraft] = useState<string | undefined>(undefined);
+  const [synopsisChecked, setSynopsisChecked] = useState<boolean | undefined>(undefined);
+  const [styleChecked, setStyleChecked] = useState<boolean | undefined>(undefined);
+  const [characterDrafts, setCharacterDrafts] = useState<
+    Record<string, { checked?: boolean; target?: string }>
+  >({});
 
   const selected = useMemo(
     () => series.find((entry) => entry.id === selectedId) ?? null,
@@ -179,6 +193,18 @@ export function SeriesView() {
     const raw = detail?.memory.find((row) => row.key === "series_profile")?.value;
     return raw === undefined ? null : parseSeriesProfile(raw);
   }, [detail]);
+  const candidateSynopsis = candidate?.synopsis ?? "";
+  const candidateStyle = candidate?.style_notes.join("\n") ?? "";
+  const effectiveSynopsisChecked = synopsisChecked ?? candidateSynopsis.trim().length > 0;
+  const effectiveStyleChecked = styleChecked ?? candidateStyle.trim().length > 0;
+
+  function characterChecked(source: string, fallback: boolean): boolean {
+    return characterDrafts[source]?.checked ?? fallback;
+  }
+
+  function characterTarget(source: string, fallback: string): string {
+    return characterDrafts[source]?.target ?? fallback;
+  }
 
   const loadSeries = useCallback(async () => {
     setLoading(true);
@@ -517,30 +543,83 @@ export function SeriesView() {
     });
   }
 
-  async function handlePromoteCharacters(profile: SeriesProfile): Promise<void> {
+  async function handleConfirmCandidate(profile: SeriesProfile): Promise<void> {
     if (selected === null) {
       return;
     }
-    const characters = profile.characters.filter(
-      (character) => character.target.trim().length > 0,
-    );
-    if (characters.length === 0) {
-      setNotice("Il candidato non ha personaggi con un rendering da promuovere.");
+    const accepted: ConfirmedSeriesCharacter[] = [];
+    const rejected: string[] = [];
+    for (const character of profile.characters) {
+      const checked = characterChecked(character.source, true);
+      const target = characterTarget(character.source, character.target).trim();
+      if (checked && target.length > 0) {
+        accepted.push({
+          source: character.source,
+          target,
+          note: character.note.length > 0 ? character.note : null,
+        });
+      } else if (!checked) {
+        rejected.push(character.source);
+      }
+    }
+    if (
+      accepted.length === 0 &&
+      rejected.length === 0 &&
+      !effectiveSynopsisChecked &&
+      !effectiveStyleChecked
+    ) {
+      setNotice("Nessun campo selezionato da confermare.");
       return;
     }
-    await run("characters", async () => {
-      for (const character of characters) {
-        await seriesGlossaryUpsert({
-          series_id: selected.id,
-          source: character.source,
-          target: character.target,
-          kind: "proper_noun",
-          note: character.note.length > 0 ? character.note : null,
-          status: "candidate",
-        });
-      }
+    await run("confirm", async () => {
+      const outcome = await seriesReconConfirm({
+        series_id: selected.id,
+        synopsis: effectiveSynopsisChecked
+          ? (synopsisDraft ?? profile.synopsis)
+          : null,
+        style_guide: effectiveStyleChecked
+          ? (styleDraft ?? profile.style_notes.join("\n"))
+          : null,
+        characters: accepted,
+        rejected_characters: rejected,
+        discard: false,
+      });
+      setSynopsisDraft(undefined);
+      setStyleDraft(undefined);
+      setSynopsisChecked(undefined);
+      setStyleChecked(undefined);
+      setCharacterDrafts({});
       await loadDetail();
-      setNotice(`${characters.length} personaggi portati nel glossario come candidati.`);
+      setNotice(
+        `Confermato: ${outcome.characters_accepted} personaggi nel canone, ` +
+          `${outcome.characters_rejected} rifiutati` +
+          `${outcome.synopsis_updated ? ", sinossi aggiornata" : ""}` +
+          `${outcome.style_guide_updated ? ", style guide aggiornata" : ""}.`,
+      );
+    });
+  }
+
+  async function handleDiscardCandidate(): Promise<void> {
+    if (selected === null || candidate === null) {
+      return;
+    }
+    await run("discard", async () => {
+      const rejected = candidate.characters
+        .filter((character) => !characterChecked(character.source, true))
+        .map((character) => character.source);
+      await seriesReconConfirm({
+        series_id: selected.id,
+        characters: [],
+        rejected_characters: rejected,
+        discard: true,
+      });
+      setSynopsisDraft(undefined);
+      setStyleDraft(undefined);
+      setSynopsisChecked(undefined);
+      setStyleChecked(undefined);
+      setCharacterDrafts({});
+      await loadDetail();
+      setNotice("Candidato scartato; i rifiuti restano registrati.");
     });
   }
 
@@ -1227,65 +1306,135 @@ export function SeriesView() {
                   {candidate !== null ? (
                     <div className="section-stack rounded border border-line p-2">
                       <span className="stat-label">Profilo candidato</span>
-                      <p className="text-xs text-ink-soft">
-                        {candidate.synopsis.length > 0 ? candidate.synopsis : "—"}
+                      <p className="field-hint">
+                        Nulla è attivo finché non confermi: la sinossi e la style guide scelte
+                        entrano nella memoria di serie, i personaggi spuntati diventano termini
+                        approvati, quelli deselezionati restano rifiutati e non verranno più
+                        proposti.
                       </p>
-                      {candidate.style_notes.length > 0 ? (
-                        <ul className="section-stack">
-                          {candidate.style_notes.map((note) => (
-                            <li key={note} className="text-[0.72rem] text-muted">
-                              • {note}
-                            </li>
-                          ))}
-                        </ul>
-                      ) : null}
+
+                      <label className="flex items-start gap-2 text-xs text-ink-soft">
+                        <input
+                          type="checkbox"
+                          checked={effectiveSynopsisChecked}
+                          onChange={(event) => {
+                            setSynopsisChecked(event.target.checked);
+                          }}
+                        />
+                        <span className="min-w-0 flex-1">
+                          <span className="field-label">Sinossi di serie</span>
+                          <textarea
+                            className="input min-h-16"
+                            aria-label="Sinossi candidata"
+                            value={synopsisDraft ?? candidate.synopsis}
+                            disabled={!effectiveSynopsisChecked}
+                            onChange={(event) => {
+                              setSynopsisDraft(event.target.value);
+                            }}
+                          />
+                        </span>
+                      </label>
+
+                      <label className="flex items-start gap-2 text-xs text-ink-soft">
+                        <input
+                          type="checkbox"
+                          checked={effectiveStyleChecked}
+                          onChange={(event) => {
+                            setStyleChecked(event.target.checked);
+                          }}
+                        />
+                        <span className="min-w-0 flex-1">
+                          <span className="field-label">Style guide di serie</span>
+                          <textarea
+                            className="input min-h-16"
+                            aria-label="Style guide candidata"
+                            value={styleDraft ?? candidate.style_notes.join("\n")}
+                            disabled={!effectiveStyleChecked}
+                            onChange={(event) => {
+                              setStyleDraft(event.target.value);
+                            }}
+                          />
+                        </span>
+                      </label>
+
                       {candidate.characters.length > 0 ? (
-                        <ul className="section-stack">
-                          {candidate.characters.map((character) => (
-                            <li key={character.source} className="text-[0.72rem] text-muted">
-                              <span className="font-medium text-ink-soft">{character.source}</span>
-                              {character.target.length > 0 ? ` → ${character.target}` : ""}
-                              {character.note.length > 0 ? ` · ${character.note}` : ""}
-                            </li>
-                          ))}
-                        </ul>
+                        <div className="section-stack">
+                          <span className="field-label">Personaggi</span>
+                          <ul className="section-stack">
+                            {candidate.characters.map((character) => (
+                              <li
+                                key={character.source}
+                                className="flex flex-wrap items-center gap-2 rounded border border-line p-2"
+                              >
+                                <label className="flex items-center gap-2 text-[0.72rem] text-muted">
+                                  <input
+                                    type="checkbox"
+                                    checked={characterChecked(character.source, true)}
+                                    onChange={(event) => {
+                                      setCharacterDrafts((current) => ({
+                                        ...current,
+                                        [character.source]: {
+                                          ...current[character.source],
+                                          checked: event.target.checked,
+                                        },
+                                      }));
+                                    }}
+                                  />
+                                  <span className="font-medium text-ink-soft">
+                                    {character.source}
+                                  </span>
+                                </label>
+                                <input
+                                  className="input"
+                                  style={{ width: "12rem" }}
+                                  aria-label={`Rendering di ${character.source}`}
+                                  value={characterTarget(character.source, character.target)}
+                                  disabled={!characterChecked(character.source, true)}
+                                  onChange={(event) => {
+                                    setCharacterDrafts((current) => ({
+                                      ...current,
+                                      [character.source]: {
+                                        ...current[character.source],
+                                        target: event.target.value,
+                                      },
+                                    }));
+                                  }}
+                                />
+                                {character.note.length > 0 ? (
+                                  <span className="text-[0.68rem] text-faint">
+                                    {character.note}
+                                  </span>
+                                ) : null}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
                       ) : null}
+
+                      {candidate.rejected.length > 0 ? (
+                        <p className="field-hint">
+                          Già rifiutati: {candidate.rejected.join(", ")}
+                        </p>
+                      ) : null}
+
                       <div className="flex flex-wrap items-center gap-2">
                         <button
                           type="button"
-                          className="btn btn-sm"
-                          disabled={candidate.synopsis.length === 0}
-                          onClick={() => {
-                            setSynopsis(candidate.synopsis);
-                            setNotice("Sinossi copiata nel modulo: salva per applicarla.");
-                          }}
+                          className="btn btn-primary"
+                          disabled={busy !== null}
+                          onClick={() => void handleConfirmCandidate(candidate)}
                         >
-                          Usa come sinossi
+                          Conferma selezionati
                         </button>
                         <button
                           type="button"
-                          className="btn btn-sm"
-                          disabled={candidate.style_notes.length === 0}
-                          onClick={() => {
-                            setStyleGuide(candidate.style_notes.join("\n"));
-                            setNotice("Style guide copiata nel modulo: salva per applicarla.");
-                          }}
+                          className="btn"
+                          disabled={busy !== null}
+                          onClick={() => void handleDiscardCandidate()}
                         >
-                          Usa come style guide
-                        </button>
-                        <button
-                          type="button"
-                          className="btn btn-sm"
-                          disabled={busy !== null || candidate.characters.length === 0}
-                          onClick={() => void handlePromoteCharacters(candidate)}
-                        >
-                          Personaggi nel glossario
+                          Scarta candidato
                         </button>
                       </div>
-                      <p className="field-hint">
-                        Il candidato non è mai iniettato nei prompt: nulla cambia finché non salvi
-                        la memoria o approvi i termini.
-                      </p>
                     </div>
                   ) : null}
                 </div>

@@ -583,6 +583,16 @@ pub async fn get_series_memory(
     Ok(row.map(|r| r.0))
 }
 
+/// Remove a series memory value. Returns the number of rows deleted.
+pub async fn delete_series_memory(pool: &SqlitePool, series_id: &str, key: &str) -> Result<u64> {
+    let res = sqlx::query("DELETE FROM series_memory WHERE series_id = ?1 AND key = ?2")
+        .bind(series_id)
+        .bind(key)
+        .execute(pool)
+        .await?;
+    Ok(res.rows_affected())
+}
+
 pub async fn list_series_memory(pool: &SqlitePool, series_id: &str) -> Result<Vec<SeriesMemory>> {
     let rows = sqlx::query_as::<_, SeriesMemory>(
         "SELECT * FROM series_memory WHERE series_id = ?1 ORDER BY key",

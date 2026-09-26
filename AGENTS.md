@@ -144,6 +144,7 @@ Commands: `project_list`, `project_create`, `project_get`, `project_delete`,
 `series_glossary_list`, `series_glossary_upsert`, `series_glossary_delete`,
 `series_variant_upsert`, `series_variant_delete`, `series_promote_term`,
 `series_export`, `series_import`, `series_qa_scan`, `series_recon_start`,
+`series_recon_confirm`,
 `review_start`, `suggestion_list`, `suggestion_accept`, `suggestion_reject`, `qa_report`,
 `job_list`, `chunk_list`, `chunk_get`, `metrics_get`, `sidecar_status`,
 `export_build`, `export_preview`, `export_history`, `open_path`.
@@ -172,7 +173,10 @@ import by revision: a differing rendering becomes `status='conflict'`, never a s
 `series_qa_scan` re-runs the QA heuristics on every translated chunk of every member book,
 and `series_recon_start` enqueues a `series_recon` job on the orchestrator role whose output
 is a **candidate** profile under `series_memory['series_profile']` — never injected into a
-prompt until the user copies it into the series memory.
+prompt until the user confirms it. `series_recon_confirm` takes `{req: {series_id, synopsis?,
+style_guide?, characters[{source, target, note?}], rejected_characters[], discard?}}`: the
+accepted fields land in the series memory, accepted characters become approved canon terms
+and rejected sources stay on the candidate so a later run does not propose them again.
 
 `review_start` takes `{req: {project_id, chunk_ids?, chapter_id?, pass?, with_qa?}}`, where `pass`
 is `editor` (default `both`, also `proofreader`), and enqueues the matching `edit_chunk` /

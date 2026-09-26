@@ -513,3 +513,14 @@ pub async fn series_recon_start(
     state.worker.start();
     Ok(super::ingest::JobStarted { job_id: job.id })
 }
+
+/// Apply the user's decisions on the candidate series profile: accepted fields land in the
+/// series memory, accepted characters become approved canon terms, rejected sources are
+/// remembered so a later run skips them.
+#[tauri::command]
+pub async fn series_recon_confirm(
+    state: State<'_, AppState>,
+    req: crate::pipeline::series_recon::ConfirmRequest,
+) -> Result<crate::pipeline::series_recon::ConfirmOutcome> {
+    crate::pipeline::series_recon::confirm(&state.pool, &req).await
+}

@@ -15,8 +15,8 @@ use serde_json::Value;
 use super::chat_call::{run_chat_call, ChatCall};
 use super::PipelineDeps;
 use crate::db::models::Project;
-use crate::db::now;
 use crate::db::repo;
+use crate::db::{new_id, now};
 use crate::error::{AppError, Result};
 use crate::util::{clamp_chars, clamp_list, clamp_words, sha256_hex_str};
 
@@ -83,9 +83,16 @@ pub struct SeriesProfileProvenance {
 /// The candidate profile stored under [`MEMORY_KEY`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct SeriesProfile {
+    #[serde(default)]
     pub synopsis: String,
+    #[serde(default)]
     pub style_notes: Vec<String>,
+    #[serde(default)]
     pub characters: Vec<SeriesCharacter>,
+    /// Sources the user rejected during confirmation. Kept so a later run does not
+    /// propose them again.
+    #[serde(default)]
+    pub rejected: Vec<String>,
     #[serde(default)]
     pub provenance: SeriesProfileProvenance,
 }
@@ -96,6 +103,46 @@ pub struct SeriesReconOutcome {
     pub model: String,
     pub books: usize,
     pub characters: usize,
+}
+
+/// One character the user accepted from the candidate.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ConfirmedCharacter {
+    pub source: String,
+    #[serde(default)]
+    pub target: String,
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+/// Request of the structured candidate confirmation.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ConfirmRequest {
+    pub series_id: String,
+    /// Final synopsis text; `None` leaves the series memory untouched.
+    #[serde(default)]
+    pub synopsis: Option<String>,
+    /// Final style guide text; `None` leaves the series memory untouched.
+    #[serde(default)]
+    pub style_guide: Option<String>,
+    /// Characters the user accepted, with their rendering.
+    #[serde(default)]
+    pub characters: Vec<ConfirmedCharacter>,
+    /// Character sources the user rejected; kept so a later run skips them.
+    #[serde(default)]
+    pub rejected_characters: Vec<String>,
+    /// Throw the rest of the candidate away (the rejections are still recorded).
+    #[serde(default)]
+    pub discard: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ConfirmOutcome {
+    pub synopsis_updated: bool,
+    pub style_guide_updated: bool,
+    pub characters_accepted: usize,
+    pub characters_rejected: usize,
+    pub discarded: bool,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -197,6 +244,7 @@ fn parse_profile(text: &str, provenance: SeriesProfileProvenance) -> Result<Seri
         synopsis: clamp_words(&raw.synopsis, MAX_SYNOPSIS_WORDS),
         style_notes: clamp_list(&raw.style_notes, MAX_STYLE_NOTES, MAX_STYLE_NOTE_CHARS),
         characters,
+        rejected: Vec::new(),
         provenance,
     })
 }
@@ -340,6 +388,15 @@ pub async fn run_series_recon(
             books: evidence.book_names.clone(),
         },
     )?;
+    // A source the user rejected earlier is never proposed again, and the rejection is
+    // carried into the new candidate.
+    let rejected = previous_rejections(pool, series_id).await?;
+    let mut profile = profile;
+    profile
+        .characters
+        .retain(|character| !rejected.contains(&character.source.trim().to_lowercase()));
+    profile.rejected = rejected.into_iter().collect();
+    profile.rejected.sort();
     repo::set_series_memory(
         pool,
         series_id,
@@ -353,6 +410,169 @@ pub async fn run_series_recon(
         model: binding.model,
         books: evidence.book_names.len(),
         characters: profile.characters.len(),
+    })
+}
+
+/// Rejections recorded on the current candidate, lowercased for comparison.
+async fn previous_rejections(pool: &sqlx::SqlitePool, series_id: &str) -> Result<BTreeSet<String>> {
+    let candidate = repo::get_series_memory(pool, series_id, MEMORY_KEY)
+        .await?
+        .and_then(|json| serde_json::from_str::<SeriesProfile>(&json).ok())
+        .unwrap_or_default();
+    Ok(candidate
+        .rejected
+        .iter()
+        .map(|source| source.trim().to_lowercase())
+        .filter(|source| !source.is_empty())
+        .collect())
+}
+
+/// Apply the user's decisions on the candidate: write the accepted memory, promote the
+/// accepted characters into the canon and remember the rejected ones, so a later run does
+/// not propose them again. Nothing is applied unless the request carries it.
+pub async fn confirm(pool: &sqlx::SqlitePool, req: &ConfirmRequest) -> Result<ConfirmOutcome> {
+    let series = repo::get_series(pool, &req.series_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("series {}", req.series_id)))?;
+
+    let stored = repo::get_series_memory(pool, &req.series_id, MEMORY_KEY).await?;
+    let mut candidate: SeriesProfile = stored
+        .as_deref()
+        .and_then(|json| serde_json::from_str(json).ok())
+        .unwrap_or_default();
+
+    let mut rejected: BTreeSet<String> = candidate
+        .rejected
+        .iter()
+        .map(|source| source.trim().to_lowercase())
+        .filter(|source| !source.is_empty())
+        .collect();
+    let mut rejected_count = 0;
+    for source in &req.rejected_characters {
+        let key = source.trim().to_lowercase();
+        if !key.is_empty() && rejected.insert(key) {
+            rejected_count += 1;
+        }
+    }
+
+    // Discard keeps the rejections (the only durable decision) and drops the rest.
+    if req.discard {
+        if rejected.is_empty() {
+            repo::delete_series_memory(pool, &req.series_id, MEMORY_KEY).await?;
+        } else {
+            let kept = SeriesProfile {
+                rejected: rejected.into_iter().collect(),
+                ..SeriesProfile::default()
+            };
+            repo::set_series_memory(
+                pool,
+                &req.series_id,
+                MEMORY_KEY,
+                &serde_json::to_string(&kept)?,
+            )
+            .await?;
+        }
+        return Ok(ConfirmOutcome {
+            synopsis_updated: false,
+            style_guide_updated: false,
+            characters_accepted: 0,
+            characters_rejected: rejected_count,
+            discarded: true,
+        });
+    }
+
+    let mut synopsis_updated = false;
+    if let Some(synopsis) = req
+        .synopsis
+        .as_deref()
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+    {
+        repo::set_series_memory(pool, &req.series_id, "synopsis", synopsis).await?;
+        synopsis_updated = true;
+    }
+    let mut style_guide_updated = false;
+    if let Some(style_guide) = req
+        .style_guide
+        .as_deref()
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+    {
+        repo::set_series_memory(pool, &req.series_id, "style_guide", style_guide).await?;
+        style_guide_updated = true;
+    }
+
+    let mut accepted: BTreeSet<String> = BTreeSet::new();
+    let mut characters_accepted = 0;
+    for character in &req.characters {
+        let source = character.source.trim();
+        let target = character.target.trim();
+        if source.is_empty() || target.is_empty() {
+            continue;
+        }
+        accepted.insert(source.to_lowercase());
+        repo::upsert_series_term(
+            pool,
+            &crate::db::models::SeriesGlossaryTerm {
+                id: new_id(),
+                series_id: series.id.clone(),
+                source_lang: series.source_lang.clone().or_else(|| Some(String::new())),
+                target_lang: series.target_lang.clone().or_else(|| Some(String::new())),
+                source: source.to_string(),
+                target: target.to_string(),
+                note: character
+                    .note
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|note| !note.is_empty())
+                    .map(str::to_string),
+                kind: "proper_noun".to_string(),
+                origin: "proposed".to_string(),
+                revision: 1,
+                status: "approved".to_string(),
+            },
+        )
+        .await?;
+        if let Err(error) =
+            super::glossary::flag_series_conflicts(pool, &series.id, source, target).await
+        {
+            tracing::warn!(%error, "could not flag series conflicts after confirming");
+        }
+        characters_accepted += 1;
+    }
+    // Accepting a character that had been rejected before clears the rejection.
+    for source in &accepted {
+        rejected.remove(source);
+    }
+
+    let remaining = candidate.characters.iter().any(|character| {
+        let key = character.source.trim().to_lowercase();
+        !accepted.contains(&key) && !rejected.contains(&key)
+    });
+    if stored.is_some() || !rejected.is_empty() || remaining {
+        candidate.characters.retain(|character| {
+            let key = character.source.trim().to_lowercase();
+            !accepted.contains(&key) && !rejected.contains(&key)
+        });
+        candidate.rejected = rejected.into_iter().collect();
+        candidate.rejected.sort();
+        repo::set_series_memory(
+            pool,
+            &req.series_id,
+            MEMORY_KEY,
+            &serde_json::to_string(&candidate)?,
+        )
+        .await?;
+    } else {
+        repo::delete_series_memory(pool, &req.series_id, MEMORY_KEY).await?;
+    }
+
+    Ok(ConfirmOutcome {
+        synopsis_updated,
+        style_guide_updated,
+        characters_accepted,
+        characters_rejected: rejected_count,
+        discarded: false,
     })
 }
 
@@ -399,5 +619,156 @@ mod tests {
         let embedded: Value =
             serde_json::from_str(DEFAULT_SERIES_RECON_SCHEMA).expect("embedded schema is JSON");
         assert_eq!(file, embedded);
+    }
+
+    async fn seed(pool: &sqlx::SqlitePool) -> crate::db::models::Series {
+        let timestamp = now();
+        let series = crate::db::models::Series {
+            id: "s1".to_string(),
+            name: "The Saga".to_string(),
+            source_lang: Some("English".to_string()),
+            target_lang: Some("Italian".to_string()),
+            settings_json: "{}".to_string(),
+            created_at: timestamp.clone(),
+            updated_at: timestamp,
+        };
+        repo::upsert_series(pool, &series).await.expect("series");
+        series
+    }
+
+    async fn seed_candidate(pool: &sqlx::SqlitePool, series_id: &str, profile: &SeriesProfile) {
+        repo::set_series_memory(
+            pool,
+            series_id,
+            MEMORY_KEY,
+            &serde_json::to_string(profile).unwrap(),
+        )
+        .await
+        .expect("candidate");
+    }
+
+    #[tokio::test]
+    async fn confirm_applies_accepted_fields_and_promotes_characters() {
+        let (pool, _dir) = crate::db::connect_temp_file().await.expect("pool");
+        let series = seed(&pool).await;
+        seed_candidate(
+            &pool,
+            &series.id,
+            &SeriesProfile {
+                synopsis: "candidate".to_string(),
+                style_notes: vec!["note".to_string()],
+                characters: vec![
+                    SeriesCharacter {
+                        source: "Keeper".to_string(),
+                        target: "Custode".to_string(),
+                        note: "protagonist".to_string(),
+                    },
+                    SeriesCharacter {
+                        source: "Ship".to_string(),
+                        target: "Nave".to_string(),
+                        note: String::new(),
+                    },
+                ],
+                rejected: Vec::new(),
+                provenance: SeriesProfileProvenance::default(),
+            },
+        )
+        .await;
+
+        let outcome = confirm(
+            &pool,
+            &ConfirmRequest {
+                series_id: series.id.clone(),
+                synopsis: Some("The saga of the light.".to_string()),
+                style_guide: Some("Formal register.".to_string()),
+                characters: vec![ConfirmedCharacter {
+                    source: "Keeper".to_string(),
+                    target: "Custode".to_string(),
+                    note: Some("protagonist".to_string()),
+                }],
+                rejected_characters: vec!["Ship".to_string()],
+                discard: false,
+            },
+        )
+        .await
+        .expect("confirm");
+        assert!(outcome.synopsis_updated);
+        assert!(outcome.style_guide_updated);
+        assert_eq!(outcome.characters_accepted, 1);
+        assert_eq!(outcome.characters_rejected, 1);
+
+        assert_eq!(
+            repo::get_series_memory(&pool, &series.id, "synopsis")
+                .await
+                .expect("synopsis")
+                .as_deref(),
+            Some("The saga of the light.")
+        );
+        let terms = repo::list_series_terms(&pool, &series.id)
+            .await
+            .expect("terms");
+        assert_eq!(terms.len(), 1);
+        assert_eq!(terms[0].source, "Keeper");
+        assert_eq!(terms[0].status, "approved");
+        assert_eq!(terms[0].origin, "proposed");
+
+        // The candidate keeps only the undecided part and remembers the rejection.
+        let stored = repo::get_series_memory(&pool, &series.id, MEMORY_KEY)
+            .await
+            .expect("candidate")
+            .expect("still there");
+        let candidate: SeriesProfile = serde_json::from_str(&stored).expect("parse");
+        assert!(candidate.characters.is_empty());
+        assert_eq!(candidate.rejected, vec!["ship".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn discarding_keeps_only_the_rejections() {
+        let (pool, _dir) = crate::db::connect_temp_file().await.expect("pool");
+        let series = seed(&pool).await;
+        seed_candidate(
+            &pool,
+            &series.id,
+            &SeriesProfile {
+                synopsis: "candidate".to_string(),
+                style_notes: vec!["note".to_string()],
+                characters: vec![SeriesCharacter {
+                    source: "Ship".to_string(),
+                    target: "Nave".to_string(),
+                    note: String::new(),
+                }],
+                rejected: Vec::new(),
+                provenance: SeriesProfileProvenance::default(),
+            },
+        )
+        .await;
+
+        let outcome = confirm(
+            &pool,
+            &ConfirmRequest {
+                series_id: series.id.clone(),
+                synopsis: Some("ignored".to_string()),
+                style_guide: None,
+                characters: Vec::new(),
+                rejected_characters: vec!["Ship".to_string()],
+                discard: true,
+            },
+        )
+        .await
+        .expect("discard");
+        assert!(outcome.discarded);
+        assert!(!outcome.synopsis_updated);
+        assert!(repo::get_series_memory(&pool, &series.id, "synopsis")
+            .await
+            .expect("synopsis")
+            .is_none());
+        let stored = repo::get_series_memory(&pool, &series.id, MEMORY_KEY)
+            .await
+            .expect("candidate")
+            .expect("kept for the rejection");
+        let candidate: SeriesProfile = serde_json::from_str(&stored).expect("parse");
+        assert!(candidate.characters.is_empty());
+        assert!(candidate.synopsis.is_empty());
+        assert_eq!(candidate.rejected, vec!["ship".to_string()]);
     }
 }
