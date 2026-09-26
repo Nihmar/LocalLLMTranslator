@@ -24,6 +24,8 @@ import type {
   ChunkDetail,
   ChunkListRequest,
   CreateProjectRequest,
+  DiagnosticsOutcome,
+  DiagnosticsPaths,
   Endpoint,
   EndpointModelsRequest,
   EndpointTestResult,
@@ -133,6 +135,9 @@ const COMMANDS = {
   chunkGet: "chunk_get",
   metricsGet: "metrics_get",
   sidecarStatus: "sidecar_status",
+  diagnosticLogFrontendError: "log_frontend_error",
+  diagnosticsPaths: "diagnostics_paths",
+  diagnosticsExport: "diagnostics_export",
   exportBuild: "export_build",
   exportPreview: "export_preview",
   exportHistory: "export_history",
@@ -194,7 +199,23 @@ async function call<TResult>(command: string, args?: Record<string, unknown>): P
   try {
     return await invoke<TResult>(command, args);
   } catch (error) {
-    throw new Error(toErrorMessage(error));
+    const message = toErrorMessage(error);
+    // Every failure the user sees is recorded in the diagnostics log with the command
+    // name. The report call uses `invoke` directly so it can never recurse.
+    void reportFrontendError(command, message);
+    throw new Error(message);
+  }
+}
+
+/**
+ * Best effort: diagnostics must never break the operation that failed, so a failure to log
+ * is swallowed. The backend truncates the message before writing it.
+ */
+async function reportFrontendError(command: string, message: string): Promise<void> {
+  try {
+    await invoke(COMMANDS.diagnosticLogFrontendError, { command, message });
+  } catch {
+    // Nothing to do: the backend is unreachable, and the original error still reaches the UI.
   }
 }
 
@@ -497,4 +518,16 @@ export function exportHistory(projectId: string): Promise<ExportBuildRecord[]> {
 /** Opens a file or directory with the OS handler; the only filesystem command the UI needs. */
 export function openPath(path: string): Promise<Ack> {
   return call<Ack>(COMMANDS.openPath, { path });
+}
+
+// --- diagnostics ---------------------------------------------------------------------------
+
+/** Where the application data and the log files live. */
+export function diagnosticsPaths(): Promise<DiagnosticsPaths> {
+  return call<DiagnosticsPaths>(COMMANDS.diagnosticsPaths);
+}
+
+/** Writes a support bundle (newest logs + report) and returns its path. */
+export function diagnosticsExport(): Promise<DiagnosticsOutcome> {
+  return call<DiagnosticsOutcome>(COMMANDS.diagnosticsExport);
 }

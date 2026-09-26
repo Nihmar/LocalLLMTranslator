@@ -284,3 +284,9 @@ export function basename(path: string | null | undefined): string {
 export function countLabel(count: number, singular: string, plural: string): string {
   return `${formatNumber(count)} ${count === 1 ? singular : plural}`;
 }
+
+/** Directory of a path, for revealing a generated file in the OS file manager. */
+export function parentDirectory(path: string): string {
+  const index = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+  return index > 0 ? path.slice(0, index) : path;
+}

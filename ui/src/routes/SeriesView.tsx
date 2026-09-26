@@ -4,6 +4,7 @@ import { FormField } from "../components/FormField";
 import { StatusBadge } from "../components/StatusBadge";
 import { pickSeriesBundleFile } from "../lib/dialog";
 import { onJobProgress } from "../lib/events";
+import { parentDirectory } from "../lib/format";
 import {
   glossaryList,
   openPath,
@@ -117,12 +118,6 @@ function parseConflictDetails(json: string): ConflictDetails {
     seriesTarget: text("series_target") ?? text("existing_target"),
     projectTarget: text("project_target") ?? text("proposed_target"),
   };
-}
-
-/** Directory of a path, for revealing the exported bundle in the OS file manager. */
-function parentDirectory(path: string): string {
-  const index = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
-  return index > 0 ? path.slice(0, index) : path;
 }
 
 /**

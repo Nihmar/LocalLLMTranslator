@@ -13,11 +13,12 @@ import {
   formatEta,
   formatNumber,
   formatThroughput,
+  parentDirectory,
   shortId,
   truncate,
 } from "../lib/format";
-import { jobList, metricsGet, toErrorMessage } from "../lib/ipc";
-import type { Job, Metrics, Project } from "../lib/types";
+import { diagnosticsExport, diagnosticsPaths, jobList, metricsGet, openPath, toErrorMessage } from "../lib/ipc";
+import type { DiagnosticsPaths, Job, Metrics, Project } from "../lib/types";
 import type { ViewId } from "../App";
 
 /**
@@ -117,6 +118,12 @@ export function JobsView({ project, onNavigate }: JobsViewProps) {
   const [kindFilter, setKindFilter] = useState("all");
   const [metrics, setMetrics] = useState<Metrics | null>(null);
   const [metricsError, setMetricsError] = useState<string | null>(null);
+  // Diagnostics: where the logs are and the last exported bundle.
+  const [diagPaths, setDiagPaths] = useState<DiagnosticsPaths | null>(null);
+  const [diagExporting, setDiagExporting] = useState(false);
+  const [diagNotice, setDiagNotice] = useState<string | null>(null);
+  const [diagError, setDiagError] = useState<string | null>(null);
+  const [exportedBundle, setExportedBundle] = useState<string | null>(null);
 
   // Observed-throughput fallback: distinct chunks seen finishing since the first event.
   const [sessionFinished, setSessionFinished] = useState(0);
@@ -124,6 +131,32 @@ export function JobsView({ project, onNavigate }: JobsViewProps) {
   const finishedIds = useRef<Set<string>>(new Set());
 
   const projectId = project?.id ?? null;
+
+  useEffect(() => {
+    void diagnosticsPaths()
+      .then(setDiagPaths)
+      .catch(() => {
+        // The folder is only a convenience: without it the export still works.
+        setDiagPaths(null);
+      });
+  }, []);
+
+  async function handleExportDiagnostics(): Promise<void> {
+    setDiagExporting(true);
+    setDiagError(null);
+    setDiagNotice(null);
+    try {
+      const outcome = await diagnosticsExport();
+      setExportedBundle(outcome.output_path);
+      setDiagNotice(
+        `Diagnostica esportata (${formatNumber(outcome.files)} file): ${outcome.output_path}`,
+      );
+    } catch (exportError) {
+      setDiagError(toErrorMessage(exportError));
+    } finally {
+      setDiagExporting(false);
+    }
+  }
 
   const load = useCallback(async () => {
     if (projectId === null) {
@@ -531,6 +564,69 @@ export function JobsView({ project, onNavigate }: JobsViewProps) {
           ) : null}
 
           <LogView limit={600} title="Log di esecuzione" heightClass="h-80" />
+
+          <div className="panel">
+            <div className="panel-head">
+              <span className="panel-title">Diagnostica</span>
+            </div>
+            <div className="panel-pad section-stack">
+              <p className="field-hint">
+                Ogni evento (job, chiamate al modello, stato del sidecar, errori mostrati
+                nell&apos;interfaccia) finisce in un file di log giornaliero. Il bundle di
+                diagnostica contiene i log più recenti e un report su versioni, coda e
+                fallimenti: nessun testo del libro, prompt o database.
+              </p>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={diagPaths === null}
+                  onClick={() => {
+                    if (diagPaths !== null) {
+                      void openPath(diagPaths.log_dir);
+                    }
+                  }}
+                >
+                  Apri cartella log
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  disabled={diagExporting}
+                  onClick={() => void handleExportDiagnostics()}
+                >
+                  {diagExporting ? <span className="spinner" aria-hidden="true" /> : null}
+                  Esporta diagnostica
+                </button>
+                {exportedBundle !== null ? (
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-ghost"
+                    onClick={() => void openPath(parentDirectory(exportedBundle))}
+                  >
+                    Apri cartella del bundle
+                  </button>
+                ) : null}
+              </div>
+              {diagPaths !== null ? (
+                <p className="mono-chip" title={diagPaths.log_dir}>
+                  {truncate(diagPaths.log_dir, 64)}
+                </p>
+              ) : null}
+              {diagError !== null ? (
+                <div className="banner banner-error" role="alert">
+                  <span aria-hidden="true">⚠</span>
+                  <span>{diagError}</span>
+                </div>
+              ) : null}
+              {diagNotice !== null ? (
+                <div className="banner banner-ok" role="status">
+                  <span aria-hidden="true">✓</span>
+                  <span>{diagNotice}</span>
+                </div>
+              ) : null}
+            </div>
+          </div>
 
           <p className="text-[0.72rem] text-faint">
             {activeJobs > 0 ? "L'ETA si aggiorna ogni secondo." : "Nessun job attivo."}

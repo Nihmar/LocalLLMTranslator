@@ -768,6 +768,23 @@ export interface ExportProgressEvent {
   units?: number;
 }
 
+// --- diagnostics ---------------------------------------------------------------------------
+
+/** Result of `diagnostics_paths` (`commands::misc::DiagnosticsPaths`). */
+export interface DiagnosticsPaths {
+  /** Application data directory (database, projects, logs). */
+  data_dir: string;
+  /** Where the daily log files live. */
+  log_dir: string;
+}
+
+/** Result of `diagnostics_export` (`diagnostics::DiagnosticsOutcome`). */
+export interface DiagnosticsOutcome {
+  output_path: string;
+  bytes: number;
+  files: number;
+}
+
 // --- series (PLAN.md §9.5) ------------------------------------------------------------------
 
 /** Row of `series` (`db::models::Series`); the language pair is shared by its books. */
