@@ -61,7 +61,9 @@ use app_lib::db::{self, now, repo};
 use app_lib::error::{AppError, Result as AppResult};
 use app_lib::events::{sidecar_event_sink, EventEmitter, NullEmitter};
 use app_lib::llm::LlamaClient;
-use app_lib::pipeline::export::{run_export, ExportRequest};
+use app_lib::pipeline::export::{
+    run_export, run_export_preview, ExportPreviewRequest, ExportRequest,
+};
 use app_lib::pipeline::ingest::run_ingest;
 use app_lib::pipeline::translate::run_translate_chunk;
 use app_lib::pipeline::PipelineDeps;
@@ -280,6 +282,21 @@ async fn walking_skeleton_end_to_end() -> Result<()> {
     )
     .await?;
 
+    // M5: the HTML build proves the custom template and `--toc` are wired (the
+    // template renders its own TOC block and body wrapper), which the EPUB writer
+    // cannot show because it ignores `--template`.
+    let html = export_one(&deps_a, &project_a, "html").await?;
+    let html_document = std::fs::read_to_string(&html.output_path)
+        .with_context(|| format!("reading {}", html.output_path))?;
+    ensure!(
+        html_document.contains("id=\"TOC\""),
+        "the HTML build has no table of contents: template or --toc not applied"
+    );
+    ensure!(
+        html_document.contains("id=\"book-body\""),
+        "the HTML build did not use pandoc/templates/book.html"
+    );
+
     let blocks_a = block_signature(&pool_a, &document_a).await?;
 
     eprintln!("[walking_skeleton] run A complete: {} chunks", jobs_a.len());
@@ -446,6 +463,122 @@ async fn walking_skeleton_end_to_end() -> Result<()> {
     );
 
     eprintln!("[walking_skeleton] idempotency check passed (no duplicated blocks or translations)");
+
+    // =======================================================================
+    // M5: the unchanged-build skip, the selective chapter rebuild, the preview
+    // and the build history.
+    // =======================================================================
+    // 1. Two identical builds: the second is skipped without invoking pandoc.
+    let fresh = export_one(&deps_b, &project_b, "epub").await?;
+    let cached = export_one(&deps_b, &project_b, "epub").await?;
+    ensure!(
+        cached.from_cache,
+        "an unchanged build must be skipped (the first one ran: {})",
+        !fresh.from_cache
+    );
+    ensure!(
+        cached.changed_units.is_empty(),
+        "a skipped build reports no changed unit, got {:?}",
+        cached.changed_units
+    );
+
+    // 2. Edit one chunk and rebuild: exactly its chapter is reported as changed.
+    let changed_chunk = chunks_re
+        .iter()
+        .find(|chunk| chunk.chapter_id.is_some())
+        .ok_or_else(|| anyhow!("the fixture has no chapter chunk"))?;
+    let changed_chapter = changed_chunk
+        .chapter_id
+        .clone()
+        .ok_or_else(|| anyhow!("chapter_id disappeared"))?;
+    repo::update_chunk_target(&pool_b, &changed_chunk.id, "# Modificato\n").await?;
+    let rebuilt = export_one(&deps_b, &project_b, "epub").await?;
+    ensure!(
+        !rebuilt.from_cache,
+        "editing a chunk must invalidate the build"
+    );
+    ensure!(
+        rebuilt.changed_units.contains(&changed_chapter),
+        "the edited chapter must be reported as changed, got {:?}",
+        rebuilt.changed_units
+    );
+    ensure!(
+        rebuilt.reused_units >= 1,
+        "the other units must be reported as reused"
+    );
+
+    // 3. A standalone chapter build writes its own artifact.
+    let chapter_export = with_timeout(
+        run_export(
+            &deps_b,
+            &ExportRequest {
+                project_id: project_b.clone(),
+                output_format: "epub".to_string(),
+                output_path: None,
+                template: None,
+                css: None,
+                toc: true,
+                chapter_id: Some(changed_chapter.clone()),
+                force: false,
+            },
+        ),
+        "chapter export",
+    )
+    .await??;
+    ensure!(
+        Path::new(&chapter_export.output_path).is_file(),
+        "the chapter build produced no artifact"
+    );
+    ensure!(
+        chapter_export.units == 1,
+        "a chapter build must contain exactly its unit, got {}",
+        chapter_export.units
+    );
+
+    // 4. The preview composes the same units without pandoc.
+    let preview = with_timeout(
+        run_export_preview(
+            &deps_b,
+            &ExportPreviewRequest {
+                project_id: project_b.clone(),
+                chapter_id: None,
+            },
+        ),
+        "export preview",
+    )
+    .await??;
+    ensure!(!preview.units.is_empty(), "the preview is empty");
+    ensure!(
+        preview
+            .units
+            .iter()
+            .any(|unit| unit.markdown.contains("Modificato")),
+        "the preview must show the edited translation"
+    );
+    ensure!(
+        preview.metadata_yaml.contains("title:"),
+        "the preview must carry the metadata"
+    );
+
+    // 5. The history keeps the attempts, newest first.
+    let history = app_lib::pipeline::export::export_history(&pool_b, &project_b).await?;
+    ensure!(
+        history.len() >= 4,
+        "expected several build records, got {}",
+        history.len()
+    );
+    ensure!(
+        !history[0].from_cache,
+        "the newest record must be the rebuild"
+    );
+    ensure!(
+        history.len() <= app_lib::pipeline::export::HISTORY_LIMIT,
+        "the history must stay bounded"
+    );
+    eprintln!(
+        "[walking_skeleton] M5 checks passed: {} build records",
+        history.len()
+    );
 
     // Keep the artifact paths alive so their existence is asserted, not just the
     // intermediate values.
@@ -1168,6 +1301,12 @@ async fn assert_export_media_and_structure(
         epub_contains(epub_path, python, "epub:type=\"footnote\"").await?,
         "the exported EPUB contains no footnote: the source footnotes were dropped"
     );
+    // An EPUB always carries a navigation document; `epub:type="toc"` is the
+    // machine-readable table of contents.
+    ensure!(
+        epub_contains(epub_path, python, "epub:type=\"toc\"").await?,
+        "the exported EPUB has no navigation table of contents"
+    );
     // The table is rendered as a table, not flattened into paragraphs.
     ensure!(
         epub_contains(epub_path, python, "<table").await?,
@@ -1486,6 +1625,9 @@ async fn export_one(
         output_path: None,
         template: None,
         css: None,
+        toc: true,
+        chapter_id: None,
+        force: false,
     };
     let outcome = with_timeout(run_export(deps, &request), "export").await??;
     ensure!(
