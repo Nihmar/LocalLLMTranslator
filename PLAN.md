@@ -1,6 +1,6 @@
 # LocalLLMTranslator — Architecture and Implementation Plan
 
-> Status: **M0–M3 complete; M4 next (bilingual review and QA).** This document is the source of
+> Status: **M0–M4 complete; M5 next (export and typesetting).** This document is the source of
 > truth for the architecture; the code follows it milestone by milestone.
 
 ---
@@ -730,6 +730,10 @@ A 5-step wizard, but each step is a freely visitable route (not a constraint):
    that rewrites a block translation and recomposes the chunk. No editor dependency is paid for
    a read-only diff. If inline editing is needed later, CodeMirror + `@codemirror/merge` can
    replace the component without touching the contract.
+   Passes run as `edit_chunk` / `proofread_chunk` jobs; the QA heuristics run inline on every
+   validated translation and can be re-run per chunk with `qa_scan` (for example after a glossary
+   change). Accepting a suggestion rewrites the block with the pass as its origin and recomposes
+   the chunk's `target_md`, so the exporter sees the reviewed text.
 5. **Export** — per-chapter unit, `metadata.yaml`, template/CSS/LaTeX choice, preview,
    selective rebuild of only the modified chapter, build history.
 
@@ -813,7 +817,9 @@ context); M6 after M3 (concurrency requires the versioned glossary).
   (budget and priorities), `test_cache` (hit/miss), `test_resources` (serial degradation with a
   fake VRAM profile), `test_scheduler` (idempotency on re-run), `test_recon` (candidate profile →
   confirmation → what the context builder reads), `test_summarize` (rolling cadence, candidate
-  terms, an approved term never demoted).
+  terms, an approved term never demoted), `test_review` (editor/proofreader passes, accept,
+  reject, recompose), `test_qa` (a controlled chunk reports glossary_mismatch, untranslated and
+  empty).
 - **End-to-end integration tests**: EPUB → translation (fake server) → export; interruption
   halfway via `SIGTERM` and resume; verification that the translated Markdown has the same sequence
   of block types as the original.

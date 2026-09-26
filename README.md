@@ -7,14 +7,16 @@ review → typesetting.
 Everything works **offline**. No telemetry, no analytics, no network calls other than the
 `llama-server` endpoints you configure.
 
-> **Status: M0–M3 complete.** The skeleton runs end to end: a real EPUB goes through the Python
+> **Status: M0–M4 complete.** The skeleton runs end to end: a real EPUB goes through the Python
 > sidecar (extract → blocks → chunks → placeholders), is translated against a `llama-server`
 > endpoint, persisted, resumed after a crash and exported to EPUB and PDF with its images,
 > footnotes and tables intact. Memory is in place too: book reconnaissance produces a candidate
 > profile the user confirms field by field, the confirmed style guide and synopsis head every
 > prompt, the glossary is filtered to the terms a chunk actually contains, rolling chapter
 > summaries feed the following chapters, and repeated chunks are served from the translation
-> memory without calling the model. See [Milestones](#milestones).
+> memory without calling the model. The review step adds the bilingual editor and the
+> proofreader, a three-column diff with accept/reject per proposal, and a filterable QA report.
+> See [Milestones](#milestones).
 
 ---
 
@@ -144,8 +146,10 @@ cd sidecar && uv run pytest tests/test_rpc.py -v           # json-rpc transport 
 cargo test                                                 # queue, leases, budget, SSE, RPC
 cargo test --test recon -- --nocapture                     # book reconnaissance end to end
 cargo test --test summarize -- --nocapture                 # rolling memory end to end
+cargo test --test review -- --nocapture                    # editor/proofreader passes and accept
+cargo test --test qa -- --nocapture                        # QA findings, real sidecar
 cargo test --test walking_skeleton -- --nocapture          # end-to-end, real sidecar
-cd ui && npm run test                                      # optional IPC unit tests
+cd ui && npm run test                                      # IPC and diff unit tests
 ```
 
 ### Offline verification
@@ -195,16 +199,16 @@ tools/          Fake llama-server and fixture generator
 | **M1** | Walking skeleton: EPUB → Markdown → blocks → chunks → translation → Pandoc | ✅ |
 | M2 | Robust EPUB/PDF ingestion, footnotes, tables, images | ✅ |
 | M3 | Glossary, synopsis, rolling summaries, two-level cache, book reconnaissance | ✅ |
-| M4 | Bilingual review (editor + proofreader), diff, QA report | ⬜ |
+| M4 | Bilingual review (editor + proofreader), diff, QA report | ✅ |
 | M5 | Export and typesetting with templates and Lua filters | ⬜ |
 | M6 | Parallel sub-agents with VRAM budget and serial degradation | ⬜ |
 | M7 | Packaging (PyInstaller + Tauri bundle) | ⬜ |
 
-Known gaps, next up: the bilingual review (editor/proofreader JSON calls, the diff UI, the QA
-report) is M4 and the review route is still a placeholder; `qa_check` exists on both sides of the
-wire but is not wired into the pipeline; the sidecar's `estimate_tokens` route is intentionally
-unused because the control plane counts exactly via `/tokenize` with a built-in heuristic
-fallback; and PDF extraction is only as good as `pymupdf4llm` on a given document.
+Known gaps, next up: M5 owns the per-chapter split, `metadata.yaml`, preview and selective
+rebuild, and the export route is still a form rather than a preview; the sidecar's
+`estimate_tokens` route is intentionally unused because the control plane counts exactly via
+`/tokenize` with a built-in heuristic fallback; PDF extraction is only as good as `pymupdf4llm`
+on a given document.
 
 ## Product constraints
 
