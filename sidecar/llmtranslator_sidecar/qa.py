@@ -108,7 +108,11 @@ def _placeholder_findings(
     return [
         _finding(
             "placeholder_broken",
-            {"missing": result.missing, "duplicated": result.duplicated},
+            {
+                "missing": result.missing,
+                "duplicated": result.duplicated,
+                "unknown": result.unknown,
+            },
         ),
     ]
 

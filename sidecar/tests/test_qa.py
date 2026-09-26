@@ -176,7 +176,7 @@ def test_placeholder_details_report_missing_and_duplicated() -> None:
     (finding,) = result["findings"]
     assert finding["kind"] == "placeholder_broken"
     assert finding["severity"] == "critical"
-    assert finding["details"] == {"missing": [2], "duplicated": [3]}
+    assert finding["details"] == {"missing": [2], "duplicated": [3], "unknown": []}
 
 
 def test_markdown_reports_a_block_sequence_change() -> None:

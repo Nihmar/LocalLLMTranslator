@@ -313,6 +313,7 @@ def _handle_reinject(params: JsonObject, _notify: ProgressSink) -> JsonObject:
         "placeholders_ok": result.ok,
         "missing": result.missing,
         "duplicated": result.duplicated,
+        "unknown": result.unknown,
         "block_count_ok": len(blocks_md) == expected_blocks,
     }
 

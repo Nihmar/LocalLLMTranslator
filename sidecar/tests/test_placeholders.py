@@ -145,3 +145,37 @@ def test_front_matter_yaml_is_not_a_placeholder_source() -> None:
     assert placeholders == []
     assert llm_text == yaml_block
     assert reinject(llm_text, placeholders).text == yaml_block
+
+
+def test_invented_placeholder_index_is_dropped_not_fatal() -> None:
+    # A model sometimes renumbers or invents a token. The pass must report it and keep
+    # going: raising here turned a validation failure into a sidecar internal error.
+    text = "**La città**"
+    llm_text, placeholders = substitute(text)
+    assert [index for index, _ in placeholders] == [1, 2]
+    damaged = llm_text.replace("⟦2⟧", "⟦99⟧")
+    result = reinject(damaged, placeholders)
+    assert not result.ok
+    assert result.unknown == [99]
+    assert result.missing == [2]
+    assert result.duplicated == []
+    assert "⟦" not in result.text
+    assert result.text == "**La città"
+
+
+def test_invented_index_alone_is_reported_and_removed() -> None:
+    _, placeholders = substitute("**bold**")
+    result = reinject("⟦99⟧bold⟦2⟧", placeholders)
+    assert not result.ok
+    assert result.unknown == [99]
+    assert result.missing == [1]
+    assert result.text == "bold**"
+
+
+def test_unknown_indices_do_not_count_as_duplicates() -> None:
+    _, placeholders = substitute("**bold**")
+    # Three occurrences of ⟦1⟧: the first stands in, the others are collapsed.
+    result = reinject("⟦1⟧a⟦1⟧b⟦1⟧", placeholders)
+    assert result.duplicated == [1]
+    assert result.unknown == []
+    assert result.text == "**ab"

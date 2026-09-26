@@ -224,12 +224,14 @@ async fn translate_chunk_inner(
         .await?;
 
     if !reinject.placeholders_ok {
-        // One targeted retry naming the missing tokens.
-        let missing = format_placeholders(&reinject.missing);
+        // One targeted retry naming the tokens that came back wrong (missing, duplicated
+        // or invented by the model).
+        let broken =
+            describe_placeholders(&reinject.missing, &reinject.duplicated, &reinject.unknown);
         let retry_user = format!(
             "{}\n\nIMPORTANT: your previous answer was rejected because these placeholder tokens \
-             were missing or duplicated: {missing}. Re-output the passage, including every one of \
-             them exactly once.",
+             were missing, duplicated or unknown: {broken}. Re-output the passage, including \
+             every one of them exactly once and inventing no new ones.",
             built.user
         );
         let retry_hash = sha256_hex_str(&format!("{}\n\u{0}\n{}", built.system, retry_user));
@@ -258,8 +260,8 @@ async fn translate_chunk_inner(
             .await?;
         if !reinject.placeholders_ok {
             needs_review_reason = Some(format!(
-                "placeholder validation failed after retry: missing {:?}, duplicated {:?}",
-                reinject.missing, reinject.duplicated
+                "placeholder validation failed after retry: missing {:?}, duplicated {:?}, unknown {:?}",
+                reinject.missing, reinject.duplicated, reinject.unknown
             ));
             write_qa_finding(
                 pool,
@@ -269,6 +271,7 @@ async fn translate_chunk_inner(
                 serde_json::json!({
                     "missing": reinject.missing,
                     "duplicated": reinject.duplicated,
+                    "unknown": reinject.unknown,
                 }),
             )
             .await?;
@@ -531,6 +534,26 @@ fn format_placeholders(tokens: &[u32]) -> String {
         .join(", ")
 }
 
+/// One human-readable summary of every placeholder defect a reinject pass reported,
+/// for the targeted retry message. Categories with no tokens are omitted.
+fn describe_placeholders(missing: &[u32], duplicated: &[u32], unknown: &[u32]) -> String {
+    let mut parts = Vec::new();
+    if !missing.is_empty() {
+        parts.push(format!("missing {}", format_placeholders(missing)));
+    }
+    if !duplicated.is_empty() {
+        parts.push(format!("duplicated {}", format_placeholders(duplicated)));
+    }
+    if !unknown.is_empty() {
+        parts.push(format!("unknown {}", format_placeholders(unknown)));
+    }
+    if parts.is_empty() {
+        "(none reported)".to_string()
+    } else {
+        parts.join("; ")
+    }
+}
+
 async fn load_glossary(pool: &sqlx::SqlitePool, project_id: &str) -> Result<Vec<GlossaryEntry>> {
     let terms = repo::list_glossary_terms(pool, project_id).await?;
     Ok(terms
@@ -705,6 +728,16 @@ mod tests {
         // The old bug persisted the whole chunk source as the translation.
         let chunk_source = format!("{}\n\n{}", para.source_md, figure.source_md);
         assert_ne!(composed, chunk_source);
+    }
+
+    #[test]
+    fn describe_placeholders_names_every_defect_category() {
+        assert_eq!(describe_placeholders(&[], &[], &[]), "(none reported)");
+        assert_eq!(describe_placeholders(&[2], &[], &[]), "missing ⟦2⟧");
+        assert_eq!(
+            describe_placeholders(&[2], &[3], &[99]),
+            "missing ⟦2⟧; duplicated ⟦3⟧; unknown ⟦99⟧"
+        );
     }
 
     #[test]

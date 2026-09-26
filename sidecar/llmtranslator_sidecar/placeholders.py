@@ -103,6 +103,8 @@ class ReinjectResult:
     missing: list[int] = field(default_factory=list[int])
     duplicated: list[int] = field(default_factory=list[int])
     reordered: bool = False
+    #: Indices the model invented (never allocated by :func:`substitute`).
+    unknown: list[int] = field(default_factory=list[int])
 
 
 class _Builder:
@@ -204,8 +206,14 @@ def reinject(text: str, placeholders: Sequence[Sequence[Any]]) -> ReinjectResult
         )
     occurrences.sort(key=lambda item: item[0])
 
+    # A model can invent an index that was never allocated (⟦99⟧, ⟦0⟧). That is a mangled
+    # token, not a literal: the placement loop below drops it from the text instead of
+    # raising, and it is reported so the caller can retry.
+    unknown = sorted({index for _, _, index in occurrences if index not in literals})
+    known = [item for item in occurrences if item[2] in literals]
+
     counts: dict[int, int] = {}
-    for _, _, index in occurrences:
+    for _, _, index in known:
         counts[index] = counts.get(index, 0) + 1
 
     missing = sorted(index for index in expected if counts.get(index, 0) == 0)
@@ -213,8 +221,13 @@ def reinject(text: str, placeholders: Sequence[Sequence[Any]]) -> ReinjectResult
 
     # Complete but out of order: the model has moved a token, so the positions no longer
     # mean anything. Re-place the literals in the order they should appear.
-    ordered_indices = [index for _, _, index in occurrences]
-    reordered = not missing and not duplicated and ordered_indices != sorted(ordered_indices)
+    ordered_indices = [index for _, _, index in known]
+    reordered = (
+        not missing
+        and not duplicated
+        and not unknown
+        and ordered_indices != sorted(ordered_indices)
+    )
 
     out: list[str] = []
     position = 0
@@ -222,6 +235,8 @@ def reinject(text: str, placeholders: Sequence[Sequence[Any]]) -> ReinjectResult
     for order, (start, end, index) in enumerate(occurrences):
         out.append(text[position:start])
         position = end
+        if index not in literals:
+            continue  # an invented token leaves no trace in the output
         if reordered:
             replacement = literals[sorted(expected)[order]]
         elif index in placed:
@@ -234,8 +249,9 @@ def reinject(text: str, placeholders: Sequence[Sequence[Any]]) -> ReinjectResult
 
     return ReinjectResult(
         text="".join(out),
-        ok=not missing and not duplicated,
+        ok=not missing and not duplicated and not unknown,
         missing=missing,
         duplicated=duplicated,
         reordered=reordered,
+        unknown=unknown,
     )

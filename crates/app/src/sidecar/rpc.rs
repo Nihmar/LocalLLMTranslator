@@ -361,6 +361,10 @@ pub struct ReinjectResult {
     pub missing: Vec<u32>,
     #[serde(default)]
     pub duplicated: Vec<u32>,
+    /// Indices the model invented, never allocated by `prepare_text`; the sidecar
+    /// drops them from the text and reports them here.
+    #[serde(default)]
+    pub unknown: Vec<u32>,
     #[serde(default)]
     pub block_count_ok: bool,
 }
@@ -719,6 +723,30 @@ mod tests {
             serde_json::json!(["/f/footnotes.lua"])
         );
         assert_eq!(value["top_level_division"], serde_json::json!("chapter"));
+    }
+
+    #[test]
+    fn reinject_result_parses_invented_indices() {
+        // The sidecar reports indices the model invented alongside the missing ones;
+        // the field is optional so an older sidecar still deserialises.
+        let parsed: ReinjectResult = serde_json::from_value(serde_json::json!({
+            "blocks_md": [],
+            "placeholders_ok": false,
+            "missing": [2],
+            "duplicated": [],
+            "unknown": [99],
+            "block_count_ok": true,
+        }))
+        .unwrap();
+        assert_eq!(parsed.unknown, vec![99]);
+        assert!(!parsed.placeholders_ok);
+
+        let legacy: ReinjectResult = serde_json::from_value(serde_json::json!({
+            "blocks_md": [],
+            "placeholders_ok": true,
+        }))
+        .unwrap();
+        assert!(legacy.unknown.is_empty());
     }
 
     #[test]
