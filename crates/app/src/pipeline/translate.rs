@@ -152,7 +152,9 @@ async fn translate_chunk_inner(
         .await?
         .unwrap_or_default(),
         previous_tail: previous_tail(pool, &chunk.document_id, chunk.order_index).await?,
-        chapter_title: chunk.chapter_id.clone().unwrap_or_default(),
+        chapter_title: chapter_title(pool, chunk.chapter_id.as_deref()).await?,
+        heading_chain: heading_chain(&chunk.context_json),
+        chunk_flags: describe_chunk_flags(&chunk.flags_json),
         chunk_text: chunk.source_md.clone(),
         budget_tokens: crate::pipeline::resolve_endpoint_budget(&endpoint).await,
     };
@@ -567,6 +569,60 @@ async fn load_glossary(pool: &sqlx::SqlitePool, project_id: &str) -> Result<Vec<
         .collect())
 }
 
+/// The human-readable title of the chunk's chapter, or an empty string when the
+/// chunk belongs to the preamble (no chapter) or the row is missing.
+async fn chapter_title(pool: &sqlx::SqlitePool, chapter_id: Option<&str>) -> Result<String> {
+    let Some(chapter_id) = chapter_id else {
+        return Ok(String::new());
+    };
+    let title: Option<String> = sqlx::query_scalar("SELECT title FROM chapter WHERE id = ?1")
+        .bind(chapter_id)
+        .fetch_optional(pool)
+        .await?;
+    Ok(title.unwrap_or_default())
+}
+
+/// The heading chain the chunk sits in, rendered `A › B › C`.
+///
+/// The chain is what the chunker stored in `context_carrier` (PLAN.md §9.1):
+/// `{"headings": [{"level": 2, "text": "Chapter One"}, ...]}`. Malformed JSON is
+/// treated as "no headings" rather than failing the translation.
+fn heading_chain(context_json: &str) -> String {
+    let Ok(value) = serde_json::from_str::<Value>(context_json) else {
+        return String::new();
+    };
+    let Some(headings) = value.get("headings").and_then(Value::as_array) else {
+        return String::new();
+    };
+    headings
+        .iter()
+        .filter_map(|heading| heading.get("text").and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>()
+        .join(" › ")
+}
+
+/// Turn the chunker's raw flags into the instruction the user message states.
+/// Unknown flags are passed through verbatim instead of being dropped, so a new
+/// flag from a future chunker still reaches the model.
+fn describe_chunk_flags(flags_json: &str) -> String {
+    let flags: Vec<String> = serde_json::from_str(flags_json).unwrap_or_default();
+    flags
+        .iter()
+        .map(|flag| match flag.as_str() {
+            "table" => "this passage contains a table: keep the pipe structure and the header separator".to_string(),
+            "continues" => "this passage continues the previous one (it was split at a sentence boundary): translate it as a continuation".to_string(),
+            "oversized" => "this passage is a single block larger than the context budget: translate it completely, without shortening it".to_string(),
+            other if other.starts_with("table_part:") => format!(
+                "this passage is {other_part} of a table split across chunks: repeat the header row and keep the pipe structure",
+                other_part = other.trim_start_matches("table_part:").trim()),
+            other => format!("chunk flag: {other}"),
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
 async fn previous_chapter_summaries(
     pool: &sqlx::SqlitePool,
     document_id: &str,
@@ -738,6 +794,36 @@ mod tests {
             describe_placeholders(&[2], &[3], &[99]),
             "missing ⟦2⟧; duplicated ⟦3⟧; unknown ⟦99⟧"
         );
+    }
+
+    #[test]
+    fn heading_chain_renders_the_stored_carrier() {
+        let carrier = r#"{"headings":[{"level":1,"text":"The Book"},{"level":2,"text":"Chapter One"},{"level":3,"text":"  The Harbour  "}]}"#;
+        assert_eq!(
+            heading_chain(carrier),
+            "The Book › Chapter One › The Harbour"
+        );
+        // Degenerate inputs never fail a translation.
+        assert_eq!(heading_chain("{}"), "");
+        assert_eq!(heading_chain("not json"), "");
+        assert_eq!(heading_chain(r#"{"headings":[]}"#), "");
+    }
+
+    #[test]
+    fn chunk_flags_become_instructions_and_unknown_ones_survive() {
+        let rendered = describe_chunk_flags(r#"["table","table_part:2/3","continues"]"#);
+        assert!(rendered.contains("contains a table"));
+        assert!(rendered.contains("2/3 of a table split"));
+        assert!(rendered.contains("continues the previous one"));
+        assert_eq!(rendered.matches(';').count(), 2);
+
+        // A flag the map does not know is still stated to the model, not dropped.
+        assert_eq!(
+            describe_chunk_flags(r#"["future_flag"]"#),
+            "chunk flag: future_flag"
+        );
+        assert_eq!(describe_chunk_flags("not json"), "");
+        assert_eq!(describe_chunk_flags("[]"), "");
     }
 
     #[test]

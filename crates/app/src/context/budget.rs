@@ -81,29 +81,39 @@ pub enum PieceKind {
     /// System prompt + hard rules + style guide (priority 1). Byte-identical for
     /// every chunk of a book so `llama-server` reuses its KV-cache prefix.
     SystemRules,
-    /// Glossary terms that occur in the chunk (priority 2).
+    /// How to treat a split/oversized chunk (`table_part:2/3`, `continues`, ...).
+    /// Tiny, so it is paid before any long-range context.
+    ChunkFlags,
+    /// The chain of headings the chunk sits in (PLAN.md §9.1 item 6).
+    HeadingChain,
+    /// Glossary terms that occur in the chunk.
     Glossary,
-    /// Book synopsis (priority 3).
+    /// Book synopsis.
     Synopsis,
-    /// Summaries of the previous chapters (priority 4).
+    /// Summaries of the previous chapters.
     PreviousChapters,
-    /// Rolling summary of the current chapter (priority 5).
+    /// Rolling summary of the current chapter.
     RollingSummary,
-    /// Tail of the previous translated passage (priority 6).
+    /// Tail of the previous translated passage.
     PreviousTail,
 }
 
 impl PieceKind {
-    /// Lower number == filled earlier and truncated later.
+    /// Lower number == filled earlier and truncated later. The long-range context
+    /// keeps the PLAN.md §9.2 relative order; the chunk-local pieces (flags, heading
+    /// chain) are inserted right after the required prefix because they are cheap and
+    /// orient the model on the passage at hand.
     pub fn priority(self) -> u8 {
         match self {
             PieceKind::Text => 0,
             PieceKind::SystemRules => 1,
-            PieceKind::Glossary => 2,
-            PieceKind::Synopsis => 3,
-            PieceKind::PreviousChapters => 4,
-            PieceKind::RollingSummary => 5,
-            PieceKind::PreviousTail => 6,
+            PieceKind::ChunkFlags => 2,
+            PieceKind::HeadingChain => 3,
+            PieceKind::Glossary => 4,
+            PieceKind::Synopsis => 5,
+            PieceKind::PreviousChapters => 6,
+            PieceKind::RollingSummary => 7,
+            PieceKind::PreviousTail => 8,
         }
     }
 

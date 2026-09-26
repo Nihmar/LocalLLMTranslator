@@ -449,10 +449,17 @@ Concurrency limit per endpoint = `min(role_binding.max_concurrency, props.total_
 `llama-server` reuses the KV cache of the common prefix between requests. The prompt is
 therefore structured **on purpose**:
 
-- **System message byte-identical for the whole book**: role, rules, `style_guide`, glossary
-  (ordered deterministically by `source`), book metadata → guaranteed cache hit.
-- **Volatile user message**: `chapter_title`, `chapter_summary_so_far`, `previous_context`,
-  `text` → it is the only part that invalidates the cache.
+- **System message byte-identical for the whole book**: role, rules, `style_guide`, book
+  metadata → guaranteed cache hit.
+- **Volatile user message**: `chapter_title`, `heading_chain`, `chapter_summary_so_far`,
+  `previous_context`, the filtered glossary, the synopsis and the chunk flags (`text` is the
+  passage itself) → it is the only part that invalidates the cache.
+
+The glossary lives in the user message, not in the system one. §9.2 requires it to be filtered
+to the terms present in each chunk, and a per-chunk glossary would make the system message
+differ between chunks, destroying the stable prefix §7.2 exists to protect. The trade-off is
+deliberate: the KV-cache prefix is preserved, while the glossary costs only the few terms a
+chunk actually contains.
 
 Effect: from the second chunk onwards the prefill costs almost nothing. Practical consequence:
 **never** put timestamps, `chunk_id` or counters in the system message.
@@ -494,23 +501,33 @@ HARD RULES
 STYLE GUIDE
 {{ style_guide }}
 
-GLOSSARY (source => target)
-{{ glossary }}
-
 BOOK
 Title: {{ book_title }}
 Author: {{ book_author }}
-Synopsis: {{ synopsis }}
 ```
 
 ### `prompts/translator.md` (user — volatile)
 
+The glossary and the synopsis are here, not in the system half: the glossary is filtered to the
+terms present in each chunk, so it changes from chunk to chunk (see §7.2 and §9.2).
+
 ```jinja
 CHAPTER: {{ chapter_title }}
+SECTION: {{ heading_chain }}
+
+CHAPTER SUMMARY SO FAR
 {{ chapter_summary_so_far }}
+
+GLOSSARY (source => target)
+{{ glossary }}
+
+SYNOPSIS
+{{ synopsis }}
 
 PREVIOUS PASSAGE (already translated — for continuity of tone, pronouns and terminology only; do NOT translate it):
 {{ previous_context }}
+
+NOTE: {{ chunk_flags }}
 
 PASSAGE TO TRANSLATE:
 {{ text }}
@@ -518,7 +535,10 @@ PASSAGE TO TRANSLATE:
 
 ### `prompts/translator.table.md`
 
-Same header, plus:
+A default for a dedicated table prompt (`TABLE RULES` below). **Not wired yet**: the chunker
+flags split tables (`table_part:i/n`) and the translator prompt states that in `chunk_flags`,
+but every chunk is still rendered with `translator.md`. Wiring the dedicated prompt is future
+work.
 
 ```
 TABLE RULES
@@ -625,11 +645,17 @@ the last:
 | Priority | Component | Source | Persistence |
 |---|---|---|---|
 | 1 | System prompt + rules + style guide | `prompts/translator.md`, `project_memory.style_guide` | stable for the book |
-| 2 | **Relevant** glossary (only the terms present in the text of this chunk) | `glossary_term` | stable, ordered |
-| 3 | Book synopsis | `project_memory.synopsis` | stable |
-| 4 | Summary of the previous chapters (window 3) | `chapter.summary` | per chapter |
-| 5 | Summary of the current chapter up to here | generated every N chunks | growing |
-| 6 | Tail of the last translated passage | runtime | volatile |
+| 2 | Chunk flags (table part, continuation, oversized) | `chunk.flags_json` | per chunk |
+| 3 | Heading chain of the chunk | `chunk.context_json` (`context_carrier`) | per chunk |
+| 4 | **Relevant** glossary (only the terms present in the text of this chunk) | `glossary_term` | stable, ordered |
+| 5 | Book synopsis | `project_memory.synopsis` | stable |
+| 6 | Summary of the previous chapters (window 3) | `chapter.summary` | per chapter |
+| 7 | Summary of the current chapter up to here | generated every N chunks | growing |
+| 8 | Tail of the last translated passage | runtime | volatile |
+
+The two chunk-local pieces sit right after the required prefix: they are tiny and they orient
+the model on the passage at hand (a table part must repeat its header; a continuation must read
+as one sentence across the split).
 
 Injecting the entire glossary would be a mistake: on a book with 400 terms it devours the
 context. The "terms present in this chunk" filter is what makes the glossary scalable.

@@ -698,8 +698,11 @@ REPRESENTATIVE_CONTEXTS: dict[str, dict[str, object]] = {
         "book_author": "Fixture Author",
         "synopsis": "A keeper guards a harbour light.",
         "chapter_title": "Chapter One",
+        "heading_chain": "The Lantern Keeper / Chapter One / The Harbour",
         "chapter_summary_so_far": "The keeper wakes.",
+        "previous_chapters": "Chapter zero was calm.",
         "previous_context": "The harbour was quiet.",
+        "chunk_flags": "",
         "text": "The harbour was quiet \u27e61\u27e7.",
     },
     "translator.table.md": {
@@ -794,7 +797,15 @@ def test_translator_marker_splits_system_and_user():
     assert "{{ text }}" in user and "{{ chapter_title }}" in user
     # the stable variables live in the system half
     assert "{{ source_language }}" in system
-    assert "{{ glossary }}" in system
+    # the glossary and the synopsis are per-chunk (the glossary is filtered to the terms
+    # present), so they live in the user half: a per-chunk system message would break the
+    # llama-server KV prefix cache (PLAN.md §7.2, §9.2).
+    assert "{{ glossary }}" not in system
+    assert "{{ glossary }}" in user
+    assert "{{ synopsis }}" in user
+    # chunk-local orientation is stated to the model as well
+    assert "{{ heading_chain }}" in user
+    assert "{{ chunk_flags }}" in user
 
 
 def test_editor_schema_matches_plan():

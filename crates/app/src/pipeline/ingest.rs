@@ -5,7 +5,6 @@ use serde_json::Value;
 
 use super::PipelineDeps;
 use crate::context::budget::DEFAULT_CHUNK_BUDGET;
-use crate::context::builder::{DEFAULT_SYSTEM_TEMPLATE, DEFAULT_USER_TEMPLATE};
 use crate::db::models::{Block, Chapter, Document};
 use crate::db::{new_id, now};
 use crate::error::{AppError, Result};
@@ -78,19 +77,11 @@ pub async fn run_ingest(
         .map(|p| p.version)
         .unwrap_or_default();
 
-    // 4. Snapshot the prompts used, so the project is reproducible.
+    // 4. Snapshot the prompts used, so the project is reproducible. Written only
+    // when missing: the prompts are user data and a re-ingest must not discard an
+    // edit made in the project snapshot.
     let prompts_dir = deps.prompts_dir(project_id);
-    tokio::fs::create_dir_all(&prompts_dir).await?;
-    tokio::fs::write(
-        prompts_dir.join("translator.system.md"),
-        DEFAULT_SYSTEM_TEMPLATE,
-    )
-    .await?;
-    tokio::fs::write(
-        prompts_dir.join("translator.user.md"),
-        DEFAULT_USER_TEMPLATE,
-    )
-    .await?;
+    crate::context::builder::ensure_prompt_files(&prompts_dir).await?;
     // The reconnaissance prompt files (PLAN.md section 9.4) join the snapshot.
     // They are only written when missing, so a user edit survives a re-ingest.
     crate::pipeline::recon::ensure_prompt_files(&prompts_dir).await?;

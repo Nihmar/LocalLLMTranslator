@@ -41,12 +41,12 @@ STYLE GUIDE
 
 BOOK
 Title: {{ book_title }}
-Author: {{ book_author }}
-"#;
+Author: {{ book_author }}"#;
 
 /// Minimal fallback user template (volatile, per chunk).
 pub const DEFAULT_USER_TEMPLATE: &str = r#"CHAPTER: {{ chapter_title }}
-{% if chapter_summary_so_far %}CHAPTER SUMMARY SO FAR
+{% if heading_chain %}SECTION: {{ heading_chain }}
+{% endif %}{% if chapter_summary_so_far %}CHAPTER SUMMARY SO FAR
 {{ chapter_summary_so_far }}
 {% endif %}{% if previous_chapters %}PREVIOUS CHAPTERS
 {{ previous_chapters }}
@@ -56,9 +56,11 @@ pub const DEFAULT_USER_TEMPLATE: &str = r#"CHAPTER: {{ chapter_title }}
 {{ synopsis }}
 {% endif %}{% if previous_context %}PREVIOUS PASSAGE (already translated — for continuity of tone, pronouns and terminology only; do NOT translate it):
 {{ previous_context }}
+{% endif %}{% if chunk_flags %}NOTE: {{ chunk_flags }}
 {% endif %}
 PASSAGE TO TRANSLATE:
-{{ text }}"#;
+{{ text }}
+"#;
 
 /// One glossary entry, already resolved to the project's languages.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -83,6 +85,10 @@ pub struct ContextInputs {
     pub rolling_summary: String,
     pub previous_tail: String,
     pub chapter_title: String,
+    /// Heading chain the chunk sits in (`context_carrier`), `A › B › C`.
+    pub heading_chain: String,
+    /// Human-readable note about split/oversized chunks, empty when none apply.
+    pub chunk_flags: String,
     pub chunk_text: String,
     pub budget_tokens: usize,
 }
@@ -178,6 +184,8 @@ impl ContextBuilder {
         let pieces = vec![
             BudgetPiece::new(PieceKind::Text, inputs.chunk_text.clone()),
             BudgetPiece::new(PieceKind::SystemRules, system.clone()),
+            BudgetPiece::new(PieceKind::ChunkFlags, inputs.chunk_flags.clone()),
+            BudgetPiece::new(PieceKind::HeadingChain, inputs.heading_chain.clone()),
             BudgetPiece::new(PieceKind::Glossary, glossary_text),
             BudgetPiece::new(PieceKind::Synopsis, inputs.synopsis.clone()),
             BudgetPiece::new(PieceKind::PreviousChapters, previous_chapters),
@@ -203,6 +211,8 @@ impl ContextBuilder {
             &self.user_template,
             context! {
                 chapter_title => &inputs.chapter_title,
+                heading_chain => manifest.text(PieceKind::HeadingChain),
+                chunk_flags => manifest.text(PieceKind::ChunkFlags),
                 chapter_summary_so_far => manifest.text(PieceKind::RollingSummary),
                 previous_chapters => manifest.text(PieceKind::PreviousChapters),
                 glossary => manifest.text(PieceKind::Glossary),
@@ -265,6 +275,26 @@ fn read_first(dir: &Path, names: &[&str]) -> Option<String> {
     None
 }
 
+/// Write the shipped translator prompt halves into a project snapshot, but never
+/// overwrite a file that already exists.
+///
+/// The prompts are user data: a re-ingest must not silently discard an edit the
+/// user made in the project snapshot. The other prompt families (editor,
+/// proofreader, summarizer, reconnaissance) already follow this rule.
+pub async fn ensure_prompt_files(dir: &Path) -> Result<()> {
+    tokio::fs::create_dir_all(dir).await?;
+    for (name, content) in [
+        ("translator.system.md", DEFAULT_SYSTEM_TEMPLATE),
+        ("translator.user.md", DEFAULT_USER_TEMPLATE),
+    ] {
+        let path = dir.join(name);
+        if !path.exists() {
+            tokio::fs::write(&path, content).await?;
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -294,6 +324,8 @@ mod tests {
             rolling_summary: "So far, the king spoke.".into(),
             previous_tail: "…and then he left.".into(),
             chapter_title: "Chapter One".into(),
+            heading_chain: "Chapter One › The Harbour".into(),
+            chunk_flags: String::new(),
             chunk_text: "The king spoke to the court.".into(),
             budget_tokens: 1000,
         }
@@ -423,6 +455,48 @@ mod tests {
     }
 
     #[test]
+    fn chunk_flags_and_heading_chain_reach_the_user_message() {
+        let builder = ContextBuilder::embedded();
+        let counter = HeuristicCounter;
+        let mut inputs = base_inputs();
+        inputs.chunk_flags = "This passage is part 2/3 of a table: repeat the header row.".into();
+
+        let built = builder.build(&inputs, &counter).expect("build");
+        assert!(built.user.contains("SECTION: Chapter One › The Harbour"));
+        assert!(built.user.contains("part 2/3 of a table"));
+        // The chunk-local pieces sit just above the long-range context.
+        assert!(built.manifest.included(PieceKind::ChunkFlags));
+        assert!(built.manifest.included(PieceKind::HeadingChain));
+        let priorities: Vec<u8> = built
+            .manifest
+            .pieces
+            .iter()
+            .map(|piece| piece.priority)
+            .collect();
+        assert_eq!(priorities, vec![0, 1, 2, 3, 4, 5, 6, 7, 8]);
+
+        // Empty pieces render no line at all.
+        inputs.chunk_flags = String::new();
+        let built = builder.build(&inputs, &counter).expect("build");
+        assert!(!built.user.contains("NOTE:"));
+    }
+
+    #[test]
+    fn embedded_translator_prompts_match_the_repository_file() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let file = std::fs::read_to_string(root.join("prompts/translator.md"))
+            .expect("read prompts/translator.md");
+        let (system, user) = file
+            .split_once("-->\n")
+            .expect("translator header")
+            .1
+            .split_once("\n---USER---\n")
+            .expect("the file must contain the ---USER--- marker");
+        assert_eq!(system, DEFAULT_SYSTEM_TEMPLATE);
+        assert_eq!(user, DEFAULT_USER_TEMPLATE);
+    }
+
+    #[test]
     fn loads_templates_from_snapshot_directory() {
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::write(
@@ -436,5 +510,21 @@ mod tests {
         let built = builder.build(&base_inputs(), &counter).expect("build");
         assert!(built.system.starts_with("SYS Italian|"));
         assert!(built.user.starts_with("USR The king spoke"));
+    }
+
+    #[tokio::test]
+    async fn ensure_prompt_files_preserves_user_edits() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        ensure_prompt_files(dir.path()).await.expect("first");
+        let system = dir.path().join("translator.system.md");
+        std::fs::write(&system, "EDITED BY THE USER").expect("edit");
+
+        // A re-ingest (or any other ensure call) must not touch the edit.
+        ensure_prompt_files(dir.path()).await.expect("second");
+        assert_eq!(
+            std::fs::read_to_string(&system).expect("read"),
+            "EDITED BY THE USER"
+        );
+        assert!(dir.path().join("translator.user.md").is_file());
     }
 }
