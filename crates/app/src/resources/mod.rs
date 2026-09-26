@@ -4,8 +4,13 @@
 //! execution with an explicit reason, reported through the `metrics://tick`
 //! event.
 
+pub mod endpoints;
 pub mod vram;
 
+pub use endpoints::{
+    kinds_for_role, plan_limit, probe_endpoint_limits, role_for_kind, EndpointLimits,
+    EndpointPermit, EndpointPlanEntry, EndpointUsage, LLM_ROLES, LOCAL_ROLE, ROLES,
+};
 pub use vram::{
     detect, max_parallel, max_parallel_with_reason, ParallelReason, VramInfo,
     DEFAULT_COST_PER_SLOT_BYTES,

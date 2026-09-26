@@ -13,6 +13,9 @@ use super::{lease, queue};
 use crate::db::models::Job;
 use crate::error::Result;
 use crate::events::{emit_job, emit_log, EventEmitter};
+use crate::resources::endpoints::{
+    kinds_for_role, role_for_kind, EndpointLimits, EndpointPermit, EndpointUsage,
+};
 
 /// How a job is executed. Implemented by the pipeline in the app layer; tests
 /// supply a stub.
@@ -33,7 +36,10 @@ struct Inner {
     /// Emits `job://progress` on every transition the pool owns.
     emitter: Arc<dyn EventEmitter>,
     owner: String,
+    /// Global cap (VRAM/user limit): the whole pool never exceeds it.
     permits: Arc<Semaphore>,
+    /// Per-role capacity: a job is claimed only when its endpoint has a slot.
+    limits: Arc<EndpointLimits>,
     worker_count: usize,
     paused: AtomicBool,
     cancelled: AtomicBool,
@@ -43,13 +49,34 @@ struct Inner {
 
 impl WorkerPool {
     /// `max_parallel` is the endpoint concurrency cap; `worker_count` is how many
-    /// claim loops run (>= `max_parallel` is typical).
+    /// claim loops run (>= `max_parallel` is typical). Without an explicit plan
+    /// the pool only knows its local capacity.
     pub fn new(
         pool: SqlitePool,
         dispatcher: Arc<dyn JobDispatcher>,
         emitter: Arc<dyn EventEmitter>,
         max_parallel: usize,
         worker_count: usize,
+    ) -> Self {
+        let limits = EndpointLimits::local_only(max_parallel);
+        Self::with_limits(
+            pool,
+            dispatcher,
+            emitter,
+            max_parallel,
+            worker_count,
+            limits,
+        )
+    }
+
+    /// Same as [`WorkerPool::new`], with a per-endpoint plan from the boot probe.
+    pub fn with_limits(
+        pool: SqlitePool,
+        dispatcher: Arc<dyn JobDispatcher>,
+        emitter: Arc<dyn EventEmitter>,
+        max_parallel: usize,
+        worker_count: usize,
+        limits: Arc<EndpointLimits>,
     ) -> Self {
         let owner = format!("worker-{}", crate::db::new_id());
         Self {
@@ -59,6 +86,7 @@ impl WorkerPool {
                 emitter,
                 owner,
                 permits: Arc::new(Semaphore::new(max_parallel.max(1))),
+                limits,
                 worker_count: worker_count.max(1),
                 paused: AtomicBool::new(false),
                 cancelled: AtomicBool::new(false),
@@ -66,6 +94,16 @@ impl WorkerPool {
                 workers: parking_lot::Mutex::new(Vec::new()),
             }),
         }
+    }
+
+    /// Per-role capacity and in-flight counts, for the metrics payload.
+    pub fn endpoint_usage(&self) -> Vec<EndpointUsage> {
+        self.inner.limits.usage()
+    }
+
+    /// Total slots the bound endpoints expose (local work excluded).
+    pub fn endpoint_slots(&self) -> usize {
+        self.inner.limits.total_slots()
     }
 
     pub fn is_running(&self) -> bool {
@@ -177,28 +215,60 @@ async fn worker_loop(inner: Arc<Inner>) {
             continue;
         }
 
-        // Reserve execution capacity before claiming, so a claimed job is never
+        // Reserve global capacity before claiming, so a claimed job is never
         // left waiting for a permit while its lease ticks down.
-        let Ok(permit) = inner.permits.clone().acquire_owned().await else {
+        let Ok(global) = inner.permits.clone().acquire_owned().await else {
             break;
         };
 
-        match queue::claim(&inner.pool, &inner.owner).await {
-            Ok(Some(job)) => {
+        match claim_next(&inner).await {
+            Ok(Some((job, endpoint_permit))) => {
                 run_job(&inner, job).await;
-                drop(permit);
+                drop(endpoint_permit);
+                drop(global);
             }
             Ok(None) => {
-                drop(permit);
+                drop(global);
                 tokio::time::sleep(Duration::from_millis(250)).await;
             }
             Err(error) => {
-                drop(permit);
+                drop(global);
                 tracing::warn!(%error, "job claim failed");
                 tokio::time::sleep(Duration::from_millis(500)).await;
             }
         }
     }
+}
+
+/// Claim the highest-priority job whose role has a free endpoint slot. Roles
+/// are tried in the order of their best pending priority, so a user-triggered
+/// job (or a fresh chunk) is not starved by a lower-priority backlog.
+async fn claim_next(inner: &Arc<Inner>) -> Result<Option<(Job, EndpointPermit)>> {
+    let mut roles: Vec<(String, i64)> = Vec::new();
+    for (kind, priority) in queue::pending_kinds(&inner.pool).await? {
+        let role = role_for_kind(&kind).to_string();
+        match roles.iter_mut().find(|(candidate, _)| candidate == &role) {
+            Some((_, best)) => *best = (*best).min(priority),
+            None => roles.push((role, priority)),
+        }
+    }
+    roles.sort_by_key(|(_, priority)| *priority);
+
+    for (role, _) in roles {
+        let Some(permit) = inner.limits.try_acquire(&role) else {
+            continue;
+        };
+        for kind in kinds_for_role(&role) {
+            match queue::claim_kind(&inner.pool, &inner.owner, kind).await {
+                Ok(Some(job)) => return Ok(Some((job, permit))),
+                Ok(None) => continue,
+                Err(error) => return Err(error),
+            }
+        }
+        // The pending query and this claim raced with another worker: the role
+        // is momentarily empty, so move on with the permit released.
+    }
+    Ok(None)
 }
 
 async fn run_job(inner: &Arc<Inner>, job: Job) {
@@ -492,6 +562,98 @@ mod tests {
                 .any(|payload| payload["state"] == "failed"),
             "no failed job event emitted"
         );
+    }
+
+    /// Records the maximum number of concurrent translate_chunk executions.
+    struct LimitingDispatcher {
+        in_flight: Arc<AtomicU32>,
+        peak: Arc<AtomicU32>,
+    }
+
+    #[async_trait]
+    impl JobDispatcher for LimitingDispatcher {
+        async fn dispatch(&self, job: &Job) -> Result<()> {
+            if job.kind != "translate_chunk" {
+                return Ok(());
+            }
+            let running = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+            self.peak.fetch_max(running, Ordering::SeqCst);
+            tokio::time::sleep(Duration::from_millis(60)).await;
+            self.in_flight.fetch_sub(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn endpoint_limits_serialise_a_single_slot_role() {
+        use crate::resources::endpoints::{EndpointLimits, EndpointPlanEntry};
+
+        let (pool, _dir) = connect_temp_file().await.expect("pool");
+        seed_project(&pool).await;
+        for _ in 0..3 {
+            queue::enqueue(
+                &pool,
+                &queue::NewJob::new("p", "translate_chunk", serde_json::Value::Null),
+            )
+            .await
+            .expect("enqueue");
+        }
+
+        // The endpoint exposes a single slot: no two chunks may run at once.
+        let limits = EndpointLimits::from_plan(
+            &[EndpointPlanEntry {
+                role: "translator".to_string(),
+                endpoint_id: Some("e1".to_string()),
+                limit: 1,
+                reason: "test".to_string(),
+            }],
+            4,
+        );
+        let peak = Arc::new(AtomicU32::new(0));
+        let dispatcher = Arc::new(LimitingDispatcher {
+            in_flight: Arc::new(AtomicU32::new(0)),
+            peak: peak.clone(),
+        });
+        let worker = WorkerPool::with_limits(
+            pool.clone(),
+            dispatcher,
+            Arc::new(crate::events::NullEmitter),
+            4,
+            4,
+            limits.clone(),
+        );
+        worker.start();
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let states = queue::count_by_state(&pool).await.expect("count");
+            let done = states
+                .iter()
+                .find(|(state, _)| state == "done")
+                .map(|(_, n)| *n)
+                .unwrap_or(0);
+            if done == 3 {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "the limited jobs did not finish"
+            );
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        worker.cancel();
+
+        assert_eq!(
+            peak.load(Ordering::SeqCst),
+            1,
+            "a one-slot endpoint must never run two jobs concurrently"
+        );
+        let usage = limits.usage();
+        let translator = usage
+            .iter()
+            .find(|entry| entry.role == "translator")
+            .expect("translator usage");
+        assert_eq!(translator.in_flight, 0, "every permit must be released");
     }
 
     fn idle_worker(pool: SqlitePool) -> WorkerPool {

@@ -118,6 +118,41 @@ pub async fn claim(pool: &SqlitePool, owner: &str) -> Result<Option<Job>> {
     Ok(claimed)
 }
 
+/// Claim the next eligible job of one kind, or `None` when there is none.
+/// Used by the per-endpoint scheduler, which decides the kind from the capacity
+/// of the role's endpoint.
+pub async fn claim_kind(pool: &SqlitePool, owner: &str, kind: &str) -> Result<Option<Job>> {
+    let expires_at = now_plus_secs(LEASE_SECS);
+    let claimed = sqlx::query_as::<_, Job>(
+        "UPDATE job SET state = 'leased', lease_owner = ?1, lease_expires_at = ?2 \
+         WHERE id = ( \
+             SELECT id FROM job \
+             WHERE state = 'pending' AND kind = ?4 AND (run_after IS NULL OR run_after <= ?3) \
+             ORDER BY priority, created_at LIMIT 1 \
+         ) RETURNING *",
+    )
+    .bind(owner)
+    .bind(expires_at)
+    .bind(now())
+    .bind(kind)
+    .fetch_optional(pool)
+    .await?;
+    Ok(claimed)
+}
+
+/// Pending job kinds with their best (lowest) priority, so the scheduler can
+/// order the roles by the work that is actually waiting.
+pub async fn pending_kinds(pool: &SqlitePool) -> Result<Vec<(String, i64)>> {
+    let rows = sqlx::query_as::<_, (String, i64)>(
+        "SELECT kind, MIN(priority) FROM job WHERE state = 'pending' \
+         AND (run_after IS NULL OR run_after <= ?1) GROUP BY kind",
+    )
+    .bind(now())
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
 /// Move a claimed job to `running` (called when a worker actually picks it up).
 pub async fn mark_running(pool: &SqlitePool, id: &str) -> Result<()> {
     sqlx::query("UPDATE job SET state='running', started_at=COALESCE(started_at, ?2) WHERE id=?1")
@@ -169,14 +204,20 @@ pub async fn fail(pool: &SqlitePool, id: &str, error: &str) -> Result<()> {
     Ok(())
 }
 
+/// Priority added to a requeued attempt, so retries sink behind fresh work
+/// (PLAN.md section 10).
+pub const RETRY_PENALTY: i64 = 1000;
+
 /// Requeue a failed attempt, or fail it when the attempt budget is exhausted.
-/// Returns the resulting state (`pending` or `failed`).
+/// Returns the resulting state (`pending` or `failed`). A requeued attempt takes
+/// a priority penalty, so a repeatedly failing chunk cannot starve the queue.
 pub async fn retry_or_fail(pool: &SqlitePool, id: &str, error: &str) -> Result<String> {
     let row: Option<(String,)> = sqlx::query_as(
         "UPDATE job SET \
            state = CASE WHEN attempts + 1 < max_attempts THEN 'pending' ELSE 'failed' END, \
            attempts = attempts + 1, last_error = ?2, lease_owner = NULL, lease_expires_at = NULL, \
            run_after = ?3, \
+           priority = priority + CASE WHEN attempts + 1 < max_attempts THEN ?5 ELSE 0 END, \
            finished_at = CASE WHEN attempts + 1 < max_attempts THEN NULL ELSE ?4 END \
          WHERE id = ?1 RETURNING state",
     )
@@ -184,6 +225,7 @@ pub async fn retry_or_fail(pool: &SqlitePool, id: &str, error: &str) -> Result<S
     .bind(error)
     .bind(now())
     .bind(now())
+    .bind(RETRY_PENALTY)
     .fetch_optional(pool)
     .await?;
     Ok(row.map(|r| r.0).unwrap_or_else(|| "missing".to_string()))
@@ -503,6 +545,64 @@ mod tests {
         assert_eq!(
             retry_or_fail(&pool, &id, "boom").await.expect("retry"),
             "failed"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_retried_job_takes_a_priority_penalty() {
+        let (pool, _dir) = connect_temp_file().await.expect("pool");
+        insert_test_project(&pool, "proj").await;
+        let id = enqueue(
+            &pool,
+            &NewJob::new("proj", "translate_chunk", Value::Null).with_priority(10),
+        )
+        .await
+        .expect("enqueue");
+
+        assert_eq!(
+            retry_or_fail(&pool, &id, "boom").await.expect("retry"),
+            "pending"
+        );
+        let job = get_job(&pool, &id).await.expect("get").expect("some");
+        assert_eq!(
+            job.priority,
+            10 + RETRY_PENALTY,
+            "a retry must sink behind fresh work"
+        );
+        assert_eq!(job.attempts, 1);
+    }
+
+    #[tokio::test]
+    async fn pending_kinds_reports_the_best_priority_per_kind() {
+        let (pool, _dir) = connect_temp_file().await.expect("pool");
+        insert_test_project(&pool, "proj").await;
+        enqueue(
+            &pool,
+            &NewJob::new("proj", "translate_chunk", Value::Null).with_priority(100),
+        )
+        .await
+        .expect("enqueue");
+        enqueue(
+            &pool,
+            &NewJob::new("proj", "translate_chunk", Value::Null).with_priority(7),
+        )
+        .await
+        .expect("enqueue");
+        enqueue(
+            &pool,
+            &NewJob::new("proj", "export_unit", Value::Null).with_priority(0),
+        )
+        .await
+        .expect("enqueue");
+
+        let mut kinds = pending_kinds(&pool).await.expect("kinds");
+        kinds.sort();
+        assert_eq!(
+            kinds,
+            vec![
+                ("export_unit".to_string(), 0),
+                ("translate_chunk".to_string(), 7)
+            ]
         );
     }
 

@@ -269,10 +269,15 @@ async fn build_state(app: &tauri::AppHandle) -> Result<AppState> {
 
     // --- Resources -------------------------------------------------------
     let resources = ResourceGovernor::default();
+    // Per-endpoint slots: a live `/props` probe per bound role (the persisted
+    // props as fallback) feeds both the per-role limiter and the global cap.
+    let endpoint_plan = crate::resources::endpoints::probe_endpoint_limits(&pool).await;
+    let endpoint_slots = (!endpoint_plan.is_empty())
+        .then(|| endpoint_plan.iter().map(|entry| entry.limit).sum::<usize>());
     let vram = tokio::task::spawn_blocking(crate::resources::vram::detect)
         .await
         .unwrap_or(None);
-    let snapshot = resources.snapshot(vram, None);
+    let snapshot = resources.snapshot(vram, endpoint_slots);
 
     // --- Worker pool -----------------------------------------------------
     let deps = PipelineDeps::new(
@@ -285,13 +290,24 @@ async fn build_state(app: &tauri::AppHandle) -> Result<AppState> {
         app.path().resource_dir().ok().as_deref(),
     ));
     let dispatcher = Arc::new(PipelineDispatcher { deps });
-    let worker = Arc::new(WorkerPool::new(
+    let limits = crate::resources::endpoints::EndpointLimits::from_plan(
+        &endpoint_plan,
+        snapshot.suggested_parallel,
+    );
+    let worker = Arc::new(WorkerPool::with_limits(
         pool.clone(),
         dispatcher,
         emitter.clone(),
         snapshot.suggested_parallel,
         4.max(snapshot.suggested_parallel),
+        limits,
     ));
+    tracing::info!(
+        suggested_parallel = snapshot.suggested_parallel,
+        reason = ?snapshot.reason,
+        endpoints = ?worker.endpoint_usage(),
+        "scheduler plan"
+    );
 
     // Restore an explicit pause persisted by `translation_pause`: without this
     // the unconditional start below would silently resume LLM work the user had
@@ -366,7 +382,10 @@ fn spawn_metrics_ticker(
             let detected = tokio::task::spawn_blocking(crate::resources::vram::detect)
                 .await
                 .unwrap_or(None);
-            let snapshot = resources.snapshot(detected, None);
+            let snapshot = resources.snapshot(
+                detected,
+                Some(worker.endpoint_slots()).filter(|slots| *slots > 0),
+            );
             // Same `{state, count}` shape `metrics_get` returns (the UI's
             // `JobCount` type expects objects, not `[state, count]` pairs).
             let jobs = crate::commands::metrics::job_counts(
@@ -382,6 +401,7 @@ fn spawn_metrics_ticker(
                     "suggested_parallel": snapshot.suggested_parallel,
                     "reason": snapshot.reason,
                     "jobs": jobs,
+                    "endpoints": worker.endpoint_usage(),
                     "worker_running": worker.is_running(),
                     "worker_paused": worker.is_paused(),
                     "sidecar": supervisor.status(),

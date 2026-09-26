@@ -4,6 +4,7 @@ use serde::Serialize;
 use tauri::State;
 
 use crate::error::Result;
+use crate::resources::endpoints::EndpointUsage;
 use crate::resources::{vram, ParallelReason, VramInfo};
 use crate::scheduler::queue;
 use crate::AppState;
@@ -32,6 +33,9 @@ pub struct Metrics {
     pub suggested_parallel: usize,
     pub reason: ParallelReason,
     pub jobs: Vec<JobCount>,
+    /// Per-role endpoint capacity and in-flight counts, so the UI can show why
+    /// the sub-agents are capped (PLAN.md §10).
+    pub endpoints: Vec<EndpointUsage>,
     pub sidecar_in_flight: usize,
     pub worker_running: bool,
     pub worker_paused: bool,
@@ -43,7 +47,10 @@ pub async fn metrics_get(state: State<'_, AppState>) -> Result<Metrics> {
     let detected = tokio::task::spawn_blocking(vram::detect)
         .await
         .unwrap_or(None);
-    let snapshot = state.resources.snapshot(detected, None);
+    let snapshot = state.resources.snapshot(
+        detected,
+        Some(state.worker.endpoint_slots()).filter(|slots| *slots > 0),
+    );
 
     let jobs = job_counts(queue::count_by_state(&state.pool).await?);
 
@@ -53,6 +60,7 @@ pub async fn metrics_get(state: State<'_, AppState>) -> Result<Metrics> {
         suggested_parallel: snapshot.suggested_parallel,
         reason: snapshot.reason,
         jobs,
+        endpoints: state.worker.endpoint_usage(),
         sidecar_in_flight: state.supervisor.in_flight(),
         worker_running: state.worker.is_running(),
         worker_paused: state.worker.is_paused(),
