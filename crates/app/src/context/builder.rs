@@ -1,0 +1,403 @@
+//! Prompt assembly: stable system message + budgeted volatile user message.
+//!
+//! Templates are Jinja2, rendered with `minijinja` so Rust and Python can share
+//! the same files. They are loaded from the project's `prompts` snapshot
+//! directory; if a file is missing the builder falls back to a minimal embedded
+//! default so a project can always be translated.
+//!
+//! # Why the glossary lives in the user message
+//!
+//! PLAN.md section 7.2 lists the glossary in the system message, but section 9.2
+//! requires the glossary to be *filtered to the terms present in each chunk*.
+//! Those two rules are incompatible: a per-chunk glossary would make the system
+//! message differ between chunks and destroy the stable KV-cache prefix that
+//! section 7.2 exists to protect. The glossary and the synopsis therefore live in
+//! the user message, and the system message only ever contains book-level
+//! constants (source/target language, style guide, book title/author). This is a
+//! deliberate, documented deviation; see the module tests.
+
+use std::path::Path;
+
+use minijinja::{context, Environment};
+use serde::{Deserialize, Serialize};
+
+use super::budget::{fill_budget, BudgetPiece, BudgetedContext, PieceKind, TokenCounter};
+use crate::error::Result;
+
+/// Minimal fallback system template (stable, no chunk-specific data).
+pub const DEFAULT_SYSTEM_TEMPLATE: &str = r#"You are a professional literary translator. You translate from {{ source_language }} into {{ target_language }}.
+
+HARD RULES
+1. Output ONLY the translation of the passage in the user message. No commentary, no notes, no preface, no code fences around the result.
+2. Preserve Markdown structure exactly: same number of lines and paragraphs, same list markers, same heading levels, same blank-line separation.
+3. Tokens like ⟦12⟧ are placeholders. Copy each one verbatim, exactly once, in a position that is grammatical in {{ target_language }}. Never translate, split, merge, renumber or reorder them.
+4. Never translate: fenced code blocks, inline code, URLs, DOIs, file paths, email addresses.
+5. Use the GLOSSARY exactly as given whenever the source term occurs.
+6. Do not summarise, do not omit sentences, do not merge or split paragraphs, do not add sentences that are not in the source.
+7. Keep the source's paragraph rhythm and register; translate idioms into natural {{ target_language }}, not word-for-word.
+
+STYLE GUIDE
+{{ style_guide }}
+
+BOOK
+Title: {{ book_title }}
+Author: {{ book_author }}
+"#;
+
+/// Minimal fallback user template (volatile, per chunk).
+pub const DEFAULT_USER_TEMPLATE: &str = r#"CHAPTER: {{ chapter_title }}
+{% if chapter_summary_so_far %}CHAPTER SUMMARY SO FAR
+{{ chapter_summary_so_far }}
+{% endif %}{% if previous_chapters %}PREVIOUS CHAPTERS
+{{ previous_chapters }}
+{% endif %}{% if glossary %}GLOSSARY (source => target)
+{{ glossary }}
+{% endif %}{% if synopsis %}SYNOPSIS
+{{ synopsis }}
+{% endif %}{% if previous_context %}PREVIOUS PASSAGE (already translated — for continuity of tone, pronouns and terminology only; do NOT translate it):
+{{ previous_context }}
+{% endif %}
+PASSAGE TO TRANSLATE:
+{{ text }}"#;
+
+/// One glossary entry, already resolved to the project's languages.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GlossaryEntry {
+    pub source: String,
+    pub target: String,
+    #[serde(default)]
+    pub kind: String,
+}
+
+/// Everything the builder needs to render a chunk prompt.
+#[derive(Debug, Clone, Default)]
+pub struct ContextInputs {
+    pub source_language: String,
+    pub target_language: String,
+    pub style_guide: String,
+    pub synopsis: String,
+    pub book_title: String,
+    pub book_author: String,
+    pub glossary: Vec<GlossaryEntry>,
+    pub previous_chapter_summaries: Vec<String>,
+    pub rolling_summary: String,
+    pub previous_tail: String,
+    pub chapter_title: String,
+    pub chunk_text: String,
+    pub budget_tokens: usize,
+}
+
+/// Rendered prompt plus the manifest of what was injected.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BuiltPrompt {
+    pub system: String,
+    pub user: String,
+    pub manifest: BudgetedContext,
+}
+
+impl BuiltPrompt {
+    /// The full prompt hash input: system and user concatenated.
+    pub fn full_text(&self) -> String {
+        format!("{}\n\u{0}\n{}", self.system, self.user)
+    }
+}
+
+/// Renders translator prompts. Cheap to clone.
+#[derive(Debug, Clone)]
+pub struct ContextBuilder {
+    system_template: String,
+    user_template: String,
+}
+
+impl Default for ContextBuilder {
+    fn default() -> Self {
+        Self::embedded()
+    }
+}
+
+impl ContextBuilder {
+    /// Use the built-in fallback templates.
+    pub fn embedded() -> Self {
+        Self {
+            system_template: DEFAULT_SYSTEM_TEMPLATE.to_string(),
+            user_template: DEFAULT_USER_TEMPLATE.to_string(),
+        }
+    }
+
+    /// Load templates from a prompts snapshot directory, falling back to the
+    /// embedded defaults for any missing file.
+    pub fn load(dir: &Path) -> Self {
+        let system_template = read_first(
+            dir,
+            &[
+                "translator.system.md",
+                "translator_system.md",
+                "translator.md",
+            ],
+        )
+        .unwrap_or_else(|| DEFAULT_SYSTEM_TEMPLATE.to_string());
+        let user_template = read_first(dir, &["translator.user.md", "translator_user.md"])
+            .unwrap_or_else(|| DEFAULT_USER_TEMPLATE.to_string());
+        Self {
+            system_template,
+            user_template,
+        }
+    }
+
+    /// Templates currently in use, for diagnostics.
+    pub fn templates(&self) -> (&str, &str) {
+        (&self.system_template, &self.user_template)
+    }
+
+    /// Render the system message. Depends only on book-level constants, so it is
+    /// byte-identical for every chunk of the same book.
+    pub fn render_system(&self, inputs: &ContextInputs) -> Result<String> {
+        let env = Environment::new();
+        let rendered = env.render_str(
+            &self.system_template,
+            context! {
+                source_language => &inputs.source_language,
+                target_language => &inputs.target_language,
+                style_guide => &inputs.style_guide,
+                book_title => &inputs.book_title,
+                book_author => &inputs.book_author,
+            },
+        )?;
+        Ok(rendered)
+    }
+
+    /// Build the full prompt for one chunk.
+    pub fn build(&self, inputs: &ContextInputs, counter: &dyn TokenCounter) -> Result<BuiltPrompt> {
+        let system = self.render_system(inputs)?;
+        let glossary = filter_glossary(&inputs.glossary, &inputs.chunk_text);
+        let glossary_text = render_glossary(&glossary);
+        let previous_chapters = inputs.previous_chapter_summaries.join("\n");
+
+        let pieces = vec![
+            BudgetPiece::new(PieceKind::Text, inputs.chunk_text.clone()),
+            BudgetPiece::new(PieceKind::SystemRules, system.clone()),
+            BudgetPiece::new(PieceKind::Glossary, glossary_text),
+            BudgetPiece::new(PieceKind::Synopsis, inputs.synopsis.clone()),
+            BudgetPiece::new(PieceKind::PreviousChapters, previous_chapters),
+            BudgetPiece::new(PieceKind::RollingSummary, inputs.rolling_summary.clone()),
+            BudgetPiece::new(PieceKind::PreviousTail, inputs.previous_tail.clone()),
+        ];
+        let manifest = fill_budget(pieces, inputs.budget_tokens, counter);
+
+        let env = Environment::new();
+        let user = env.render_str(
+            &self.user_template,
+            context! {
+                chapter_title => &inputs.chapter_title,
+                chapter_summary_so_far => manifest.text(PieceKind::RollingSummary),
+                previous_chapters => manifest.text(PieceKind::PreviousChapters),
+                glossary => manifest.text(PieceKind::Glossary),
+                synopsis => manifest.text(PieceKind::Synopsis),
+                previous_context => manifest.text(PieceKind::PreviousTail),
+                text => manifest.text(PieceKind::Text),
+            },
+        )?;
+
+        Ok(BuiltPrompt {
+            system,
+            user,
+            manifest,
+        })
+    }
+}
+
+/// Keep only the glossary terms that actually occur in the chunk text, ordered
+/// deterministically by source term (case-insensitive).
+pub fn filter_glossary(glossary: &[GlossaryEntry], chunk_text: &str) -> Vec<GlossaryEntry> {
+    let haystack = chunk_text.to_lowercase();
+    let mut kept: Vec<GlossaryEntry> = glossary
+        .iter()
+        .filter(|entry| {
+            !entry.source.trim().is_empty() && haystack.contains(&entry.source.to_lowercase())
+        })
+        .cloned()
+        .collect();
+    kept.sort_by(|a, b| {
+        a.source
+            .to_lowercase()
+            .cmp(&b.source.to_lowercase())
+            .then_with(|| a.source.cmp(&b.source))
+    });
+    kept
+}
+
+/// Render glossary entries as `source => target` lines.
+pub fn render_glossary(entries: &[GlossaryEntry]) -> String {
+    entries
+        .iter()
+        .map(|e| format!("{} => {}", e.source, e.target))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn read_first(dir: &Path, names: &[&str]) -> Option<String> {
+    for name in names {
+        let path = dir.join(name);
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            return Some(content);
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::context::budget::{CharsAsTokens, HeuristicCounter};
+
+    fn base_inputs() -> ContextInputs {
+        ContextInputs {
+            source_language: "English".into(),
+            target_language: "Italian".into(),
+            style_guide: "Neutral, literary.".into(),
+            synopsis: "A king and a queen.".into(),
+            book_title: "The Book".into(),
+            book_author: "Someone".into(),
+            glossary: vec![
+                GlossaryEntry {
+                    source: "king".into(),
+                    target: "re".into(),
+                    kind: "term".into(),
+                },
+                GlossaryEntry {
+                    source: "dragon".into(),
+                    target: "drago".into(),
+                    kind: "term".into(),
+                },
+            ],
+            previous_chapter_summaries: vec!["Chapter one summary.".into()],
+            rolling_summary: "So far, the king spoke.".into(),
+            previous_tail: "…and then he left.".into(),
+            chapter_title: "Chapter One".into(),
+            chunk_text: "The king spoke to the court.".into(),
+            budget_tokens: 1000,
+        }
+    }
+
+    #[test]
+    fn glossary_is_filtered_to_terms_present_in_chunk() {
+        let glossary = vec![
+            GlossaryEntry {
+                source: "king".into(),
+                target: "re".into(),
+                kind: "term".into(),
+            },
+            GlossaryEntry {
+                source: "dragon".into(),
+                target: "drago".into(),
+                kind: "term".into(),
+            },
+        ];
+        let filtered = filter_glossary(&glossary, "The king spoke to the court.");
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].source, "king");
+        assert_eq!(render_glossary(&filtered), "king => re");
+    }
+
+    #[test]
+    fn system_message_is_byte_identical_across_chunks_of_the_same_book() {
+        let builder = ContextBuilder::embedded();
+        let counter = HeuristicCounter;
+
+        // Two chunks of the same book with different volatile inputs, and even a
+        // different glossary / synopsis, to make sure nothing chunk- or
+        // glossary-dependent leaks into the system message.
+        let mut first = base_inputs();
+        let mut second = base_inputs();
+        second.chunk_text = "A dragon flew at dawn.".into();
+        second.chapter_title = "Chapter Two".into();
+        second.previous_tail = "completely different tail".into();
+        second.rolling_summary = "different rolling summary".into();
+        second.glossary = vec![GlossaryEntry {
+            source: "dragon".into(),
+            target: "drago".into(),
+            kind: "term".into(),
+        }];
+        second.synopsis = "A totally different synopsis.".into();
+
+        let p1 = builder.build(&first, &counter).expect("build 1");
+        let p2 = builder.build(&second, &counter).expect("build 2");
+
+        assert_eq!(p1.system, p2.system, "system message must be stable");
+        assert_ne!(p1.user, p2.user, "user message must differ per chunk");
+
+        // Sanity: a naive implementation could accidentally match; make the
+        // requirement explicit by checking no volatile data is present.
+        assert!(!p1.system.contains("king"));
+        assert!(!p1.system.contains("dragon"));
+        assert!(!p1.system.contains("synopsis"));
+
+        // And it is genuinely stable when nothing book-level changes.
+        first.chunk_text = "something else entirely".into();
+        let p3 = builder.build(&first, &counter).expect("build 3");
+        assert_eq!(p1.system, p3.system);
+    }
+
+    #[test]
+    fn budget_is_respected_and_low_priorities_drop_first() {
+        let builder = ContextBuilder::embedded();
+        let counter = CharsAsTokens;
+        let mut inputs = base_inputs();
+        inputs.previous_tail = "x".repeat(400);
+        inputs.rolling_summary = "y".repeat(400);
+
+        // The system prefix and the passage are required and are never dropped
+        // (a request without them is meaningless), so the budget has to cover them
+        // before it can say anything about the optional pieces. Give it a little
+        // room on top, which is what the glossary is allowed to consume.
+        let required = counter.count(&builder.render_system(&inputs).expect("render"))
+            + counter.count(&inputs.chunk_text);
+        inputs.budget_tokens = required + 20;
+
+        let built = builder.build(&inputs, &counter).expect("build");
+        assert!(
+            built.manifest.total_tokens <= inputs.budget_tokens,
+            "total {} exceeded budget {}",
+            built.manifest.total_tokens,
+            inputs.budget_tokens
+        );
+        assert!(built.manifest.included(PieceKind::Text));
+        assert!(built.manifest.included(PieceKind::SystemRules));
+        // The volatile tail is the first thing to go.
+        assert!(!built.manifest.included(PieceKind::RollingSummary));
+        assert!(!built.manifest.included(PieceKind::PreviousTail));
+    }
+
+    #[test]
+    fn required_pieces_survive_a_budget_too_small_for_them() {
+        let builder = ContextBuilder::embedded();
+        let counter = CharsAsTokens;
+        let mut inputs = base_inputs();
+        inputs.budget_tokens = 1;
+        inputs.previous_tail = "x".repeat(400);
+
+        let built = builder.build(&inputs, &counter).expect("build");
+        // Documented contract: overshooting the budget is preferable to emitting a
+        // request with no system rules or no passage to translate.
+        assert!(built.manifest.total_tokens > inputs.budget_tokens);
+        assert!(built.manifest.included(PieceKind::Text));
+        assert!(built.manifest.included(PieceKind::SystemRules));
+        assert!(!built.manifest.included(PieceKind::PreviousTail));
+    }
+
+    #[test]
+    fn loads_templates_from_snapshot_directory() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("translator.system.md"),
+            "SYS {{ target_language }}|{{ style_guide }}",
+        )
+        .expect("write");
+        std::fs::write(dir.path().join("translator.user.md"), "USR {{ text }}").expect("write");
+        let builder = ContextBuilder::load(dir.path());
+        let counter = HeuristicCounter;
+        let built = builder.build(&base_inputs(), &counter).expect("build");
+        assert!(built.system.starts_with("SYS Italian|"));
+        assert!(built.user.starts_with("USR The king spoke"));
+    }
+}

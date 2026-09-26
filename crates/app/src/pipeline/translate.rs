@@ -1,0 +1,629 @@
+//! Translation of a single chunk: context assembly, two-level cache, streaming
+//! inference, placeholder validation, persistence and audit.
+
+use std::collections::HashMap;
+use std::time::Instant;
+
+use futures_util::StreamExt;
+use serde::Serialize;
+use serde_json::Value;
+
+use super::ingest::DEFAULT_CHUNK_BUDGET;
+use super::PipelineDeps;
+use crate::context::budget::HeuristicCounter;
+use crate::context::builder::{ContextBuilder, ContextInputs, GlossaryEntry};
+use crate::db::models::{Block, BlockTranslation, QaFinding};
+use crate::db::repo::{self, ChunkOutcome};
+use crate::db::{new_id, now};
+use crate::error::{AppError, Result};
+use crate::llm::{ChatMessage, ChatRequest, LlamaClient};
+use crate::util::{json_hash, sha256_hex_str};
+
+const ROLE: &str = "translator";
+
+/// Result of translating one chunk.
+#[derive(Debug, Clone, Serialize)]
+pub struct TranslateOutcome {
+    pub chunk_id: String,
+    pub status: String,
+    pub from_cache: bool,
+    pub needs_review_reason: Option<String>,
+}
+
+/// Translate a chunk. Idempotent: re-running a completed chunk overwrites the
+/// same `block_translation` rows (keyed on `block_id` + `origin`) and the same
+/// `chunk` outcome.
+pub async fn run_translate_chunk(
+    deps: &PipelineDeps,
+    job_id: Option<&str>,
+    chunk_id: &str,
+) -> Result<TranslateOutcome> {
+    let pool = &deps.pool;
+    let chunk = repo::get_chunk(pool, chunk_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("chunk {chunk_id}")))?;
+
+    let (project_id,): (String,) = sqlx::query_as("SELECT project_id FROM document WHERE id = ?1")
+        .bind(&chunk.document_id)
+        .fetch_one(pool)
+        .await?;
+    let project = repo::get_project(pool, &project_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("project {project_id}")))?;
+
+    let binding = repo::role_binding_for(pool, ROLE)
+        .await?
+        .ok_or_else(|| AppError::Invalid("no role_binding configured for 'translator'".into()))?;
+    let endpoint = repo::get_endpoint(pool, &binding.endpoint_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("endpoint {}", binding.endpoint_id)))?;
+
+    let params: Value = serde_json::from_str(&binding.params_json).unwrap_or(Value::Null);
+    let params_hash = json_hash(&params);
+    let target_lang = project.target_lang.clone();
+    let model = binding.model.clone();
+
+    // ---- Blocks ---------------------------------------------------------
+    let all_blocks = repo::list_blocks(pool, &chunk.document_id).await?;
+    let by_id: HashMap<&str, &Block> = all_blocks.iter().map(|b| (b.id.as_str(), b)).collect();
+    let block_ids: Vec<String> = serde_json::from_str(&chunk.block_ids_json).unwrap_or_default();
+    let chunk_blocks: Vec<&Block> = block_ids
+        .iter()
+        .filter_map(|id| by_id.get(id.as_str()).copied())
+        .collect();
+    let translatable: Vec<&&Block> = chunk_blocks.iter().filter(|b| b.translatable).collect();
+
+    // ---- Two-level cache: block-level memory first ----------------------
+    let from_cache = try_memory_reuse(deps, &chunk.id, &translatable, &model, &target_lang).await?;
+    if from_cache {
+        let outcome = ChunkOutcome {
+            chunk_id: chunk.id.clone(),
+            status: "done".into(),
+            prompt_hash: None,
+            model_id: Some(model),
+            params_json: Some(binding.params_json.clone()),
+            context_manifest_json: None,
+            target_md: Some(chunk.source_md.clone()),
+            error: None,
+        };
+        repo::finish_chunk(pool, &outcome).await?;
+        return Ok(TranslateOutcome {
+            chunk_id: chunk.id.clone(),
+            status: "done".into(),
+            from_cache: true,
+            needs_review_reason: None,
+        });
+    }
+
+    // ---- Context --------------------------------------------------------
+    let prompts_dir = deps.prompts_dir(&project_id);
+    let builder = ContextBuilder::load(&prompts_dir);
+    let glossary = load_glossary(pool, &project_id).await?;
+    let inputs = ContextInputs {
+        source_language: project.source_lang.clone().unwrap_or_default(),
+        target_language: target_lang.clone(),
+        style_guide: repo::get_memory(pool, &project_id, "style_guide")
+            .await?
+            .unwrap_or_default(),
+        synopsis: repo::get_memory(pool, &project_id, "synopsis")
+            .await?
+            .unwrap_or_default(),
+        book_title: project.doc_title.clone().unwrap_or_default(),
+        book_author: project.doc_author.clone().unwrap_or_default(),
+        glossary,
+        previous_chapter_summaries: previous_chapter_summaries(
+            pool,
+            &chunk.document_id,
+            chunk.chapter_id.as_deref(),
+        )
+        .await?,
+        rolling_summary: repo::get_memory(pool, &project_id, "rolling_summary")
+            .await?
+            .unwrap_or_default(),
+        previous_tail: previous_tail(pool, &chunk.document_id, chunk.order_index).await?,
+        chapter_title: chunk.chapter_id.clone().unwrap_or_default(),
+        chunk_text: chunk.source_md.clone(),
+        budget_tokens: DEFAULT_CHUNK_BUDGET,
+    };
+
+    // Placeholder preparation happens on the sidecar (pure function).
+    let prepared = deps
+        .sidecar
+        .prepare_text(Some(&block_ids), &chunk.source_md)
+        .await?;
+    let mut inputs = inputs;
+    inputs.chunk_text = prepared.llm_text.clone();
+
+    let counter = HeuristicCounter;
+    let built = builder.build(&inputs, &counter)?;
+    let prompt_hash = sha256_hex_str(&built.full_text());
+    let manifest_json = serde_json::to_string(&built.manifest)?;
+
+    // ---- Exact cache ----------------------------------------------------
+    let mut from_cache = false;
+    let mut response_text = if let Some(cached) =
+        repo::cache_get(pool, &prompt_hash, &model, &params_hash, &target_lang).await?
+    {
+        from_cache = true;
+        cached
+    } else {
+        String::new()
+    };
+
+    let mut needs_review_reason: Option<String> = None;
+
+    if !from_cache {
+        let response = call_model(
+            deps,
+            job_id,
+            &chunk.id,
+            &endpoint.base_url,
+            &binding.params_json,
+            &params,
+            &model,
+            &prompt_hash,
+            &built.system,
+            &built.user,
+            &chunk.id,
+        )
+        .await?;
+        response_text = response;
+    }
+
+    // ---- Reinject + placeholder validation ------------------------------
+    let mut reinject = deps
+        .sidecar
+        .reinject(&response_text, &prepared.placeholders, block_ids.len())
+        .await?;
+
+    if !reinject.placeholders_ok {
+        // One targeted retry naming the missing tokens.
+        let missing = format_placeholders(&reinject.missing);
+        let retry_user = format!(
+            "{}\n\nIMPORTANT: your previous answer was rejected because these placeholder tokens \
+             were missing or duplicated: {missing}. Re-output the passage, including every one of \
+             them exactly once.",
+            built.user
+        );
+        let retry_hash = sha256_hex_str(&format!("{}\n\u{0}\n{}", built.system, retry_user));
+        response_text = call_model(
+            deps,
+            job_id,
+            &chunk.id,
+            &endpoint.base_url,
+            &binding.params_json,
+            &params,
+            &model,
+            &retry_hash,
+            &built.system,
+            &retry_user,
+            &chunk.id,
+        )
+        .await?;
+        reinject = deps
+            .sidecar
+            .reinject(&response_text, &prepared.placeholders, block_ids.len())
+            .await?;
+        if !reinject.placeholders_ok {
+            needs_review_reason = Some(format!(
+                "placeholder validation failed after retry: missing {:?}, duplicated {:?}",
+                reinject.missing, reinject.duplicated
+            ));
+            write_qa_finding(
+                pool,
+                &project_id,
+                &chunk.id,
+                "placeholder_broken",
+                serde_json::json!({
+                    "missing": reinject.missing,
+                    "duplicated": reinject.duplicated,
+                }),
+            )
+            .await?;
+        }
+    }
+
+    // ---- Block alignment ------------------------------------------------
+    let block_count_ok = reinject.block_count_ok && reinject.blocks_md.len() == block_ids.len();
+    if !block_count_ok && needs_review_reason.is_none() {
+        // Never align by force: mark for review instead.
+        needs_review_reason = Some(format!(
+            "block count mismatch: got {} blocks for {} expected",
+            reinject.blocks_md.len(),
+            block_ids.len()
+        ));
+        write_qa_finding(
+            pool,
+            &project_id,
+            &chunk.id,
+            "markdown_malformed",
+            serde_json::json!({
+                "expected_blocks": block_ids.len(),
+                "got_blocks": reinject.blocks_md.len(),
+            }),
+        )
+        .await?;
+    }
+
+    // Persist block translations only when alignment is trustworthy.
+    if block_count_ok {
+        let placeholders_ok = reinject.placeholders_ok;
+        for (index, block) in chunk_blocks.iter().enumerate() {
+            if !block.translatable {
+                continue;
+            }
+            let text_md = reinject.blocks_md.get(index).cloned().unwrap_or_default();
+            repo::upsert_block_translation(
+                pool,
+                &BlockTranslation {
+                    block_id: block.id.clone(),
+                    chunk_id: chunk.id.clone(),
+                    text_md,
+                    placeholders_ok,
+                    origin: ROLE.to_string(),
+                    edited_by_user: false,
+                    updated_at: now(),
+                },
+            )
+            .await?;
+        }
+        // Refresh the translation memory for future identical blocks.
+        if reinject.placeholders_ok {
+            for (index, block) in chunk_blocks.iter().enumerate() {
+                if !block.translatable {
+                    continue;
+                }
+                if let Some(text_md) = reinject.blocks_md.get(index) {
+                    repo::memory_put(pool, &block.content_hash, &model, &target_lang, text_md)
+                        .await?;
+                }
+            }
+            repo::cache_put(
+                pool,
+                &prompt_hash,
+                &model,
+                &params_hash,
+                &target_lang,
+                &response_text,
+            )
+            .await?;
+        }
+    }
+
+    let status = if needs_review_reason.is_some() {
+        "needs_review"
+    } else {
+        "done"
+    };
+    repo::finish_chunk(
+        pool,
+        &ChunkOutcome {
+            chunk_id: chunk.id.clone(),
+            status: status.to_string(),
+            prompt_hash: Some(prompt_hash),
+            model_id: Some(model),
+            params_json: Some(binding.params_json.clone()),
+            context_manifest_json: Some(manifest_json),
+            target_md: Some(response_text),
+            error: needs_review_reason.clone(),
+        },
+    )
+    .await?;
+
+    Ok(TranslateOutcome {
+        chunk_id: chunk.id,
+        status: status.to_string(),
+        from_cache,
+        needs_review_reason,
+    })
+}
+
+async fn try_memory_reuse(
+    deps: &PipelineDeps,
+    chunk_id: &str,
+    translatable: &[&&Block],
+    model: &str,
+    target_lang: &str,
+) -> Result<bool> {
+    if translatable.is_empty() {
+        return Ok(false);
+    }
+    for block in translatable {
+        match repo::memory_get(&deps.pool, &block.content_hash, model, target_lang).await? {
+            Some(text_md) => {
+                repo::upsert_block_translation(
+                    &deps.pool,
+                    &BlockTranslation {
+                        block_id: block.id.clone(),
+                        chunk_id: chunk_id.to_string(),
+                        text_md,
+                        placeholders_ok: true,
+                        origin: ROLE.to_string(),
+                        edited_by_user: false,
+                        updated_at: now(),
+                    },
+                )
+                .await?;
+            }
+            None => return Ok(false),
+        }
+    }
+    Ok(true)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn call_model(
+    deps: &PipelineDeps,
+    job_id: Option<&str>,
+    chunk_id: &str,
+    base_url: &str,
+    binding_params_json: &str,
+    params: &Value,
+    model: &str,
+    prompt_hash: &str,
+    system: &str,
+    user: &str,
+    seed_source: &str,
+) -> Result<String> {
+    let client = LlamaClient::new(base_url)?;
+    let mut request = ChatRequest::new(
+        model,
+        vec![ChatMessage::system(system), ChatMessage::user(user)],
+    );
+    request.seed = Some(derive_seed(seed_source, ROLE));
+    request.temperature = params
+        .get("temperature")
+        .and_then(Value::as_f64)
+        .map(|v| v as f32);
+    request.top_p = params
+        .get("top_p")
+        .and_then(Value::as_f64)
+        .map(|v| v as f32);
+    request.max_tokens = params
+        .get("max_tokens")
+        .and_then(Value::as_u64)
+        .map(|v| v as u32);
+    if let Some(grammar) = params.get("grammar").and_then(Value::as_str) {
+        request.grammar = Some(grammar.to_string());
+    }
+
+    let started = Instant::now();
+    let mut content = String::new();
+    let mut finish_reason = None;
+    let mut usage = None;
+
+    let stream_result: Result<()> = async {
+        let mut stream = client.chat_stream(request).await?;
+        while let Some(item) = stream.next().await {
+            let delta = item?;
+            if delta.done {
+                break;
+            }
+            content.push_str(&delta.content);
+            if let Some(reason) = delta.finish_reason {
+                finish_reason = Some(reason);
+            }
+            if delta.usage.is_some() {
+                usage = delta.usage;
+            }
+        }
+        Ok(())
+    }
+    .await;
+    let latency_ms = started.elapsed().as_millis() as i64;
+
+    match stream_result {
+        Ok(()) => {
+            repo::insert_llm_call(
+                &deps.pool,
+                job_id,
+                Some(chunk_id),
+                ROLE,
+                None,
+                model,
+                binding_params_json,
+                Some(derive_seed(seed_source, ROLE)),
+                prompt_hash,
+                Some(user),
+                Some(&content),
+                finish_reason.as_deref(),
+                usage
+                    .as_ref()
+                    .and_then(|u| u.prompt_tokens)
+                    .map(|v| v as i64),
+                usage
+                    .as_ref()
+                    .and_then(|u| u.completion_tokens)
+                    .map(|v| v as i64),
+                Some(latency_ms),
+                1,
+                None,
+            )
+            .await?;
+            Ok(content)
+        }
+        Err(error) => {
+            repo::insert_llm_call(
+                &deps.pool,
+                job_id,
+                Some(chunk_id),
+                ROLE,
+                None,
+                model,
+                binding_params_json,
+                None,
+                prompt_hash,
+                Some(user),
+                None,
+                None,
+                None,
+                None,
+                Some(latency_ms),
+                1,
+                Some(&error.to_string()),
+            )
+            .await?;
+            Err(error)
+        }
+    }
+}
+
+/// Deterministic seed from `hash(chunk_id, role)` (PLAN.md section 10).
+pub fn derive_seed(chunk_id: &str, role: &str) -> i64 {
+    let hash = sha256_hex_str(&format!("{chunk_id}:{role}"));
+    let bytes = hex::decode(&hash[..16]).unwrap_or_default();
+    let mut buf = [0u8; 8];
+    for (i, b) in bytes.iter().take(8).enumerate() {
+        buf[i] = *b;
+    }
+    i64::from_be_bytes(buf).abs()
+}
+
+fn format_placeholders(tokens: &[u32]) -> String {
+    if tokens.is_empty() {
+        return "(none reported)".to_string();
+    }
+    tokens
+        .iter()
+        .map(|t| format!("⟦{t}⟧"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+async fn load_glossary(pool: &sqlx::SqlitePool, project_id: &str) -> Result<Vec<GlossaryEntry>> {
+    let terms = repo::list_glossary_terms(pool, project_id).await?;
+    Ok(terms
+        .into_iter()
+        .filter(|t| t.status != "rejected")
+        .map(|t| GlossaryEntry {
+            source: t.source,
+            target: t.target,
+            kind: t.kind,
+        })
+        .collect())
+}
+
+async fn previous_chapter_summaries(
+    pool: &sqlx::SqlitePool,
+    document_id: &str,
+    chapter_id: Option<&str>,
+) -> Result<Vec<String>> {
+    let Some(chapter_id) = chapter_id else {
+        return Ok(Vec::new());
+    };
+    let current_order: Option<i64> =
+        sqlx::query_scalar("SELECT order_index FROM chapter WHERE id = ?1")
+            .bind(chapter_id)
+            .fetch_optional(pool)
+            .await?;
+    let Some(order) = current_order else {
+        return Ok(Vec::new());
+    };
+    let rows: Vec<(Option<String>,)> = sqlx::query_as(
+        "SELECT summary FROM chapter WHERE document_id = ?1 AND order_index < ?2 \
+         ORDER BY order_index DESC LIMIT 3",
+    )
+    .bind(document_id)
+    .bind(order)
+    .fetch_all(pool)
+    .await?;
+    let mut summaries: Vec<String> = rows.into_iter().filter_map(|r| r.0).collect();
+    summaries.reverse();
+    Ok(summaries)
+}
+
+async fn previous_tail(pool: &sqlx::SqlitePool, document_id: &str, order: i64) -> Result<String> {
+    let row: Option<(Option<String>,)> = sqlx::query_as(
+        "SELECT target_md FROM chunk WHERE document_id = ?1 AND order_index < ?2 \
+         AND target_md IS NOT NULL ORDER BY order_index DESC LIMIT 1",
+    )
+    .bind(document_id)
+    .bind(order)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row
+        .and_then(|r| r.0)
+        .map(|text| tail_chars(&text, 800))
+        .unwrap_or_default())
+}
+
+fn tail_chars(text: &str, max: usize) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() <= max {
+        return text.to_string();
+    }
+    chars[chars.len() - max..].iter().collect()
+}
+
+async fn write_qa_finding(
+    pool: &sqlx::SqlitePool,
+    project_id: &str,
+    chunk_id: &str,
+    kind: &str,
+    details: Value,
+) -> Result<()> {
+    repo::insert_qa_finding(
+        pool,
+        &QaFinding {
+            id: new_id(),
+            project_id: project_id.to_string(),
+            chunk_id: Some(chunk_id.to_string()),
+            block_id: None,
+            kind: kind.to_string(),
+            severity: "major".to_string(),
+            details_json: serde_json::to_string(&details)?,
+            status: "open".to_string(),
+            created_at: now(),
+        },
+    )
+    .await
+}
+
+/// Exposed for tests: the manifest type is persisted as JSON on the chunk.
+#[cfg(test)]
+fn manifest_to_json(manifest: &crate::context::budget::BudgetedContext) -> Result<String> {
+    Ok(serde_json::to_string(manifest)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::context::budget::{BudgetedContext, PieceKind, PieceReport};
+
+    #[test]
+    fn seed_is_deterministic_and_role_specific() {
+        assert_eq!(
+            derive_seed("c000001", "translator"),
+            derive_seed("c000001", "translator")
+        );
+        assert_ne!(
+            derive_seed("c000001", "translator"),
+            derive_seed("c000001", "editor")
+        );
+        assert_ne!(
+            derive_seed("c000001", "translator"),
+            derive_seed("c000002", "translator")
+        );
+        assert!(derive_seed("c000001", "translator") >= 0);
+    }
+
+    #[test]
+    fn manifest_serialises_without_text() {
+        let manifest = BudgetedContext {
+            pieces: vec![PieceReport {
+                name: PieceKind::Text,
+                priority: 0,
+                tokens: 3,
+                included: true,
+                truncated: false,
+                hash: "abc".into(),
+                text: "secret".into(),
+            }],
+            total_tokens: 3,
+            budget_tokens: 100,
+        };
+        let json = manifest_to_json(&manifest).expect("json");
+        assert!(json.contains("abc"));
+        assert!(!json.contains("secret"));
+    }
+}
