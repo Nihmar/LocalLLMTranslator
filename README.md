@@ -7,11 +7,12 @@ review → typesetting.
 Everything works **offline**. No telemetry, no analytics, no network calls other than the
 `llama-server` endpoints you configure.
 
-> **Status: M0 complete, M1 in progress.** The document model, the chunking and the
-> placeholder layer are implemented and covered by tests. The Rust control plane compiles,
-> passes clippy and its unit tests. The UI compiles and type-checks. The app is **not yet
-> runnable end-to-end**: the EPUB/PDF extractors, the Pandoc bridge and the sidecar RPC server
-> are still missing. See [Milestones](#milestones).
+> **Status: M0 and M1 complete.** The skeleton runs end to end: a real EPUB goes through the
+> Python sidecar (extract → blocks → chunks → placeholders), is translated against a
+> `llama-server` endpoint, persisted, resumed after a crash and exported to EPUB and PDF. An
+> end-to-end test drives exactly that path with the deterministic fake model and fails unless
+> the structure survives and the output is free of placeholder tokens. The desktop app is wired
+> but has not been exercised by hand. See [Milestones](#milestones).
 
 ---
 
@@ -114,7 +115,11 @@ Tests in detail:
 cd sidecar && uv run pytest tests/test_markdown_ir.py -v   # parser round-trip
 cd sidecar && uv run pytest tests/test_placeholders.py -v  # substitution and reinjection
 cd sidecar && uv run pytest tests/test_chunker.py -v       # chunker invariants
+cd sidecar && uv run pytest tests/test_extractors.py -v    # epub/pdf/markdown ingestion
+cd sidecar && uv run pytest tests/test_rpc.py -v           # json-rpc transport over stdio
 cargo test                                                 # queue, leases, budget, SSE, RPC
+cargo test --test walking_skeleton -- --nocapture          # end-to-end, real sidecar
+cd ui && npm run test                                      # optional IPC unit tests
 ```
 
 ### Offline verification
@@ -161,7 +166,7 @@ tools/          Fake llama-server and fixture generator
 | # | Content | Status |
 |---|---|---|
 | **M0** | Repo, CI, Tauri window, sidecar, SQLite migrations | ✅ |
-| **M1** | Walking skeleton: EPUB → Markdown → blocks → chunks → translation → Pandoc | 🚧 |
+| **M1** | Walking skeleton: EPUB → Markdown → blocks → chunks → translation → Pandoc | ✅ |
 | M2 | Robust EPUB/PDF ingestion, footnotes, tables, images | ⬜ |
 | M3 | Glossary, synopsis, rolling summaries, two-level cache | ⬜ |
 | M4 | Bilingual review (editor + proofreader), diff, QA report | ⬜ |
@@ -169,8 +174,9 @@ tools/          Fake llama-server and fixture generator
 | M6 | Parallel sub-agents with VRAM budget and serial degradation | ⬜ |
 | M7 | Packaging (PyInstaller + Tauri bundle) | ⬜ |
 
-What is still missing to close M1: the EPUB/PDF extractors, the Pandoc bridge, the QA checks,
-the sidecar RPC server, and the end-to-end wiring with the Tauri commands.
+Known gaps, next up: `estimate_tokens` and `qa_check` exist on both sides of the wire but are
+not wired into the pipeline yet (milestones M3 and M4), the bilingual review UI is still a
+placeholder, and PDF extraction is only as good as `pymupdf4llm` on a given document (M2).
 
 ## Product constraints
 

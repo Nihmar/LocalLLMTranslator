@@ -1,6 +1,6 @@
 # LocalLLMTranslator — Architecture and Implementation Plan
 
-> Status: **M0 complete, M1 in progress.** This document is the source of truth for the
+> Status: **M0 and M1 complete, M2 next.** This document is the source of truth for the
 > architecture; the code follows it milestone by milestone.
 
 ---
