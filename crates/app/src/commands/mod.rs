@@ -4,6 +4,7 @@
 pub mod chunks;
 pub mod endpoint;
 pub mod export;
+pub mod glossary;
 pub mod ingest;
 pub mod jobs;
 pub mod metrics;
