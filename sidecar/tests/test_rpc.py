@@ -406,10 +406,19 @@ def test_pandoc_build_forwards_the_resource_path(monkeypatch: pytest.MonkeyPatch
 
     call("pandoc_build", params)
     assert captured["resource_path"] == []
+    assert captured["toc"] is False
+    assert captured["lua_filters"] == []
+    assert captured["top_level_division"] is None
 
     params["resource_path"] = ["/work"]
+    params["toc"] = True
+    params["lua_filters"] = ["/f/footnotes.lua"]
+    params["top_level_division"] = "chapter"
     call("pandoc_build", params)
     assert captured["resource_path"] == ["/work"]
+    assert captured["toc"] is True
+    assert captured["lua_filters"] == ["/f/footnotes.lua"]
+    assert captured["top_level_division"] == "chapter"
 
 
 # ---------------------------------------------------------------------------

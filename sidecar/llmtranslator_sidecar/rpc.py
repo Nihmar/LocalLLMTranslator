@@ -114,6 +114,15 @@ def _optional_str(params: JsonObject, key: str) -> str | None:
     return value
 
 
+def _optional_bool(params: JsonObject, key: str, *, default: bool = False) -> bool:
+    value = params.get(key)
+    if value is None:
+        return default
+    if not isinstance(value, bool):
+        _fail(f"parameter {key!r} must be a boolean when present")
+    return value
+
+
 def _require_int(params: JsonObject, key: str) -> int:
     value = params.get(key)
     # bool is a subclass of int; a JSON true/false is not an integer here.
@@ -326,6 +335,9 @@ def _handle_pandoc_build(params: JsonObject, _notify: ProgressSink) -> JsonObjec
         template=_optional_str(params, "template"),
         css=_optional_str(params, "css"),
         resource_path=_optional_str_list(params, "resource_path") or [],
+        toc=_optional_bool(params, "toc"),
+        lua_filters=_optional_str_list(params, "lua_filters") or [],
+        top_level_division=_optional_str(params, "top_level_division"),
     )
 
 
