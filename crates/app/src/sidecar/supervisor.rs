@@ -228,6 +228,14 @@ impl Supervisor {
             Err(_) => {
                 // Drop the waiter so a late response does not leak.
                 self.pending.remove(id);
+                // The process stopped answering. The sidecar is stateless and every
+                // request is repeatable, so kill it and let the exit watcher restart a
+                // fresh one: a hung call (a stuck pandoc, a wedged library) would
+                // otherwise block the sequential loop for every later request too.
+                self.restart_child(format!(
+                    "request '{method}' timed out after {:?}",
+                    self.timeout
+                ));
                 Err(AppError::SidecarTimeout(self.timeout))
             }
         }
@@ -343,6 +351,13 @@ impl Supervisor {
                 if let Err(error) = child.kill().await {
                     tracing::warn!(%error, "failed to kill sidecar process");
                 }
+                // Run the same exit path as a natural exit so a kill requested while
+                // running (a timed-out request) restarts the process instead of
+                // leaving the pool dead. During shutdown this is a no-op: `shutdown`
+                // already cleared `running`, so `handle_exit` returns immediately.
+                if let Some(this) = weak.upgrade() {
+                    this.handle_exit(None);
+                }
             }
         });
 
@@ -429,6 +444,21 @@ impl Supervisor {
         self.set_status(SidecarStatus::failed(
             "sidecar could not be restarted after repeated attempts",
         ));
+    }
+
+    /// Kill a child that stopped answering and let the exit watcher restart it.
+    ///
+    /// Called when a request times out. The sidecar is stateless, so dropping a
+    /// wedged process costs nothing but a respawn; the alternative is leaving the
+    /// sequential RPC loop blocked behind it. No-op while shutting down.
+    pub fn restart_child(&self, reason: impl Into<String>) {
+        if self.stopping.load(Ordering::SeqCst) {
+            return;
+        }
+        self.set_status(SidecarStatus::restarting(0, Some(reason.into())));
+        if let Some(kill) = self.kill.lock().take() {
+            let _ = kill.send(());
+        }
     }
 
     /// Stop accepting work, terminate the child process and mark the supervisor
@@ -548,6 +578,102 @@ mod tests {
             Arc::new(crate::events::NullEmitter),
             None,
         )
+    }
+
+    #[test]
+    fn restart_child_signals_the_waiter_and_marks_restarting() {
+        let supervisor = test_supervisor();
+        let (kill_tx, mut kill_rx) = oneshot::channel::<()>();
+        *supervisor.kill.lock() = Some(kill_tx);
+        supervisor.running.store(true, Ordering::SeqCst);
+
+        supervisor.restart_child("request 'pandoc_build' timed out");
+
+        assert_eq!(supervisor.status().state, SidecarState::Restarting);
+        assert!(
+            supervisor
+                .status()
+                .message
+                .is_some_and(|message| message.contains("timed out")),
+            "the reason must reach the status event"
+        );
+        assert!(
+            kill_rx.try_recv().is_ok(),
+            "the stuck child must be signalled"
+        );
+        assert!(supervisor.kill.lock().is_none(), "the sender is consumed");
+    }
+
+    #[test]
+    fn restart_child_is_a_noop_while_stopping() {
+        let supervisor = test_supervisor();
+        supervisor.stopping.store(true, Ordering::SeqCst);
+        supervisor.restart_child("too late");
+        assert_ne!(supervisor.status().state, SidecarState::Restarting);
+    }
+
+    /// A script that hangs on its first run and answers `ping` on every later one.
+    #[cfg(unix)]
+    const HANGING_SIDECAR: &str = "#!/bin/sh\n\
+if [ -f \"$1\" ]; then\n\
+  while read -r line; do\n\
+    id=$(printf '%s' \"$line\" | sed -n 's/.*\"id\":\\([0-9]*\\).*/\\1/p')\n\
+    printf '{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":{\"pong\":true,\"version\":\"test\"}}\\n' \"$id\"\n\
+  done\n\
+else\n\
+  touch \"$1\"\n\
+  sleep 60\n\
+fi\n";
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_timed_out_request_restarts_the_child() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let script = dir.path().join("fake-sidecar.sh");
+        let marker = dir.path().join("first-run-done");
+        std::fs::write(&script, HANGING_SIDECAR).expect("write script");
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+
+        let sink: EventSink = Arc::new(|_method: &str, _params: &Value| {});
+        let supervisor = Supervisor::new(
+            SpawnSpec::new(
+                "/bin/sh",
+                vec![
+                    script.to_string_lossy().to_string(),
+                    marker.to_string_lossy().to_string(),
+                ],
+            ),
+            sink,
+            Arc::new(crate::events::NullEmitter),
+            Some(Duration::from_millis(300)),
+        );
+
+        // The first child hangs on the request: the call times out and the
+        // supervisor kills it.
+        let first = supervisor.call("ping", serde_json::json!({})).await;
+        assert!(
+            matches!(first, Err(AppError::SidecarTimeout(_))),
+            "expected a timeout, got {first:?}"
+        );
+
+        // The restart loop spawns the script again, which now answers.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        let mut recovered = None;
+        while tokio::time::Instant::now() < deadline {
+            match supervisor.call("ping", serde_json::json!({})).await {
+                Ok(value) => {
+                    recovered = Some(value);
+                    break;
+                }
+                Err(_) => tokio::time::sleep(Duration::from_millis(100)).await,
+            }
+        }
+        supervisor.shutdown();
+
+        let value = recovered.expect("the supervisor never recovered from the timeout");
+        assert_eq!(value["pong"], true);
     }
 
     #[test]
