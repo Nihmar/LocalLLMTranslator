@@ -673,6 +673,12 @@ Rules that make it safe to inject into every prompt:
   project.
 - Degrades cleanly: with no orchestrator model bound the step is skipped and the fields stay
   editable by hand.
+- IPC: `recon_start` enqueues a `book_recon` job and returns its id; `recon_get` returns the
+  candidate profile, the confirmed `style_guide`/`synopsis`/`book_meta` values and the glossary;
+  `recon_confirm` receives the edited profile plus the confirmed field keys and performs the writes.
+  The candidate is stored under `project_memory['book_profile']` and nothing reaches the translator
+  prompts until `recon_confirm` runs. Progress and failures travel on the existing `job://progress`
+  and `log://line` events — no new sidecar method and no new event.
 
 ---
 

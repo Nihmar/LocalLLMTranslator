@@ -137,8 +137,14 @@ makes it safe to restart the sidecar and re-send in-flight requests.
 Commands: `project_list`, `project_create`, `project_get`, `project_delete`,
 `endpoint_list`, `endpoint_upsert`, `endpoint_delete`, `endpoint_test`, `endpoint_models`,
 `role_binding_list`, `role_binding_set`, `ingest_start`, `translation_start`, `translation_pause`,
-`translation_cancel`, `job_list`, `chunk_list`, `chunk_get`, `metrics_get`, `sidecar_status`,
+`translation_cancel`, `recon_start`, `recon_get`, `recon_confirm`,
+`job_list`, `chunk_list`, `chunk_get`, `metrics_get`, `sidecar_status`,
 `export_build`, `open_path`.
+
+`recon_start` runs the `book_recon` job (candidate book profile, PLAN.md §9.4); `recon_get`
+reads it back together with the confirmed memory values and the glossary; `recon_confirm` writes
+the confirmed fields into `project_memory` and the proper-noun candidates into `glossary_term`.
+No new event: the job lifecycle is announced on `job://progress`.
 
 Events: `job://progress`, `log://line`, `metrics://tick`, `sidecar://status`,
 `sidecar://progress`, `export://progress`.
