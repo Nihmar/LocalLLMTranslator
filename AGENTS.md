@@ -148,6 +148,7 @@ Commands: `project_list`, `project_create`, `project_get`, `project_delete`,
 `review_start`, `suggestion_list`, `suggestion_accept`, `suggestion_reject`, `qa_report`,
 `qa_finding_set_status`,
 `job_list`, `chunk_list`, `chunk_get`, `metrics_get`, `sidecar_status`,
+`log_frontend_error`, `diagnostics_paths`, `diagnostics_export`,
 `export_build`, `export_preview`, `export_history`, `open_path`.
 
 `glossary_upsert` takes `{req: {id?, project_id, source, target, kind, note?, status?, source_lang?,
@@ -191,6 +192,17 @@ candidate so a later run does not propose them again.
 rows. `qa_finding_set_status` takes `{id, status}` and closes or reopens one: that is how the
 Series view resolves a `glossary_conflict` (adopting a book rendering into the canon, keeping
 the canon, or marking the finding resolved). A chunk re-scan replaces its findings anyway.
+
+Diagnostics: Rust writes structured `tracing` events to stdout and to a daily file under the
+app data dir (`logs/llmtz.<date>.log`), starting before the app state is built. The file
+carries job transitions (start, outcome, duration), one line per model call (role, model,
+tokens, latency, outcome), sidecar status changes and the errors the UI shows; it never
+carries book text, prompts, responses or glossary values. The frontend calls
+`log_frontend_error({command, message})` for every rejected `invoke`; `diagnostics_paths`
+returns `{data_dir, log_dir}` and `diagnostics_export` writes
+`<data_dir>/diagnostics/llmtz-diagnostics-<timestamp>.zip` with the newest logs and a
+`report.json` (versions, sidecar/worker state, queue, failed jobs, model-call errors, no
+database and no project files).
 
 `review_start` takes `{req: {project_id, chunk_ids?, chapter_id?, pass?, with_qa?}}`, where `pass`
 is `editor` (default `both`, also `proofreader`), and enqueues the matching `edit_chunk` /

@@ -921,7 +921,7 @@ what makes it safe to restart it and re-send the in-flight requests.
   `series_variant_upsert`, `series_variant_delete`, `series_promote_term`,
   `series_export`, `series_import`, `series_qa_scan`, `series_recon_start`, `series_recon_confirm`,
   `job_list`, `chunk_get`, `review_start`, `suggestion_list/accept/reject`, `qa_report`,
-  `qa_finding_set_status`,
+  `qa_finding_set_status`, `log_frontend_error`, `diagnostics_paths`, `diagnostics_export`,
   `export_build`, `export_preview`, `export_history`, `metrics_get`.
 - Events: `job://progress`, `log://line`, `metrics://tick`, `sidecar://status`,
   `sidecar://progress`, `export://progress`. Findings are not pushed: the UI reads them
@@ -936,6 +936,13 @@ API keys: `llm_endpoint.api_key_ref` stores only the *name* of the keyring entry
 `LlamaClient` accepts a bearer key, but no code reads the OS keyring yet, so an endpoint that
 requires authentication is not usable today. Wiring the keyring lookup is future work; the
 no-secrets-in-the-database rule already holds.
+
+Diagnostics: the control plane writes structured `tracing` events to stdout and to a daily
+file under the app data dir (`logs/llmtz.<date>.log`); the frontend reports every failed
+command through `log_frontend_error`, so the file mirrors what the user saw. The log never
+carries book text, prompts, responses or glossary values. `diagnostics_export` bundles the
+newest logs and a `report.json` (versions, sidecar/worker state, queue, failed jobs,
+model-call errors) and nothing else: no database, no project files.
 
 ---
 

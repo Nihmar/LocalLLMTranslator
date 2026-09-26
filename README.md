@@ -260,6 +260,30 @@ not travel, and an existing project id is rejected instead of overwritten.
 - Nothing that requires a GPU or downloaded models on the default path: the `marker` exception
   is an optional extra and stays out of the bundle.
 
+## Diagnostica e log
+
+Ogni evento utile è registrato in un file giornaliero sotto la cartella dati dell'app:
+`logs/llmtz.<data>.log` (su Linux `~/.local/share/org.localllmtranslator.app/logs/`).
+Contiene transizioni dei job (avvio, esito, durata), una riga per ogni chiamata al modello
+(ruolo, modello, token, latenza, esito), le transizioni di stato del sidecar e **gli errori
+che l'interfaccia ti ha mostrato**. Lanciando l'app da terminale i log si vedono anche lì;
+`RUST_LOG=debug` alza il livello.
+
+Il testo dei libri, i prompt, le risposte e i valori del glossario **non** finiscono nei
+log: quelli restano nella tabella `llm_call` del database locale, che non esce mai dalla
+macchina.
+
+Dal dashboard **Job** (pannello "Diagnostica") puoi:
+
+- **Apri cartella log** per vedere i file;
+- **Esporta diagnostica**: crea `<dati>/diagnostics/llmtz-diagnostics-<timestamp>.zip` con i
+  cinque log più recenti (ultimi 5 MB ciascuno) e un `report.json` con versioni, stato del
+  sidecar e del worker, coda, job falliti ed errori delle chiamate. È pensato per essere
+  allegato a una segnalazione e non contiene database né contenuti del libro.
+
+Quando qualcosa non funziona: esporta il bundle (o prendi il file di log del giorno) e
+allegalo alla descrizione di cosa stavi facendo.
+
 ## License
 
 MIT
