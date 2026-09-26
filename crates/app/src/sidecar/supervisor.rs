@@ -266,6 +266,10 @@ impl Supervisor {
 
     /// Ensure a live process, starting it if necessary. Concurrent callers are
     /// serialised so only one process is ever spawned.
+    ///
+    /// A spawn failure is terminal until the next attempt: the status is moved to
+    /// [`SidecarState::Failed`] so `sidecar_status` and the UI banner show the
+    /// reason instead of reporting a perpetual `Starting`.
     pub async fn ensure_running(self: &Arc<Self>) -> Result<()> {
         if self.is_running() {
             return Ok(());
@@ -274,7 +278,16 @@ impl Supervisor {
         if self.is_running() {
             return Ok(());
         }
-        self.spawn_once().await
+        match self.spawn_once().await {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                // `shutdown` already owns the terminal state in that case.
+                if !self.stopping.load(Ordering::SeqCst) {
+                    self.set_status(SidecarStatus::failed(error.to_string()));
+                }
+                Err(error)
+            }
+        }
     }
 
     /// Start the process once (no retry). Shared by the initial start and the
@@ -630,6 +643,26 @@ mod tests {
         supervisor.stopping.store(true, Ordering::SeqCst);
         supervisor.restart_child("too late");
         assert_ne!(supervisor.status().state, SidecarState::Restarting);
+    }
+
+    #[tokio::test]
+    async fn ensure_running_reports_a_failed_spawn_instead_of_starting_forever() {
+        let sink: EventSink = Arc::new(|_method: &str, _params: &Value| {});
+        let supervisor = Supervisor::new(
+            SpawnSpec::new("/nonexistent/llmtranslator-sidecar", Vec::new()),
+            sink,
+            Arc::new(crate::events::NullEmitter),
+            None,
+        );
+
+        let result = supervisor.ensure_running().await;
+        assert!(result.is_err(), "a missing program must fail the spawn");
+        let status = supervisor.status();
+        assert_eq!(status.state, SidecarState::Failed);
+        assert!(
+            status.message.is_some(),
+            "the reason must reach `sidecar_status` so the banner can show it"
+        );
     }
 
     /// A script that hangs on its first run and answers `ping` on every later one.
