@@ -354,6 +354,43 @@ def test_chapter_summary_json_schema_returns_the_rolling_memory(start_server):
     assert content["style_notes"]
 
 
+def test_editor_issue_mode_returns_a_proposed_correction(start_server):
+    """``--editor-issues`` drives the suggestion pipeline deterministically."""
+    base = start_server(fake.TranslationConfig(editor_issues=True))
+    response = http_post(
+        base,
+        "/v1/chat/completions",
+        {
+            "messages": [{"role": "user", "content": "compare these"}],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": fake.EDITOR_SCHEMA_NAME},
+            },
+        },
+    )
+    content = json.loads(response["choices"][0]["message"]["content"])
+    assert content == fake.EDITOR_ISSUES
+    assert content["issues"][0]["block_index"] == 0
+
+
+def test_proofreader_request_is_answered_unchanged(start_server):
+    """A monolingual proofreader request gets the input back (no corrections)."""
+    base = start_server()
+    text = "Primo blocco.\n\n<!-- block -->\n\nSecondo blocco."
+    response = http_post(
+        base,
+        "/v1/chat/completions",
+        {
+            "messages": [
+                {"role": "system", "content": "You are a monolingual proofreader for Italian."},
+                {"role": "user", "content": text},
+            ],
+        },
+    )
+    content = response["choices"][0]["message"]["content"]
+    assert content == text
+
+
 def test_recon_broken_answers_prose_not_json(start_server):
     """``--recon-broken`` exercises the control plane's parse-failure branch."""
     base = start_server(fake.TranslationConfig(recon_broken=True))

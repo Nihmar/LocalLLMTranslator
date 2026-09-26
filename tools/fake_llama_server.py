@@ -72,6 +72,7 @@ CLI                     Environment                                Effect
 ``--merge-paragraphs``   ``FAKE_LLAMA_MERGE_PARAGRAPHS=1``          drop blank lines (corrupt block structure)
 ``--echo-prompt-prefix`` ``FAKE_LLAMA_ECHO_PROMPT_PREFIX=1``        echo the prompt preface before the passage (an irregular answer)
 ``--recon-broken``       ``FAKE_LLAMA_RECON_BROKEN=1``               answer a book-profile request with prose, not JSON
+``--editor-issues``      ``FAKE_LLAMA_EDITOR_ISSUES=1``             answer an editor request with one proposed issue
 ``--total-slots N``      ``FAKE_LLAMA_TOTAL_SLOTS=N``               value reported by ``/props``
 ``--n-ctx N``            ``FAKE_LLAMA_N_CTX=N``                     value reported by ``/props``
 ``--port PORT``          ``FAKE_LLAMA_PORT=PORT``                   listen port (default 8080, 0 = ephemeral)
@@ -117,6 +118,11 @@ BOOK_PROFILE_SCHEMA_NAME = "book_profile"
 #: (PLAN.md section 8). The fake answers with :data:`CHAPTER_SUMMARY`.
 CHAPTER_SUMMARY_SCHEMA_NAME = "chapter_summary"
 
+#: ``response_format.json_schema.name`` that marks a bilingual-editor request
+#: (PLAN.md section 8). By default the fake finds nothing to fix; with
+#: ``FAKE_LLAMA_EDITOR_ISSUES`` it answers with :data:`EDITOR_ISSUES`.
+EDITOR_SCHEMA_NAME = "editor"
+
 #: Deterministic candidate book profile, shaped like the schema in
 #: ``prompts/analyze_book.schema.json``. Deliberately includes one
 #: ``do_not_translate`` and one ``proper_noun`` entry so both glossary branches
@@ -160,6 +166,23 @@ CHAPTER_SUMMARY: dict[str, Any] = {
         },
     ],
     "style_notes": ["The narrator favours long, flowing sentences."],
+}
+
+#: Editor answer with one proposed correction. The quote is a word as the fake
+#: translation renders it (wrapped in the «» markers), so accepting it can be
+#: exercised end to end.
+EDITOR_ISSUES: dict[str, Any] = {
+    "verdict": "needs_fix",
+    "issues": [
+        {
+            "block_index": 0,
+            "severity": "minor",
+            "kind": "register",
+            "quote": "\u00abquiet\u00bb",
+            "suggested": "\u00abcalmo\u00bb",
+            "reason": "the rest of the chapter keeps a more formal register",
+        },
+    ],
 }
 
 #: Line that introduces the passage to translate inside the user message.
@@ -332,6 +355,7 @@ class TranslationConfig:
     merge_paragraphs: bool = False
     echo_prompt_prefix: bool = False
     recon_broken: bool = False
+    editor_issues: bool = False
 
     def generation_settings(self) -> dict[str, Any]:
         """Return a ``default_generation_settings``-shaped dict."""
@@ -635,6 +659,7 @@ def make_handler(cfg: TranslationConfig) -> type[BaseHTTPRequestHandler]:
 
             prompt_tokens = 0
             last_user = ""
+            system_text = ""
             for message in messages:
                 if not isinstance(message, dict):
                     continue
@@ -644,6 +669,8 @@ def make_handler(cfg: TranslationConfig) -> type[BaseHTTPRequestHandler]:
                 prompt_tokens += approx_tokens(content)
                 if message.get("role") == "user":
                     last_user = content
+                elif message.get("role") == "system" and system_text == "":
+                    system_text = content
 
             response_format = body.get("response_format") or {}
             schema_name = ""
@@ -666,6 +693,16 @@ def make_handler(cfg: TranslationConfig) -> type[BaseHTTPRequestHandler]:
             elif wants_json and schema_name == CHAPTER_SUMMARY_SCHEMA_NAME:
                 # rolling chapter memory (PLAN.md section 8)
                 text = json.dumps(CHAPTER_SUMMARY, ensure_ascii=False)
+                finish_reason = "stop"
+            elif wants_json and schema_name == EDITOR_SCHEMA_NAME:
+                # bilingual revision (PLAN.md section 8): nothing to fix unless asked
+                answer = EDITOR_ISSUES if cfg.editor_issues else {"verdict": "ok", "issues": []}
+                text = json.dumps(answer, ensure_ascii=False)
+                finish_reason = "stop"
+            elif not wants_json and "monolingual proofreader" in system_text:
+                # the fake has no corrections to make, so the compliant answer is
+                # the input unchanged
+                text = last_user
                 finish_reason = "stop"
             elif wants_json:
                 # editor/proofreader JSON mode
@@ -789,6 +826,9 @@ def build_config(args: argparse.Namespace) -> TranslationConfig:
         recon_broken=(
             args.recon_broken or _env("FAKE_LLAMA_RECON_BROKEN") not in (None, "0")
         ),
+        editor_issues=(
+            args.editor_issues or _env("FAKE_LLAMA_EDITOR_ISSUES") not in (None, "0")
+        ),
     )
 
 
@@ -810,6 +850,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--merge-paragraphs", action="store_true", help="drop blank lines (corrupt structure)")
     parser.add_argument("--echo-prompt-prefix", action="store_true", help="echo the prompt preface before the passage")
     parser.add_argument("--recon-broken", action="store_true", help="answer a book-profile request with prose, not JSON")
+    parser.add_argument("--editor-issues", action="store_true", help="answer an editor request with one proposed issue")
     parser.add_argument("--selftest", action="store_true", help="run internal assertions and exit")
     return parser
 
@@ -964,6 +1005,23 @@ def _selftest() -> int:
         check(
             json.loads(summary["choices"][0]["message"]["content"]) == CHAPTER_SUMMARY,
             "chapter-summary answer",
+        )
+
+        # editor: the default answer reports nothing to fix
+        editor = post(
+            "/v1/chat/completions",
+            {
+                "model": FAKE_MODEL,
+                "messages": [{"role": "user", "content": "compare these"}],
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {"name": EDITOR_SCHEMA_NAME},
+                },
+            },
+        )
+        check(
+            json.loads(editor["choices"][0]["message"]["content"])["verdict"] == "ok",
+            "editor default answer",
         )
 
         # fail rate 1.0 over HTTP
