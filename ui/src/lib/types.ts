@@ -142,6 +142,25 @@ export interface ProjectDetail {
   chunks_done: number;
 }
 
+/** Request body of `project_export` (`commands::project::ExportBundleRequest`). */
+export interface ExportBundleRequest {
+  project_id: string;
+  /** Destination `.llmtz`; `null` writes it into the project output directory. */
+  output_path?: string | null;
+}
+
+/** Result of `project_export` (`pipeline::bundle::ExportBundleOutcome`). */
+export interface ExportBundleOutcome {
+  output_path: string;
+  bytes: number;
+  files: number;
+}
+
+/** Request body of `project_import` (`commands::project::ImportBundleRequest`). */
+export interface ImportBundleRequest {
+  archive_path: string;
+}
+
 // --- LLM endpoints -------------------------------------------------------------------------
 
 /** Row of `llm_endpoint` (`db::models::LlmEndpoint`); `props_json` is the raw `/props` body. */
@@ -615,8 +634,7 @@ export interface SidecarStatus {
 // --- export --------------------------------------------------------------------------------
 
 /** Request body of `export_build` (`pipeline::export::ExportRequest`). */
-export interface ExportRequest {
-  project_id: string;
+export interface ExportRequest {  project_id: string;
   /** `pdf` | `epub` | `docx` | `html`. */
   output_format: string;
   /** Absolute destination; `null` lets the backend place the file under the project output directory. */

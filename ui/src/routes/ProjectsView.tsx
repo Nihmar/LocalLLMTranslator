@@ -2,10 +2,24 @@ import { useCallback, useEffect, useState } from "react";
 import { EmptyState } from "../components/EmptyState";
 import { FormField } from "../components/FormField";
 import { StatusBadge } from "../components/StatusBadge";
-import { basename, fileExtension, formatDateTime, formatRelative } from "../lib/format";
-import { pickDocumentFile } from "../lib/dialog";
-import { projectCreate, projectDelete, projectGet, projectList, toErrorMessage } from "../lib/ipc";
-import type { CreateProjectRequest, Project, SourceFormat } from "../lib/types";
+import { basename, fileExtension, formatBytes, formatDateTime, formatRelative } from "../lib/format";
+import { pickBundleFile, pickDocumentFile } from "../lib/dialog";
+import {
+  openPath,
+  projectCreate,
+  projectDelete,
+  projectExport,
+  projectGet,
+  projectImport,
+  projectList,
+  toErrorMessage,
+} from "../lib/ipc";
+import type {
+  CreateProjectRequest,
+  ExportBundleOutcome,
+  Project,
+  SourceFormat,
+} from "../lib/types";
 import type { ViewId } from "../App";
 
 /**
@@ -90,6 +104,10 @@ export function ProjectsView({ currentProjectId, onOpenProject, onNavigate }: Pr
   const [busyId, setBusyId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [actionNotice, setActionNotice] = useState<string | null>(null);
+  const [bundleResult, setBundleResult] = useState<ExportBundleOutcome | null>(null);
+  const [bundleBusy, setBundleBusy] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -209,6 +227,41 @@ export function ProjectsView({ currentProjectId, onOpenProject, onNavigate }: Pr
     }
   }
 
+  async function handleExportBundle(projectId: string) {
+    setBusyId(projectId);
+    setActionError(null);
+    setActionNotice(null);
+    setBundleResult(null);
+    try {
+      const outcome = await projectExport({ project_id: projectId, output_path: null });
+      setBundleResult(outcome);
+      setActionNotice(`Bundle creato: ${outcome.output_path}`);
+    } catch (exportError) {
+      setActionError(toErrorMessage(exportError));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function handleImportBundle() {
+    setImportError(null);
+    setActionNotice(null);
+    const archive = await pickBundleFile();
+    if (archive === null) {
+      return;
+    }
+    setBundleBusy(true);
+    try {
+      const imported = await projectImport({ archive_path: archive });
+      setActionNotice(`Progetto «${imported.name}» importato.`);
+      await load();
+    } catch (error) {
+      setImportError(toErrorMessage(error));
+    } finally {
+      setBundleBusy(false);
+    }
+  }
+
   return (
     <div className="section-stack">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -232,6 +285,17 @@ export function ProjectsView({ currentProjectId, onOpenProject, onNavigate }: Pr
           </button>
           <button
             type="button"
+            className="btn"
+            disabled={bundleBusy}
+            onClick={() => {
+              void handleImportBundle();
+            }}
+          >
+            {bundleBusy ? <span className="spinner" aria-hidden="true" /> : null}
+            Importa .llmtz
+          </button>
+          <button
+            type="button"
             className="btn btn-primary"
             onClick={() => {
               setFormOpen((open) => !open);
@@ -246,6 +310,38 @@ export function ProjectsView({ currentProjectId, onOpenProject, onNavigate }: Pr
         <div className="banner banner-error" role="alert">
           <span aria-hidden="true">⚠</span>
           <span>{actionError}</span>
+        </div>
+      ) : null}
+
+      {actionNotice !== null ? (
+        <div className="banner banner-ok" role="status">
+          <span aria-hidden="true">✓</span>
+          <span>
+            {actionNotice}
+            {bundleResult !== null ? (
+              <span className="mt-2 flex items-center gap-2">
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  onClick={() => {
+                    void openPath(bundleResult.output_path);
+                  }}
+                >
+                  Apri cartella
+                </button>
+                <span className="mono-chip">
+                  {formatBytes(bundleResult.bytes)} · {bundleResult.files} file
+                </span>
+              </span>
+            ) : null}
+          </span>
+        </div>
+      ) : null}
+
+      {importError !== null ? (
+        <div className="banner banner-error" role="alert">
+          <span aria-hidden="true">⚠</span>
+          <span>Importazione non riuscita: {importError}</span>
         </div>
       ) : null}
 
@@ -417,14 +513,55 @@ export function ProjectsView({ currentProjectId, onOpenProject, onNavigate }: Pr
           }}
         />
       ) : projects.length === 0 ? (
-        <EmptyState
-          title="Nessun progetto"
-          description="Crea un progetto per iniziare: serviranno un documento EPUB, PDF o Markdown e la lingua di destinazione."
-          actionLabel="Crea il primo progetto"
-          onAction={() => {
-            setFormOpen(true);
-          }}
-        />
+        <div className="section-stack">
+          <EmptyState
+            title="Benvenuto in LocalLLMTranslator"
+            description="Tre passi per iniziare: assegna un modello, crea o importa un progetto, poi importa il documento."
+            actionLabel="Crea il primo progetto"
+            onAction={() => {
+              setFormOpen(true);
+            }}
+          />
+          <div className="panel panel-pad">
+            <div className="panel-title mb-2">Primo avvio</div>
+            <ol className="list-decimal space-y-1 pl-4 text-xs text-muted">
+              <li>
+                In <strong>Modelli</strong> registra l&apos;endpoint di{" "}
+                <span className="mono-chip">llama-server</span> e assegna il ruolo <em>traduttore</em>;
+                l&apos;orchestratore serve alla ricognizione e alla memoria del libro.
+              </li>
+              <li>
+                Crea un progetto con il documento EPUB/PDF/Markdown, oppure importa un bundle{" "}
+                <span className="mono-chip">.llmtz</span> creato altrove.
+              </li>
+              <li>
+                Dalla pagina <strong>Ingestione</strong> estrai il documento, poi traduci dalla pagina{" "}
+                <strong>Traduzione</strong> e rivedi da <strong>Revisione</strong>.
+              </li>
+            </ol>
+            <div className="mt-2 flex items-center gap-2">
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={() => {
+                  onNavigate("models");
+                }}
+              >
+                Vai ai modelli
+              </button>
+              <button
+                type="button"
+                className="btn btn-sm"
+                disabled={bundleBusy}
+                onClick={() => {
+                  void handleImportBundle();
+                }}
+              >
+                Importa .llmtz
+              </button>
+            </div>
+          </div>
+        </div>
       ) : (
         <div className="grid grid-cols-2 gap-3 xl:grid-cols-3">
           {projects.map((project) => {
@@ -523,6 +660,16 @@ export function ProjectsView({ currentProjectId, onOpenProject, onNavigate }: Pr
                       className="btn btn-sm btn-ghost"
                       disabled={isBusy}
                       onClick={() => {
+                        void handleExportBundle(project.id);
+                      }}
+                    >
+                      Esporta .llmtz
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-ghost"
+                      disabled={isBusy}
+                      onClick={() => {
                         setConfirmDeleteId(isConfirming ? null : project.id);
                       }}
                     >
@@ -537,9 +684,9 @@ export function ProjectsView({ currentProjectId, onOpenProject, onNavigate }: Pr
       )}
 
       <p className="text-[0.72rem] text-faint">
-        Esportazione e importazione del progetto in <span className="mono-chip">.llmtz</span> sono
-        previste da PLAN.md §6 ma non hanno ancora un comando nel contratto UI → Tauri, quindi non
-        sono esposte qui.
+        Il bundle <span className="mono-chip">.llmtz</span> contiene il database del progetto, il
+        Markdown con gli asset, l&apos;output e lo snapshot dei prompt; l&apos;importazione rifiuta un
+        progetto già presente invece di sovrascriverlo.
       </p>
     </div>
   );

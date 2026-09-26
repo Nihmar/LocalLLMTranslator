@@ -14,12 +14,28 @@ import { isTauriRuntime } from "./ipc";
 /** Extensions the ingestion accepts, without the `.` prefix. */
 export const DOCUMENT_EXTENSIONS: readonly string[] = ["epub", "pdf", "md", "markdown", "mkd"];
 
+/** Extension of the project bundle archives. */
+export const BUNDLE_EXTENSION = "llmtz";
+
 /**
  * Opens the OS document picker and returns the chosen absolute path, or `null` when the user
  * cancels or the dialog is unavailable. Failures are logged and reported as `null` so a broken
  * dialog never blocks the manual input.
  */
 export async function pickDocumentFile(): Promise<string | null> {
+  return pickFile("Scegli il documento", [...DOCUMENT_EXTENSIONS], "Documenti");
+}
+
+/** Opens the OS picker for a `.llmtz` project bundle. */
+export async function pickBundleFile(): Promise<string | null> {
+  return pickFile("Importa progetto (.llmtz)", [BUNDLE_EXTENSION], "Bundle progetto");
+}
+
+async function pickFile(
+  title: string,
+  extensions: string[],
+  filterName: string,
+): Promise<string | null> {
   if (!isTauriRuntime()) {
     return null;
   }
@@ -27,8 +43,8 @@ export async function pickDocumentFile(): Promise<string | null> {
     const selected = await open({
       multiple: false,
       directory: false,
-      title: "Scegli il documento",
-      filters: [{ name: "Documenti", extensions: [...DOCUMENT_EXTENSIONS] }],
+      title,
+      filters: [{ name: filterName, extensions }],
     });
     return typeof selected === "string" ? selected : null;
   } catch (error) {

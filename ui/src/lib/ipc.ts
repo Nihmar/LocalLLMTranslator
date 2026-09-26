@@ -33,9 +33,12 @@ import type {
   ExportPreviewRequest,
   ExportRequest,
   ExportBuildRecord,
+  ExportBundleOutcome,
+  ExportBundleRequest,
   GlossaryTerm,
   GlossaryUpsertRequest,
   IngestStartRequest,
+  ImportBundleRequest,
   Job,
   JobListRequest,
   JobStarted,
@@ -65,6 +68,8 @@ const COMMANDS = {
   projectCreate: "project_create",
   projectGet: "project_get",
   projectDelete: "project_delete",
+  projectExport: "project_export",
+  projectImport: "project_import",
   endpointList: "endpoint_list",
   endpointUpsert: "endpoint_upsert",
   endpointDelete: "endpoint_delete",
@@ -173,6 +178,16 @@ export function projectGet(id: string): Promise<ProjectDetail> {
 
 export function projectDelete(id: string): Promise<Ack> {
   return call<Ack>(COMMANDS.projectDelete, { id });
+}
+
+/** Writes the project as a `.llmtz` bundle (PLAN.md §6). */
+export function projectExport(request: ExportBundleRequest): Promise<ExportBundleOutcome> {
+  return call<ExportBundleOutcome>(COMMANDS.projectExport, { req: request });
+}
+
+/** Imports a `.llmtz` bundle; an id that already exists is rejected. */
+export function projectImport(request: ImportBundleRequest): Promise<Project> {
+  return call<Project>(COMMANDS.projectImport, { req: request });
 }
 
 // --- LLM endpoints -------------------------------------------------------------------------
