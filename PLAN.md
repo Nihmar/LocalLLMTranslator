@@ -698,7 +698,12 @@ what makes it safe to restart it and re-send the in-flight requests.
   `job_list`, `chunk_get`, `review_start`, `suggestion_list/accept/reject`, `qa_report`,
   `export_build`, `export_preview`, `glossary_*`, `metrics_get`.
 - Events: `job://progress`, `log://line`, `metrics://tick`, `qa://finding`, `sidecar://status`,
-  `export://progress`.
+  `sidecar://progress`, `export://progress`.
+
+`job://progress` carries the serialized `job` row at every transition the control plane owns;
+views treat it as an invalidation trigger and refetch through commands. `sidecar://progress`
+forwards the sidecar's out-of-band `progress` notifications unchanged, and `log://line`
+(`{ts, level, source, message}`) carries the sidecar's stderr and the worker's failures.
 
 ---
 

@@ -135,7 +135,14 @@ Commands: `project_list`, `project_create`, `project_get`, `project_delete`,
 `translation_cancel`, `job_list`, `chunk_list`, `chunk_get`, `metrics_get`, `sidecar_status`,
 `export_build`, `open_path`.
 
-Events: `job://progress`, `log://line`, `metrics://tick`, `sidecar://status`, `export://progress`.
+Events: `job://progress`, `log://line`, `metrics://tick`, `sidecar://status`,
+`sidecar://progress`, `export://progress`.
+
+`job://progress` carries the serialized `job` row at every transition the control plane owns
+(enqueue, claim, done, failed, cancelled); views treat it as an invalidation trigger and refetch
+through commands. `sidecar://progress` forwards the sidecar's out-of-band `progress`
+notifications unchanged. `log://line` is `{ts, level, source, message}` — the control plane does
+not stamp a project on it.
 
 ---
 
