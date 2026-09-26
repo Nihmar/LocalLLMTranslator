@@ -1,0 +1,51 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+*.egg-info/
+build/
+dist/
+*.spec
+
+# --- Rust ---
+target/
+**/*.rs.bk
+*.pdb
+
+# --- Node ---
+node_modules/
+ui/dist/
+*.tsbuildinfo
+.vite/
+
+# --- Tauri ---
+crates/app/gen/
+crates/app/target/
+
+# --- Runtime data ---
+data/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.llmtz
+output/
+translations/
+
+# --- Generated test fixtures (recreate with tools/make_fixtures.py) ---
+tools/fixtures/
+
+# --- Local tooling state ---
+.commandcode/
+
+# --- Editor / OS ---
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
