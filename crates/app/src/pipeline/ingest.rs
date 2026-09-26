@@ -90,6 +90,9 @@ pub async fn run_ingest(
         DEFAULT_USER_TEMPLATE,
     )
     .await?;
+    // The reconnaissance prompt files (PLAN.md section 9.4) join the snapshot.
+    // They are only written when missing, so a user edit survives a re-ingest.
+    crate::pipeline::recon::ensure_prompt_files(&prompts_dir).await?;
 
     // 5. Persist document, chapters and blocks in a single transaction.
     let document_id = new_id();

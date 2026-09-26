@@ -2,6 +2,7 @@
 
 pub mod export;
 pub mod ingest;
+pub mod recon;
 pub mod translate;
 
 use std::path::PathBuf;

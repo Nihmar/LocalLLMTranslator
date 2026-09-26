@@ -86,6 +86,17 @@ impl JobDispatcher for PipelineDispatcher {
                 .await?;
                 Ok(())
             }
+            "book_recon" => {
+                let pasted_text = payload.get("pasted_text").and_then(Value::as_str);
+                crate::pipeline::recon::run_recon(
+                    &self.deps,
+                    Some(&job.id),
+                    &job.project_id,
+                    pasted_text,
+                )
+                .await?;
+                Ok(())
+            }
             "export_unit" => {
                 let request: crate::pipeline::export::ExportRequest =
                     serde_json::from_value(payload)?;
@@ -128,6 +139,9 @@ pub fn run() {
             commands::translation::translation_start,
             commands::translation::translation_pause,
             commands::translation::translation_cancel,
+            commands::recon::recon_start,
+            commands::recon::recon_get,
+            commands::recon::recon_confirm,
             commands::jobs::job_list,
             commands::chunks::chunk_list,
             commands::chunks::chunk_get,

@@ -1,0 +1,67 @@
+//! `recon_start` / `recon_get` / `recon_confirm` (PLAN.md section 9.4).
+
+use serde::Deserialize;
+use tauri::State;
+
+use super::enqueue_and_emit;
+use super::ingest::JobStarted;
+use crate::db::repo;
+use crate::error::{AppError, Result};
+use crate::pipeline::recon::{self, ConfirmRequest, ReconSnapshot};
+use crate::scheduler::NewJob;
+use crate::AppState;
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ReconStartRequest {
+    pub project_id: String,
+    /// Optional text the user pasted themselves; the app never fetches a page.
+    #[serde(default)]
+    pub pasted_text: Option<String>,
+}
+
+/// Enqueue the `book_recon` job. Fails fast when the prerequisites are missing,
+/// so the user gets a clear message instead of a failed job later.
+#[tauri::command]
+pub async fn recon_start(state: State<'_, AppState>, req: ReconStartRequest) -> Result<JobStarted> {
+    repo::get_project(&state.pool, &req.project_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("project {}", req.project_id)))?;
+    if repo::get_document_for_project(&state.pool, &req.project_id)
+        .await?
+        .is_none()
+    {
+        return Err(AppError::Invalid(
+            "the project has no ingested document: run ingestion first".into(),
+        ));
+    }
+    if repo::role_binding_for(&state.pool, recon::ROLE)
+        .await?
+        .is_none()
+    {
+        return Err(AppError::Invalid(
+            "no role_binding configured for 'orchestrator': bind a model to run the reconnaissance"
+                .into(),
+        ));
+    }
+
+    let payload = serde_json::json!({ "pasted_text": req.pasted_text });
+    let job = NewJob::new(&req.project_id, recon::JOB_KIND, payload).with_priority(10);
+    let job = enqueue_and_emit(&state, &job).await?;
+    state.worker.start();
+    Ok(JobStarted { job_id: job.id })
+}
+
+/// Candidate profile, confirmed values and glossary for a project.
+#[tauri::command]
+pub async fn recon_get(state: State<'_, AppState>, project_id: String) -> Result<ReconSnapshot> {
+    recon::snapshot(&state.pool, &project_id).await
+}
+
+/// Persist the fields the user confirmed.
+#[tauri::command]
+pub async fn recon_confirm(
+    state: State<'_, AppState>,
+    req: ConfirmRequest,
+) -> Result<ReconSnapshot> {
+    recon::confirm(&state.pool, &req).await
+}

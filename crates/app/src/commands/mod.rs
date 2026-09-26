@@ -9,6 +9,7 @@ pub mod jobs;
 pub mod metrics;
 pub mod misc;
 pub mod project;
+pub mod recon;
 pub mod role_binding;
 pub mod sidecar;
 pub mod translation;
