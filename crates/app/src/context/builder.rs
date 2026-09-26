@@ -238,12 +238,17 @@ impl ContextBuilder {
 
 /// Keep only the glossary terms that actually occur in the chunk text, ordered
 /// deterministically by source term (case-insensitive).
+///
+/// Matching is case-insensitive but respects word boundaries: `king` must match "the
+/// king" and not "asking" or "kings", or the prompt would carry terms the chunk does
+/// not contain (and the sidecar's QA check uses the same word-boundary rule).
 pub fn filter_glossary(glossary: &[GlossaryEntry], chunk_text: &str) -> Vec<GlossaryEntry> {
     let haystack = chunk_text.to_lowercase();
     let mut kept: Vec<GlossaryEntry> = glossary
         .iter()
         .filter(|entry| {
-            !entry.source.trim().is_empty() && haystack.contains(&entry.source.to_lowercase())
+            let term = entry.source.trim().to_lowercase();
+            !term.is_empty() && contains_term(&haystack, &term)
         })
         .cloned()
         .collect();
@@ -254,6 +259,32 @@ pub fn filter_glossary(glossary: &[GlossaryEntry], chunk_text: &str) -> Vec<Glos
             .then_with(|| a.source.cmp(&b.source))
     });
     kept
+}
+
+/// Whether `term_lower` (already lowercased) occurs in `haystack` as a whole word.
+///
+/// A manual scan instead of a regex: the glossary can hold hundreds of terms and the
+/// haystack is one chunk, so rebuilding a pattern per term would cost more than the
+/// boundary checks.
+fn contains_term(haystack: &str, term_lower: &str) -> bool {
+    let is_boundary = |c: char| !(c.is_alphanumeric() || c == '_');
+    let mut search_from = 0;
+    while let Some(offset) = haystack[search_from..].find(term_lower) {
+        let begin = search_from + offset;
+        let end = begin + term_lower.len();
+        let before_ok = haystack[..begin]
+            .chars()
+            .next_back()
+            .is_none_or(is_boundary);
+        let after_ok = haystack[end..].chars().next().is_none_or(is_boundary);
+        if before_ok && after_ok {
+            return true;
+        }
+        // Advance by one whole character: `begin + 1` could slice a multi-byte
+        // character in half when the rejected match starts with one.
+        search_from = begin + haystack[begin..].chars().next().map_or(1, char::len_utf8);
+    }
+    false
 }
 
 /// Render glossary entries as `source => target` lines.
@@ -349,6 +380,37 @@ mod tests {
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].source, "king");
         assert_eq!(render_glossary(&filtered), "king => re");
+    }
+
+    #[test]
+    fn glossary_filter_respects_word_boundaries() {
+        let glossary = vec![
+            GlossaryEntry {
+                source: "king".into(),
+                target: "re".into(),
+                kind: "term".into(),
+            },
+            GlossaryEntry {
+                source: "sea".into(),
+                target: "mare".into(),
+                kind: "term".into(),
+            },
+        ];
+        // Substrings inside longer words are not occurrences.
+        assert!(filter_glossary(&glossary, "He was asking about the seas.").is_empty());
+        // Real occurrences still match, case-insensitively and across punctuation.
+        let filtered = filter_glossary(&glossary, "The KING looked at the sea, then at (Kingdom).");
+        assert_eq!(filtered.len(), 2);
+        assert_eq!(filtered[0].source, "king");
+        assert_eq!(filtered[1].source, "sea");
+
+        let multi = vec![GlossaryEntry {
+            source: "old town".into(),
+            target: "città vecchia".into(),
+            kind: "term".into(),
+        }];
+        assert_eq!(filter_glossary(&multi, "the (old town), at dawn").len(), 1);
+        assert!(filter_glossary(&multi, "the oldtown clock").is_empty());
     }
 
     #[test]
