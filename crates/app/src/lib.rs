@@ -190,6 +190,8 @@ pub fn run() {
             commands::metrics::metrics_get,
             commands::sidecar::sidecar_status,
             commands::export::export_build,
+            commands::export::export_preview,
+            commands::export::export_history,
             commands::misc::open_path,
         ])
         .build(tauri::generate_context!())
@@ -278,7 +280,10 @@ async fn build_state(app: &tauri::AppHandle) -> Result<AppState> {
         sidecar.clone(),
         resources.clone(),
         data_dir.clone(),
-    );
+    )
+    .with_pandoc_dir(crate::pandoc::resolve_assets_dir(
+        app.path().resource_dir().ok().as_deref(),
+    ));
     let dispatcher = Arc::new(PipelineDispatcher { deps });
     let worker = Arc::new(WorkerPool::new(
         pool.clone(),

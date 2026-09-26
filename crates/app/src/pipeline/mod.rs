@@ -26,6 +26,9 @@ pub struct PipelineDeps {
     pub sidecar: SidecarClient,
     pub resources: ResourceGovernor,
     pub data_dir: PathBuf,
+    /// Directory with the user-editable pandoc templates, filters and styles;
+    /// `None` when the app runs without them (the build then has no defaults).
+    pub pandoc_dir: Option<PathBuf>,
 }
 
 impl PipelineDeps {
@@ -40,7 +43,16 @@ impl PipelineDeps {
             sidecar,
             resources,
             data_dir,
+            pandoc_dir: crate::pandoc::resolve_assets_dir(None),
         }
+    }
+
+    /// Prefer an explicitly resolved assets directory (the Tauri resource dir).
+    pub fn with_pandoc_dir(mut self, dir: Option<PathBuf>) -> Self {
+        if dir.is_some() {
+            self.pandoc_dir = dir;
+        }
+        self
     }
 
     fn project_dir(&self, project_id: &str) -> PathBuf {

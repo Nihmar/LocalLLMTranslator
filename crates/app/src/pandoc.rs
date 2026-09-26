@@ -129,6 +129,55 @@ pub fn write_metadata_yaml(dir: &Path, metadata: &BookMetadata) -> Result<PathBu
     Ok(path)
 }
 
+/// Environment variable overriding the pandoc assets directory (templates,
+/// filters, styles).
+pub const PANDOC_DIR_ENV: &str = "LLMTRANSLATOR_PANDOC_DIR";
+
+/// Resolve the directory holding the user-editable pandoc assets, in the same
+/// order as the sidecar binary: the environment override, the bundled resource
+/// directory, then the repository's `pandoc/` (development and tests).
+pub fn resolve_assets_dir(resource_dir: Option<&Path>) -> Option<PathBuf> {
+    if let Ok(override_dir) = std::env::var(PANDOC_DIR_ENV) {
+        let path = PathBuf::from(override_dir);
+        if path.is_dir() {
+            return Some(path);
+        }
+    }
+    if let Some(resource_dir) = resource_dir {
+        let path = resource_dir.join("pandoc");
+        if path.is_dir() {
+            return Some(path);
+        }
+    }
+    // Compile-time repository path: present in development and tests, absent in
+    // a bundled install (where the resource directory takes over).
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join("pandoc");
+    repo.is_dir().then_some(repo)
+}
+
+/// A resolved file inside the assets directory, if it exists.
+pub fn assets_file(assets: Option<&Path>, subdir: &str, name: &str) -> Option<String> {
+    let path = assets?.join(subdir).join(name);
+    path.is_file().then(|| path.to_string_lossy().to_string())
+}
+
+/// Everything one pandoc invocation needs.
+#[derive(Debug, Clone, Default)]
+pub struct PandocBuild {
+    pub units: Vec<PandocUnit>,
+    pub metadata: BookMetadata,
+    pub output_path: String,
+    pub output_format: String,
+    pub template: Option<String>,
+    pub css: Option<String>,
+    pub resource_path: Vec<String>,
+    pub toc: bool,
+    pub lua_filters: Vec<String>,
+    pub top_level_division: Option<String>,
+}
+
 /// Drives Pandoc builds through the sidecar (which owns the actual subprocess
 /// and the Lua filters).
 pub struct PandocDriver {
@@ -140,25 +189,18 @@ impl PandocDriver {
         Self { client }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub async fn build(
-        &self,
-        units: Vec<PandocUnit>,
-        metadata: BookMetadata,
-        output_path: &str,
-        output_format: &str,
-        template: Option<String>,
-        css: Option<String>,
-        resource_path: Vec<String>,
-    ) -> Result<PandocResult> {
+    pub async fn build(&self, build: PandocBuild) -> Result<PandocResult> {
         let params = PandocParams {
-            units,
-            metadata: serde_json::to_value(&metadata)?,
-            output_path: output_path.to_string(),
-            output_format: output_format.to_string(),
-            template,
-            css,
-            resource_path,
+            units: build.units,
+            metadata: serde_json::to_value(&build.metadata)?,
+            output_path: build.output_path,
+            output_format: build.output_format,
+            template: build.template,
+            css: build.css,
+            resource_path: build.resource_path,
+            toc: build.toc,
+            lua_filters: build.lua_filters,
+            top_level_division: build.top_level_division,
         };
         self.client.pandoc_build(params).await
     }

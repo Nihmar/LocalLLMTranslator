@@ -403,6 +403,19 @@ pub struct PandocParams {
     /// empty, keeping the wire form identical to the pre-M2 contract.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub resource_path: Vec<String>,
+    /// Add the table of contents (`--toc`). Omitted when false.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub toc: bool,
+    /// Ordered `--lua-filter` arguments. Omitted when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lua_filters: Vec<String>,
+    /// Book-style top-level division (`chapter` for LaTeX/PDF). Omitted when `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_level_division: Option<String>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -679,6 +692,33 @@ mod tests {
         };
         let value = serde_json::to_value(&params).unwrap();
         assert_eq!(value["resource_path"], serde_json::json!(["/work"]));
+    }
+
+    #[test]
+    fn pandoc_params_omit_the_m5_defaults_when_unset() {
+        let params = PandocParams {
+            output_path: "/out/book.epub".into(),
+            output_format: "epub".into(),
+            ..Default::default()
+        };
+        let value = serde_json::to_value(&params).unwrap();
+        assert!(value.get("toc").is_none(), "toc=false must not be sent");
+        assert!(value.get("lua_filters").is_none());
+        assert!(value.get("top_level_division").is_none());
+
+        let params = PandocParams {
+            toc: true,
+            lua_filters: vec!["/f/footnotes.lua".into()],
+            top_level_division: Some("chapter".into()),
+            ..params
+        };
+        let value = serde_json::to_value(&params).unwrap();
+        assert_eq!(value["toc"], serde_json::json!(true));
+        assert_eq!(
+            value["lua_filters"],
+            serde_json::json!(["/f/footnotes.lua"])
+        );
+        assert_eq!(value["top_level_division"], serde_json::json!("chapter"));
     }
 
     #[test]
