@@ -182,6 +182,7 @@ async fn qa_scan_flags_a_controlled_chunk() -> Result<()> {
         Some("empty"),
         Some("critical"),
         None,
+        None,
     )
     .await?;
     ensure!(

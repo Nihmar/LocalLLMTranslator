@@ -4,7 +4,7 @@
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
-use super::pipeline_deps;
+use super::{pipeline_deps, Ack};
 use crate::db::models::{QaFinding, Suggestion};
 use crate::db::repo;
 use crate::error::{AppError, Result};
@@ -117,6 +117,9 @@ pub struct QaReportRequest {
     pub severity: Option<String>,
     #[serde(default)]
     pub chunk_id: Option<String>,
+    /// `open` | `resolved` | `ignored`; `None` returns every status.
+    #[serde(default)]
+    pub status: Option<String>,
 }
 
 #[tauri::command]
@@ -127,6 +130,32 @@ pub async fn qa_report(state: State<'_, AppState>, req: QaReportRequest) -> Resu
         req.kind.as_deref(),
         req.severity.as_deref(),
         req.chunk_id.as_deref(),
+        req.status.as_deref(),
     )
     .await
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct QaFindingStatusRequest {
+    pub id: String,
+    /// `open` | `resolved` | `ignored`.
+    pub status: String,
+}
+
+/// Close or reopen a QA finding. Conflicts resolved from the Series view use this; the
+/// re-scan of a chunk replaces its findings anyway, so a closed finding is only a decision
+/// marker until the next scan.
+#[tauri::command]
+pub async fn qa_finding_set_status(
+    state: State<'_, AppState>,
+    req: QaFindingStatusRequest,
+) -> Result<Ack> {
+    let status = req.status.as_str();
+    if !matches!(status, "open" | "resolved" | "ignored") {
+        return Err(AppError::Invalid(format!(
+            "unknown QA finding status '{status}'"
+        )));
+    }
+    repo::set_qa_finding_status(&state.pool, &req.id, status).await?;
+    Ok(Ack::done())
 }

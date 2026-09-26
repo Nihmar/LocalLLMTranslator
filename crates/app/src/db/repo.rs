@@ -1047,21 +1047,35 @@ pub async fn list_qa_findings_filtered(
     kind: Option<&str>,
     severity: Option<&str>,
     chunk_id: Option<&str>,
+    status: Option<&str>,
 ) -> Result<Vec<QaFinding>> {
     let rows = sqlx::query_as::<_, QaFinding>(
         "SELECT * FROM qa_finding WHERE project_id = ?1 \
          AND (?2 IS NULL OR kind = ?2) \
          AND (?3 IS NULL OR severity = ?3) \
          AND (?4 IS NULL OR chunk_id = ?4) \
+         AND (?5 IS NULL OR status = ?5) \
          ORDER BY CASE severity WHEN 'critical' THEN 0 WHEN 'major' THEN 1 ELSE 2 END, kind, created_at",
     )
     .bind(project_id)
     .bind(kind)
     .bind(severity)
     .bind(chunk_id)
+    .bind(status)
     .fetch_all(pool)
     .await?;
     Ok(rows)
+}
+
+/// Set a finding's status (`open`, `resolved`, `ignored`). Returns the rows affected, so a
+/// caller can tell a real transition from a no-op.
+pub async fn set_qa_finding_status(pool: &SqlitePool, id: &str, status: &str) -> Result<u64> {
+    let res = sqlx::query("UPDATE qa_finding SET status = ?2 WHERE id = ?1")
+        .bind(id)
+        .bind(status)
+        .execute(pool)
+        .await?;
+    Ok(res.rows_affected())
 }
 
 /// Replace a chunk's findings on a re-scan.
@@ -1488,6 +1502,74 @@ mod tests {
                 .as_deref(),
             Some("Ciao"),
             "the two canons coexist"
+        );
+    }
+
+    #[tokio::test]
+    async fn qa_findings_can_be_filtered_by_status_and_closed() {
+        let pool = connect_memory().await.expect("pool");
+        seed(&pool).await;
+        let id = new_id();
+        insert_qa_finding(
+            &pool,
+            &QaFinding {
+                id: id.clone(),
+                project_id: "p".to_string(),
+                chunk_id: None,
+                block_id: None,
+                kind: "glossary_conflict".to_string(),
+                severity: "minor".to_string(),
+                details_json: "{}".to_string(),
+                status: "open".to_string(),
+                created_at: now(),
+            },
+        )
+        .await
+        .expect("finding");
+
+        let open = list_qa_findings_filtered(
+            &pool,
+            "p",
+            Some("glossary_conflict"),
+            None,
+            None,
+            Some("open"),
+        )
+        .await
+        .expect("open");
+        assert_eq!(open.len(), 1);
+        assert!(
+            list_qa_findings_filtered(&pool, "p", None, None, None, Some("resolved"))
+                .await
+                .expect("resolved")
+                .is_empty()
+        );
+
+        assert_eq!(
+            set_qa_finding_status(&pool, &id, "resolved")
+                .await
+                .expect("close"),
+            1
+        );
+        assert_eq!(
+            list_qa_findings_filtered(&pool, "p", None, None, None, Some("resolved"))
+                .await
+                .expect("resolved")
+                .len(),
+            1
+        );
+        // Reopening works too, and an unknown id is a no-op.
+        assert_eq!(
+            set_qa_finding_status(&pool, &id, "open")
+                .await
+                .expect("reopen"),
+            1
+        );
+        assert_eq!(
+            set_qa_finding_status(&pool, "missing", "resolved")
+                .await
+                .expect("missing"),
+            0
         );
     }
 
