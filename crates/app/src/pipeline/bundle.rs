@@ -69,12 +69,7 @@ pub async fn export_project(
     }
 
     // A consistent database snapshot; SQLite refuses an existing destination.
-    let database_snapshot = data_dir.join(format!("export-{}.sqlite", new_id()));
-    let _ = tokio::fs::remove_file(&database_snapshot).await;
-    sqlx::query("VACUUM INTO ?1")
-        .bind(database_snapshot.to_string_lossy().to_string())
-        .execute(pool)
-        .await?;
+    let database_snapshot = snapshot_database(pool, data_dir).await?;
 
     let manifest = BundleManifest {
         format_version: FORMAT_VERSION,
@@ -106,6 +101,20 @@ pub async fn export_project(
         bytes,
         files,
     })
+}
+
+/// A consistent `VACUUM INTO` snapshot of the database, inside `data_dir`.
+///
+/// Shared with the series bundle, which stores one snapshot for all the member books.
+/// The caller owns the returned file and removes it when done.
+pub(crate) async fn snapshot_database(pool: &SqlitePool, data_dir: &Path) -> Result<PathBuf> {
+    let snapshot = data_dir.join(format!("export-{}.sqlite", new_id()));
+    let _ = tokio::fs::remove_file(&snapshot).await;
+    sqlx::query("VACUUM INTO ?1")
+        .bind(snapshot.to_string_lossy().to_string())
+        .execute(pool)
+        .await?;
+    Ok(snapshot)
 }
 
 /// Extract `archive_path` and import its project into the local database.
@@ -193,7 +202,7 @@ async fn import_staged(pool: &SqlitePool, data_dir: &Path, staging: &Path) -> Re
 
 /// Copy the project-owned rows from the attached archive database. `ATTACH` is
 /// per-connection, so the whole copy runs on one pooled connection.
-async fn copy_project_rows(
+pub(crate) async fn copy_project_rows(
     pool: &SqlitePool,
     database: &Path,
     project_id: &str,
@@ -401,7 +410,7 @@ fn write_archive(
 
 /// Add a directory tree to the archive, skipping `exclude` and anything that is
 /// not a regular file or directory.
-fn add_tree(
+pub(crate) fn add_tree(
     zip: &mut zip::ZipWriter<File>,
     root: &Path,
     prefix: &str,
@@ -450,7 +459,7 @@ fn extract_archive(archive: &Path, destination: &Path) -> Result<()> {
 /// Extract `archive` into `destination`, refusing an archive that is too large or holds
 /// too many entries. The byte budget is enforced while copying, so a header that lies
 /// about its entry size cannot smuggle a bomb past it.
-fn extract_archive_with_limits(
+pub(crate) fn extract_archive_with_limits(
     archive: &Path,
     destination: &Path,
     max_entries: usize,
