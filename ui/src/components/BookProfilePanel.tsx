@@ -67,6 +67,8 @@ interface GlossaryRowForm {
   kind: string;
   status: string;
   note: string;
+  /** Optimistic-lock revision of the persisted row; `0` for a new term. */
+  revision: number;
 }
 
 interface FormState {
@@ -122,6 +124,7 @@ const GLOSSARY_STATUSES: ReadonlyArray<{ value: string; label: string }> = [
   { value: "candidate", label: "Candidato" },
   { value: "approved", label: "Approvato" },
   { value: "rejected", label: "Rifiutato" },
+  { value: "conflict", label: "Conflitto" },
 ];
 
 function emptyFields(): Record<FieldKey, FieldForm> {
@@ -177,6 +180,7 @@ function formFromSnapshot(snapshot: ReconSnapshot): FormState {
     kind: term.kind,
     status: term.status,
     note: term.note ?? "",
+    revision: term.revision,
   }));
   return { fields, styleGuide: snapshot.style_guide, terms, glossary };
 }
@@ -366,7 +370,7 @@ export function BookProfilePanel({ projectId, reloadToken }: BookProfilePanelPro
       ...current,
       glossary: [
         ...current.glossary,
-        { id: null, source: "", target: "", kind: "term", status: "candidate", note: "" },
+        { id: null, source: "", target: "", kind: "term", status: "candidate", note: "", revision: 0 },
       ],
     }));
   }
@@ -412,6 +416,7 @@ export function BookProfilePanel({ projectId, reloadToken }: BookProfilePanelPro
           kind: row.kind,
           note: row.note,
           status: row.status,
+          expected_revision: row.id === null ? null : row.revision,
         });
       }
       setDeletedTerms([]);

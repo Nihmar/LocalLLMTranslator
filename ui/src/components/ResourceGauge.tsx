@@ -140,6 +140,37 @@ export function ResourceGauge({ metrics, loading = false, compact = false }: Res
             </ul>
           )}
         </div>
+
+        {/* Per-endpoint LLM capacity: a capped sub-agent must be explained,
+            not look like a slow machine. */}
+        {metrics.endpoints.length > 0 ? (
+          <div>
+            <div className="stat-label mb-1">Slot per endpoint (in uso / limite)</div>
+            <ul className="space-y-1">
+              {metrics.endpoints.map((endpoint) => (
+                <li
+                  key={endpoint.role}
+                  className="flex items-center justify-between gap-2 text-xs"
+                  title={endpoint.reason}
+                >
+                  <span className="flex items-center gap-1">
+                    <span className="mono-chip">{endpoint.role}</span>
+                    {endpoint.endpoint_id === null ? (
+                      <span className="badge badge-neutral">non assegnato</span>
+                    ) : null}
+                  </span>
+                  <span className="font-mono text-muted tabular-nums">
+                    {formatNumber(endpoint.in_flight)} / {formatNumber(endpoint.limit)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+            <p className="field-hint">
+              Limite = min (max_concurrency, slot riportati da /props). Passa il mouse su una riga
+              per il motivo.
+            </p>
+          </div>
+        ) : null}
       </div>
     </div>
   );

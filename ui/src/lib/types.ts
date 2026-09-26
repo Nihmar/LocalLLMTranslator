@@ -369,10 +369,12 @@ export interface GlossaryUpsertRequest {
   target?: string | null;
   kind?: string | null;
   note?: string | null;
-  /** `approved` | `candidate` | `rejected`; defaults to `approved`. */
+  /** `approved` | `candidate` | `rejected` | `conflict`; defaults to `approved`. */
   status?: string | null;
   source_lang?: string | null;
   target_lang?: string | null;
+  /** Optimistic lock: the revision the edit started from. */
+  expected_revision?: number | null;
 }
 
 // --- review and QA (PLAN.md §11.4) ---------------------------------------------------------
@@ -571,6 +573,18 @@ export interface JobCount {
 }
 
 /**
+ * Per-role LLM capacity (`resources::endpoints::EndpointUsage`, PLAN.md §10). The UI shows it so
+ * a capped sub-agent is explained instead of looking slow.
+ */
+export interface EndpointUsage {
+  role: string;
+  endpoint_id: string | null;
+  limit: number;
+  in_flight: number;
+  reason: string;
+}
+
+/**
  * Result of `metrics_get` (`commands::metrics::Metrics`): a point-in-time snapshot of
  * machine resources, queue depth and worker state. `metrics://tick` carries a closely related
  * payload (see `MetricsTickEvent`).
@@ -581,6 +595,8 @@ export interface Metrics {
   suggested_parallel: number;
   reason: ParallelReason;
   jobs: JobCount[];
+  /** Per-role endpoint capacity and in-flight counts. */
+  endpoints: EndpointUsage[];
   sidecar_in_flight: number;
   worker_running: boolean;
   worker_paused: boolean;
@@ -695,6 +711,7 @@ export interface MetricsTickEvent {
   suggested_parallel: number;
   reason: ParallelReason;
   jobs: JobCount[];
+  endpoints: EndpointUsage[];
   worker_running: boolean;
   worker_paused: boolean;
   sidecar: SidecarStatus;
