@@ -112,7 +112,7 @@ Codes: `-32700` parse, `-32600` invalid request, `-32601` method not found,
 | `prepare_text` | `{block_ids?, text}` | `{llm_text, placeholders[[n,literal]], used_blocks[int]}` |
 | `reinject` | `{text, placeholders, expected_blocks}` | `{blocks_md[], placeholders_ok, missing[int], duplicated[int], block_count_ok}` |
 | `qa_check` | `{source_text, target_text, glossary{}, placeholders[[n,literal]]}` | `{findings[Finding]}` |
-| `pandoc_build` | `{units[{path,title}], metadata{}, output_path, output_format, template?, css?, resource_path[]}` | `{output_path, log, duration_ms}` |
+| `pandoc_build` | `{units[{path,title}], metadata{}, output_path, output_format, template?, css?, resource_path[], toc?, lua_filters?, top_level_division?}` | `{output_path, log, duration_ms}` |
 | `estimate_tokens` | `{texts[]}` | `{counts[int]}` |
 
 `Block` = `{id, chapter_id, order, kind, level, source_md, source_text, translatable, attrs{}, content_hash}`
@@ -141,7 +141,7 @@ Commands: `project_list`, `project_create`, `project_get`, `project_delete`,
 `glossary_list`, `glossary_upsert`, `glossary_delete`,
 `review_start`, `suggestion_list`, `suggestion_accept`, `suggestion_reject`, `qa_report`,
 `job_list`, `chunk_list`, `chunk_get`, `metrics_get`, `sidecar_status`,
-`export_build`, `open_path`.
+`export_build`, `export_preview`, `export_history`, `open_path`.
 
 `glossary_upsert` takes `{req: {id?, project_id, source, target, kind, note?, status?, source_lang?,
  target_lang?}}` and returns the persisted row; `glossary_delete` takes the row id; `glossary_list`
@@ -161,6 +161,14 @@ correction to the block translation (origin `editor` or `proofreader`) and recom
 reads it back together with the confirmed memory values and the glossary; `recon_confirm` writes
 the confirmed fields into `project_memory` and the accepted proper nouns into `glossary_term`.
 No new event: the job lifecycle is announced on `job://progress`.
+
+`export_build` takes `{req: {project_id, output_format, output_path?, template?, css?, toc?,
+chapter_id?, force?}}`: with `chapter_id` it builds that chapter standalone, `force` bypasses the
+unchanged-build skip. It returns the outcome (including `from_cache`, `changed_units` and
+`reused_units`) and emits `export://progress` while it runs. `export_preview` takes
+`{req: {project_id, chapter_id?}}` and returns the composed markdown units plus the rendered
+`metadata.yaml` without invoking Pandoc. `export_history` takes `{project_id}` and returns the
+last ten build records.
 
 Events: `job://progress`, `log://line`, `metrics://tick`, `sidecar://status`,
 `sidecar://progress`, `export://progress`.

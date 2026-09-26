@@ -735,6 +735,11 @@ A 5-step wizard, but each step is a freely visitable route (not a constraint):
    the chunk's `target_md`, so the exporter sees the reviewed text.
 5. **Export** — per-chapter unit, `metadata.yaml`, template/CSS/LaTeX choice, preview,
    selective rebuild of only the modified chapter, build history.
+   Mechanics: the composed units are hashed (content, metadata and the template/CSS/filters in
+   use) and the last successful build is kept in `project_memory['export_state']`; an unchanged
+   build is skipped and reported as such, `changed_units`/`reused_units` say what moved, and
+   `chapter_id` builds one chapter standalone. The preview returns the composed markdown and the
+   `metadata.yaml` without invoking Pandoc; the build history is the last ten records.
 
 Plus: **Job dashboard** (per-chunk progress, ETA computed from the real throughput, log, resources)
 and **Projects** (multiple, resume, export/import `.llmtz`).
@@ -758,7 +763,7 @@ Requests `{"jsonrpc":"2.0","id":N,"method":"...","params":{...}}`; responses `re
 | `prepare_text` | `{llm_text, placeholders[]}` |
 | `reinject` | `{blocks_md[], placeholders_ok, missing[], duplicated[]}` |
 | `qa_check` | `{findings[]}` |
-| `pandoc_build` | `{output_path, log, duration_ms}` |
+| `pandoc_build` | `{units[{path,title}], metadata{}, output_path, output_format, template?, css?, resource_path[], toc?, lua_filters?, top_level_division?}` | `{output_path, log, duration_ms}` |
 | `estimate_tokens` | `{counts[]}` (heuristic fallback, used if `/tokenize` is not available) |
 
 The sidecar is **stateless** and does not touch the DB: every method is a pure function. This is
@@ -769,7 +774,7 @@ what makes it safe to restart it and re-send the in-flight requests.
 - Commands: `project_*`, `endpoint_*`, `role_binding_*`, `ingest_start`, `translation_start/pause/resume/cancel`,
   `recon_start`, `recon_get`, `recon_confirm`, `glossary_list`, `glossary_upsert`, `glossary_delete`,
   `job_list`, `chunk_get`, `review_start`, `suggestion_list/accept/reject`, `qa_report`,
-  `export_build`, `export_preview`, `metrics_get`.
+  `export_build`, `export_preview`, `export_history`, `metrics_get`.
 - Events: `job://progress`, `log://line`, `metrics://tick`, `qa://finding`, `sidecar://status`,
   `sidecar://progress`, `export://progress`.
 
