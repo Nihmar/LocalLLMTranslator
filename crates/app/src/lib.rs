@@ -109,6 +109,28 @@ impl JobDispatcher for PipelineDispatcher {
                 .await?;
                 Ok(())
             }
+            "edit_chunk" => {
+                let chunk_id = commands::payload_str(&payload, "chunk_id").ok_or_else(|| {
+                    AppError::Invalid("edit_chunk job is missing chunk_id".into())
+                })?;
+                crate::pipeline::review::run_edit_chunk(&self.deps, Some(&job.id), &chunk_id)
+                    .await?;
+                Ok(())
+            }
+            "proofread_chunk" => {
+                let chunk_id = commands::payload_str(&payload, "chunk_id").ok_or_else(|| {
+                    AppError::Invalid("proofread_chunk job is missing chunk_id".into())
+                })?;
+                crate::pipeline::review::run_proofread_chunk(&self.deps, Some(&job.id), &chunk_id)
+                    .await?;
+                Ok(())
+            }
+            "qa_scan" => {
+                let request: crate::pipeline::qa::QaScanPayload = serde_json::from_value(payload)?;
+                crate::pipeline::qa::scan_chunk(&self.deps, &job.project_id, &request.chunk_id)
+                    .await?;
+                Ok(())
+            }
             "export_unit" => {
                 let request: crate::pipeline::export::ExportRequest =
                     serde_json::from_value(payload)?;
@@ -157,6 +179,11 @@ pub fn run() {
             commands::glossary::glossary_list,
             commands::glossary::glossary_upsert,
             commands::glossary::glossary_delete,
+            commands::review::review_start,
+            commands::review::suggestion_list,
+            commands::review::suggestion_accept,
+            commands::review::suggestion_reject,
+            commands::review::qa_report,
             commands::jobs::job_list,
             commands::chunks::chunk_list,
             commands::chunks::chunk_get,

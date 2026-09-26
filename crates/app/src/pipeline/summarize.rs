@@ -311,17 +311,7 @@ pub async fn maybe_enqueue_summaries(
         chapter_id: chapter_id.to_string(),
         final_run,
     })?;
-    let payload_json = serde_json::to_string(&payload)?;
-    let pending: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM job WHERE project_id = ?1 AND kind = ?2 \
-         AND state IN ('pending', 'leased', 'running') AND payload_json = ?3",
-    )
-    .bind(project_id)
-    .bind(JOB_KIND)
-    .bind(&payload_json)
-    .fetch_one(pool)
-    .await?;
-    if pending > 0 {
+    if crate::scheduler::queue::has_pending(pool, project_id, JOB_KIND, &payload).await? {
         return Ok(None);
     }
 

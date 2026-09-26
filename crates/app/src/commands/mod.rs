@@ -11,6 +11,7 @@ pub mod metrics;
 pub mod misc;
 pub mod project;
 pub mod recon;
+pub mod review;
 pub mod role_binding;
 pub mod sidecar;
 pub mod translation;

@@ -413,6 +413,14 @@ pub async fn list_blocks(pool: &SqlitePool, document_id: &str) -> Result<Vec<Blo
     Ok(rows)
 }
 
+pub async fn get_block(pool: &SqlitePool, id: &str) -> Result<Option<Block>> {
+    let row = sqlx::query_as::<_, Block>("SELECT * FROM block WHERE id = ?1")
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row)
+}
+
 pub async fn list_chunks(pool: &SqlitePool, document_id: &str) -> Result<Vec<Chunk>> {
     let rows = sqlx::query_as::<_, Chunk>(
         "SELECT * FROM chunk WHERE document_id = ?1 ORDER BY order_index",
@@ -531,6 +539,122 @@ pub async fn list_block_translations(
     Ok(rows)
 }
 
+/// Store the recomposed markdown of a chunk after a review accepted a change.
+pub async fn update_chunk_target(pool: &SqlitePool, chunk_id: &str, target_md: &str) -> Result<()> {
+    sqlx::query("UPDATE chunk SET target_md = ?2, updated_at = ?3 WHERE id = ?1")
+        .bind(chunk_id)
+        .bind(target_md)
+        .bind(now())
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// suggestion
+// ---------------------------------------------------------------------------
+
+/// A project's suggestions, newest first; every filter is optional.
+pub async fn list_suggestions(
+    pool: &SqlitePool,
+    project_id: &str,
+    chunk_id: Option<&str>,
+    pass: Option<&str>,
+    status: Option<&str>,
+) -> Result<Vec<Suggestion>> {
+    let rows = sqlx::query_as::<_, Suggestion>(
+        "SELECT s.* FROM suggestion s \
+         JOIN chunk c ON c.id = s.chunk_id \
+         JOIN document d ON d.id = c.document_id \
+         WHERE d.project_id = ?1 \
+         AND (?2 IS NULL OR s.chunk_id = ?2) \
+         AND (?3 IS NULL OR s.pass = ?3) \
+         AND (?4 IS NULL OR s.status = ?4) \
+         ORDER BY s.created_at DESC, s.id",
+    )
+    .bind(project_id)
+    .bind(chunk_id)
+    .bind(pass)
+    .bind(status)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+pub async fn get_suggestion(pool: &SqlitePool, id: &str) -> Result<Option<Suggestion>> {
+    let row = sqlx::query_as::<_, Suggestion>("SELECT * FROM suggestion WHERE id = ?1")
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row)
+}
+
+pub async fn insert_suggestion(pool: &SqlitePool, s: &Suggestion) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO suggestion (id, chunk_id, pass, block_id, field, original, proposed, \
+         reason, severity, quote, status, created_at) \
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+    )
+    .bind(s.id.as_str())
+    .bind(s.chunk_id.as_str())
+    .bind(s.pass.as_str())
+    .bind(s.block_id.as_deref())
+    .bind(s.field.as_deref())
+    .bind(s.original.as_deref())
+    .bind(s.proposed.as_deref())
+    .bind(s.reason.as_deref())
+    .bind(s.severity.as_deref())
+    .bind(s.quote.as_deref())
+    .bind(s.status.as_str())
+    .bind(s.created_at.as_str())
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn set_suggestion_status(pool: &SqlitePool, id: &str, status: &str) -> Result<()> {
+    sqlx::query("UPDATE suggestion SET status = ?2 WHERE id = ?1")
+        .bind(id)
+        .bind(status)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Mark the still-pending suggestions of a pass as superseded, so a re-run
+/// replaces the old proposals instead of piling up.
+pub async fn supersede_suggestions(pool: &SqlitePool, chunk_id: &str, pass: &str) -> Result<u64> {
+    let result = sqlx::query(
+        "UPDATE suggestion SET status = 'superseded' WHERE chunk_id = ?1 AND pass = ?2 \
+         AND status = 'pending'",
+    )
+    .bind(chunk_id)
+    .bind(pass)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected())
+}
+
+/// Sibling proposals were computed against the text that just changed, so
+/// accepting one supersedes the other pending ones for the same block.
+pub async fn supersede_suggestions_for_block(
+    pool: &SqlitePool,
+    chunk_id: &str,
+    pass: &str,
+    block_id: &str,
+) -> Result<u64> {
+    let result = sqlx::query(
+        "UPDATE suggestion SET status = 'superseded' WHERE chunk_id = ?1 AND pass = ?2 \
+         AND block_id = ?3 AND status = 'pending'",
+    )
+    .bind(chunk_id)
+    .bind(pass)
+    .bind(block_id)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected())
+}
+
 pub async fn insert_qa_finding(pool: &SqlitePool, f: &QaFinding) -> Result<()> {
     sqlx::query(
         "INSERT INTO qa_finding (id, project_id, chunk_id, block_id, kind, severity, \
@@ -558,6 +682,39 @@ pub async fn list_qa_findings(pool: &SqlitePool, project_id: &str) -> Result<Vec
     .fetch_all(pool)
     .await?;
     Ok(rows)
+}
+
+/// Findings of one project, each filter optional.
+pub async fn list_qa_findings_filtered(
+    pool: &SqlitePool,
+    project_id: &str,
+    kind: Option<&str>,
+    severity: Option<&str>,
+    chunk_id: Option<&str>,
+) -> Result<Vec<QaFinding>> {
+    let rows = sqlx::query_as::<_, QaFinding>(
+        "SELECT * FROM qa_finding WHERE project_id = ?1 \
+         AND (?2 IS NULL OR kind = ?2) \
+         AND (?3 IS NULL OR severity = ?3) \
+         AND (?4 IS NULL OR chunk_id = ?4) \
+         ORDER BY CASE severity WHEN 'critical' THEN 0 WHEN 'major' THEN 1 ELSE 2 END, kind, created_at",
+    )
+    .bind(project_id)
+    .bind(kind)
+    .bind(severity)
+    .bind(chunk_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// Replace a chunk's findings on a re-scan.
+pub async fn delete_qa_findings_for_chunk(pool: &SqlitePool, chunk_id: &str) -> Result<u64> {
+    let result = sqlx::query("DELETE FROM qa_finding WHERE chunk_id = ?1")
+        .bind(chunk_id)
+        .execute(pool)
+        .await?;
+    Ok(result.rows_affected())
 }
 
 #[allow(clippy::too_many_arguments)]

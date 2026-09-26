@@ -12,7 +12,9 @@ use std::time::{Duration, Instant};
 use anyhow::{bail, Context, Result};
 use sqlx::SqlitePool;
 
-use app_lib::db::models::{Block, Chapter, Chunk, Document, LlmEndpoint, Project, RoleBinding};
+use app_lib::db::models::{
+    Block, BlockTranslation, Chapter, Chunk, Document, LlmEndpoint, Project, RoleBinding,
+};
 use app_lib::db::{self, new_id, now, repo};
 use app_lib::events::{sidecar_event_sink, EventEmitter, NullEmitter};
 use app_lib::pipeline::PipelineDeps;
@@ -141,34 +143,7 @@ pub async fn seed_project(
     }
 
     if bind_orchestrator {
-        let endpoint_id = new_id();
-        repo::upsert_endpoint(
-            pool,
-            &LlmEndpoint {
-                id: endpoint_id.clone(),
-                name: format!("fake-{name}"),
-                base_url: base_url.to_string(),
-                api_key_ref: None,
-                max_concurrency: Some(1),
-                notes: None,
-                last_health_at: None,
-                last_health_ok: None,
-                props_json: None,
-            },
-        )
-        .await?;
-        repo::upsert_role_binding(
-            pool,
-            &RoleBinding {
-                id: new_id(),
-                endpoint_id,
-                role: "orchestrator".to_string(),
-                model: "fake-model".to_string(),
-                params_json: "{}".to_string(),
-                priority: 0,
-            },
-        )
-        .await?;
+        bind_role(pool, name, "orchestrator", base_url).await?;
     }
 
     Ok(Seeded {
@@ -176,6 +151,39 @@ pub async fn seed_project(
         document_id,
         chapter_id,
     })
+}
+
+/// Create an endpoint pointing at `base_url` and bind `role` to it.
+pub async fn bind_role(pool: &SqlitePool, name: &str, role: &str, base_url: &str) -> Result<()> {
+    let endpoint_id = new_id();
+    repo::upsert_endpoint(
+        pool,
+        &LlmEndpoint {
+            id: endpoint_id.clone(),
+            name: format!("{name}-{role}"),
+            base_url: base_url.to_string(),
+            api_key_ref: None,
+            max_concurrency: Some(1),
+            notes: None,
+            last_health_at: None,
+            last_health_ok: None,
+            props_json: None,
+        },
+    )
+    .await?;
+    repo::upsert_role_binding(
+        pool,
+        &RoleBinding {
+            id: new_id(),
+            endpoint_id,
+            role: role.to_string(),
+            model: "fake-model".to_string(),
+            params_json: "{}".to_string(),
+            priority: 0,
+        },
+    )
+    .await?;
+    Ok(())
 }
 
 /// Insert one chunk of the chapter; `translated` marks it `done` with a
@@ -187,6 +195,26 @@ pub async fn add_chunk(
     order: i64,
     translated: Option<&str>,
 ) -> Result<String> {
+    add_chunk_with_blocks(
+        pool,
+        document_id,
+        chapter_id,
+        order,
+        &[format!("b{order:06}")],
+        translated,
+    )
+    .await
+}
+
+/// Insert a chunk over an explicit list of blocks.
+pub async fn add_chunk_with_blocks(
+    pool: &SqlitePool,
+    document_id: &str,
+    chapter_id: &str,
+    order: i64,
+    block_ids: &[String],
+    translated: Option<&str>,
+) -> Result<String> {
     let chunk_id = format!("c{order:06}");
     let timestamp = now();
     repo::insert_chunk(
@@ -196,7 +224,7 @@ pub async fn add_chunk(
             document_id: document_id.to_string(),
             chapter_id: Some(chapter_id.to_string()),
             order_index: order,
-            block_ids_json: serde_json::to_string(&[format!("b{order:06}")])?,
+            block_ids_json: serde_json::to_string(block_ids)?,
             source_md: format!("Source paragraph {order}."),
             token_estimate: 20,
             context_json: "{}".to_string(),
@@ -219,6 +247,30 @@ pub async fn add_chunk(
     )
     .await?;
     Ok(chunk_id)
+}
+
+/// Store a block translation.
+pub async fn set_block_translation(
+    pool: &SqlitePool,
+    block_id: &str,
+    chunk_id: &str,
+    origin: &str,
+    text: &str,
+) -> Result<()> {
+    repo::upsert_block_translation(
+        pool,
+        &BlockTranslation {
+            block_id: block_id.to_string(),
+            chunk_id: chunk_id.to_string(),
+            text_md: text.to_string(),
+            placeholders_ok: true,
+            origin: origin.to_string(),
+            edited_by_user: false,
+            updated_at: now(),
+        },
+    )
+    .await?;
+    Ok(())
 }
 
 /// Mark a chunk `done` with a translation.

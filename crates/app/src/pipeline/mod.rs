@@ -3,7 +3,9 @@
 pub mod chat_call;
 pub mod export;
 pub mod ingest;
+pub mod qa;
 pub mod recon;
+pub mod review;
 pub mod summarize;
 pub mod translate;
 

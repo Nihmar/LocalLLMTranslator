@@ -361,6 +361,16 @@ async fn translate_chunk_inner(
         .collect();
     let target_md = aligned_target_md(block_count_ok, &chunk_blocks, &translations);
 
+    // Quality scan (M4): advisory findings on the validated markdown, so a
+    // re-scan and the inline run agree. A QA failure must never fail a chunk.
+    if let Some(target) = target_md.as_deref() {
+        if let Err(error) =
+            crate::pipeline::qa::scan_translated_chunk(deps, &project_id, &chunk, target).await
+        {
+            tracing::warn!(chunk_id = %chunk.id, %error, "qa scan failed");
+        }
+    }
+
     let status = if needs_review_reason.is_some() {
         "needs_review"
     } else {

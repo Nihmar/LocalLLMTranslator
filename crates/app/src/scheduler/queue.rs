@@ -64,6 +64,28 @@ impl NewJob {
     }
 }
 
+/// Whether an equivalent job (same project, kind and payload) is already
+/// pending, leased or running. Callers use it so an idempotent enqueue does not
+/// pile up duplicates.
+pub async fn has_pending(
+    pool: &SqlitePool,
+    project_id: &str,
+    kind: &str,
+    payload: &Value,
+) -> Result<bool> {
+    let payload_json = serde_json::to_string(payload)?;
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM job WHERE project_id = ?1 AND kind = ?2 \
+         AND state IN ('pending', 'leased', 'running') AND payload_json = ?3",
+    )
+    .bind(project_id)
+    .bind(kind)
+    .bind(&payload_json)
+    .fetch_one(pool)
+    .await?;
+    Ok(count > 0)
+}
+
 /// Insert a new pending job and return its id.
 pub async fn enqueue(pool: &SqlitePool, job: &NewJob) -> Result<String> {
     let id = new_id();
