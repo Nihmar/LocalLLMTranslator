@@ -1,8 +1,7 @@
 # LocalLLMTranslator — Architecture and Implementation Plan
 
-> Status: **M0, M1 and M2 complete; M3 underway (book reconnaissance implemented).** This
-> document is the source of truth for the architecture; the code follows it milestone by
-> milestone.
+> Status: **M0–M3 complete; M4 next (bilingual review and QA).** This document is the source of
+> truth for the architecture; the code follows it milestone by milestone.
 
 ---
 
@@ -808,7 +807,8 @@ context); M6 after M3 (concurrency requires the versioned glossary).
 - **Rust tests**: `test_queue` (claim, expired lease, retry, concurrency), `test_context_builder`
   (budget and priorities), `test_cache` (hit/miss), `test_resources` (serial degradation with a
   fake VRAM profile), `test_scheduler` (idempotency on re-run), `test_recon` (candidate profile →
-  confirmation → what the context builder reads).
+  confirmation → what the context builder reads), `test_summarize` (rolling cadence, candidate
+  terms, an approved term never demoted).
 - **End-to-end integration tests**: EPUB → translation (fake server) → export; interruption
   halfway via `SIGTERM` and resume; verification that the translated Markdown has the same sequence
   of block types as the original.

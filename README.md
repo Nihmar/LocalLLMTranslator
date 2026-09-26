@@ -7,13 +7,14 @@ review → typesetting.
 Everything works **offline**. No telemetry, no analytics, no network calls other than the
 `llama-server` endpoints you configure.
 
-> **Status: M0, M1 and M2 complete, M3 underway.** The skeleton runs end to end: a real EPUB
-> goes through the Python sidecar (extract → blocks → chunks → placeholders), is translated
-> against a `llama-server` endpoint, persisted, resumed after a crash and exported to EPUB and
-> PDF with its images, footnotes and tables intact. Book reconnaissance (PLAN.md §9.4) is
-> implemented: the orchestrator role proposes a candidate profile from local evidence only, the
-> user confirms it field by field, and the confirmed style guide and synopsis become the stable
-> head of every translation prompt. See [Milestones](#milestones).
+> **Status: M0–M3 complete.** The skeleton runs end to end: a real EPUB goes through the Python
+> sidecar (extract → blocks → chunks → placeholders), is translated against a `llama-server`
+> endpoint, persisted, resumed after a crash and exported to EPUB and PDF with its images,
+> footnotes and tables intact. Memory is in place too: book reconnaissance produces a candidate
+> profile the user confirms field by field, the confirmed style guide and synopsis head every
+> prompt, the glossary is filtered to the terms a chunk actually contains, rolling chapter
+> summaries feed the following chapters, and repeated chunks are served from the translation
+> memory without calling the model. See [Milestones](#milestones).
 
 ---
 
@@ -53,7 +54,7 @@ Plain text never travels through the pipeline: an indexed structure always does.
 - **Stable prefix**: the system message is byte-identical for every chunk of the same book, so
   `llama-server` reuses its KV cache and from the second chunk on the prefill is almost free.
 
-### Book profile
+### Book profile and memory
 
 An empty "style guide" box is a bad interface, so M3 opens with *book reconnaissance*. The
 `orchestrator` role receives local evidence only — the extractor metadata, the incipit and the
@@ -63,6 +64,17 @@ synopsis, proper nouns) with the basis of every field. Nothing enters the transl
 until you confirm the fields: then the style guide and synopsis land in the project memory the
 context builder already reads, and the accepted names become glossary terms. With no
 orchestrator model bound the fields stay editable by hand. The app never fetches a page.
+
+While translation runs, the same role maintains the memory: a summary of the chapter so far
+every five chunks, a final summary when the chapter is complete (used as context by the next
+chapters), candidate terms that never demote an existing rendering, and style-note candidates
+the user can add to the guide. The glossary is editable in the profile panel; rejected terms
+never reach a prompt, and only the terms a chunk actually contains are injected, so a book with
+hundreds of entries does not eat the context.
+
+The context budget is not a constant: `ingest` and the translator read `n_ctx` from `/props`
+and may use 60% of it, and the prompt pieces are counted with `/tokenize` when the server
+exposes it, falling back to the documented heuristic when it does not.
 
 The full architecture, the database schema and the IPC contract are in [`PLAN.md`](./PLAN.md).
 The development conventions are in [`AGENTS.md`](./AGENTS.md).
@@ -131,6 +143,7 @@ cd sidecar && uv run pytest tests/test_extractors.py -v    # epub/pdf/markdown i
 cd sidecar && uv run pytest tests/test_rpc.py -v           # json-rpc transport over stdio
 cargo test                                                 # queue, leases, budget, SSE, RPC
 cargo test --test recon -- --nocapture                     # book reconnaissance end to end
+cargo test --test summarize -- --nocapture                 # rolling memory end to end
 cargo test --test walking_skeleton -- --nocapture          # end-to-end, real sidecar
 cd ui && npm run test                                      # optional IPC unit tests
 ```
@@ -181,17 +194,17 @@ tools/          Fake llama-server and fixture generator
 | **M0** | Repo, CI, Tauri window, sidecar, SQLite migrations | ✅ |
 | **M1** | Walking skeleton: EPUB → Markdown → blocks → chunks → translation → Pandoc | ✅ |
 | M2 | Robust EPUB/PDF ingestion, footnotes, tables, images | ✅ |
-| M3 | Glossary, synopsis, rolling summaries, two-level cache | 🟡 reconnaissance, glossary context and the two-level cache are in; rolling chapter summaries and `/tokenize` are next |
+| M3 | Glossary, synopsis, rolling summaries, two-level cache, book reconnaissance | ✅ |
 | M4 | Bilingual review (editor + proofreader), diff, QA report | ⬜ |
 | M5 | Export and typesetting with templates and Lua filters | ⬜ |
 | M6 | Parallel sub-agents with VRAM budget and serial degradation | ⬜ |
 | M7 | Packaging (PyInstaller + Tauri bundle) | ⬜ |
 
-Known gaps, next up: rolling chapter summaries are not generated yet and `/tokenize` is not
-wired into the budget (the chunk budget is still the documented 6000-token default), `qa_check`
-exists on both sides of the wire but is not wired into the pipeline (M4), the bilingual review
-UI is still a placeholder, and PDF extraction is only as good as `pymupdf4llm` on a given
-document.
+Known gaps, next up: the bilingual review (editor/proofreader JSON calls, the diff UI, the QA
+report) is M4 and the review route is still a placeholder; `qa_check` exists on both sides of the
+wire but is not wired into the pipeline; the sidecar's `estimate_tokens` route is intentionally
+unused because the control plane counts exactly via `/tokenize` with a built-in heuristic
+fallback; and PDF extraction is only as good as `pymupdf4llm` on a given document.
 
 ## Product constraints
 
