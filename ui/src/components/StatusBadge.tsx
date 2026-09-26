@@ -44,6 +44,11 @@ const STATUS_MAP: Readonly<Record<string, BadgeDescriptor>> = {
   open: { label: "Aperto", tone: "danger" },
   resolved: { label: "Risolto", tone: "success" },
   ignored: { label: "Ignorato", tone: "neutral" },
+  // glossary / series glossary term status
+  approved: { label: "Approvato", tone: "success" },
+  candidate: { label: "Candidato", tone: "info" },
+  conflict: { label: "Conflitto", tone: "warning" },
+  rejected: { label: "Rifiutato", tone: "neutral" },
 };
 
 const TONE_CLASS: Readonly<Record<BadgeTone, string>> = {

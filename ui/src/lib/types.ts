@@ -815,6 +815,9 @@ export interface SeriesDetail {
   series: Series;
   projects: Project[];
   memory: SeriesMemory[];
+  /** The whole series glossary + aliases, so the view loads with one call. */
+  glossary: SeriesGlossaryTerm[];
+  variants: SeriesGlossaryVariant[];
 }
 
 /** Request body of `series_create` (`commands::series::SeriesCreate`). */

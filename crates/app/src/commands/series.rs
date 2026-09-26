@@ -50,6 +50,9 @@ pub struct SeriesDetail {
     /// Member books, in `series_order`.
     pub projects: Vec<Project>,
     pub memory: Vec<SeriesMemory>,
+    /// The whole series glossary + aliases, so the view loads with one call.
+    pub glossary: Vec<SeriesGlossaryTerm>,
+    pub variants: Vec<SeriesGlossaryVariant>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -152,10 +155,14 @@ pub async fn series_get(state: State<'_, AppState>, id: String) -> Result<Series
         .ok_or_else(|| AppError::NotFound(format!("series {id}")))?;
     let projects = repo::list_projects_for_series(&state.pool, &id).await?;
     let memory = repo::list_series_memory(&state.pool, &id).await?;
+    let glossary = repo::list_series_terms(&state.pool, &id).await?;
+    let variants = repo::list_variants_for_series(&state.pool, &id).await?;
     Ok(SeriesDetail {
         series,
         projects,
         memory,
+        glossary,
+        variants,
     })
 }
 

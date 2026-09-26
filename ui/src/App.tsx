@@ -9,6 +9,7 @@ import { JobsView } from "./routes/JobsView";
 import { ModelsView } from "./routes/ModelsView";
 import { ProjectsView } from "./routes/ProjectsView";
 import { ReviewView } from "./routes/ReviewView";
+import { SeriesView } from "./routes/SeriesView";
 import { TranslateView } from "./routes/TranslateView";
 
 /**
@@ -29,7 +30,8 @@ export type ViewId =
   | "translate"
   | "review"
   | "export"
-  | "jobs";
+  | "jobs"
+  | "series";
 
 interface NavEntry {
   id: ViewId;
@@ -46,6 +48,7 @@ const NAV_ENTRIES: readonly NavEntry[] = [
   { id: "translate", step: "3", label: "Traduzione", hint: "Chunk, avvio, risorse" },
   { id: "review", step: "4", label: "Revisione", hint: "Diff bilingue, suggerimenti, QA" },
   { id: "export", step: "5", label: "Export", hint: "PDF, EPUB, DOCX" },
+  { id: "series", step: "•", label: "Serie", hint: "Canone condiviso tra i libri" },
   { id: "jobs", step: "•", label: "Job", hint: "Coda, ETA, log live" },
 ];
 
@@ -295,6 +298,8 @@ export default function App() {
               onOpenProject={handleOpenProject}
               onNavigate={setView}
             />
+          ) : view === "series" ? (
+            <SeriesView />
           ) : view === "ingest" ? (
             <IngestView project={project} onNavigate={setView} />
           ) : view === "models" ? (
