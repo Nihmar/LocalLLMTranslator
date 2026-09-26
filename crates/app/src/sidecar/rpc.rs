@@ -19,58 +19,13 @@ use crate::sidecar::supervisor::Supervisor;
 /// Default per-request timeout. Ingestion of a large PDF is the slowest call.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(600);
 
-/// Maximum buffered bytes for a single unterminated line (16 MiB).
-const MAX_LINE_LEN: usize = 16 * 1024 * 1024;
-
-// ---------------------------------------------------------------------------
-// Framing
-// ---------------------------------------------------------------------------
-
-/// Splits a byte stream into complete newline-delimited lines.
+/// Maximum buffered bytes for a single sidecar line (64 MiB).
 ///
-/// Handles lines that arrive split across reads (partial lines are buffered
-/// until their terminator arrives) and `\r\n` endings.
-#[derive(Debug)]
-pub struct LineFramer {
-    buf: Vec<u8>,
-}
-
-impl Default for LineFramer {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl LineFramer {
-    pub fn new() -> Self {
-        Self { buf: Vec::new() }
-    }
-
-    /// Feed bytes; returns every line completed by this chunk.
-    pub fn push(&mut self, bytes: &[u8]) -> Vec<String> {
-        self.buf.extend_from_slice(bytes);
-        let mut lines = Vec::new();
-        while let Some(pos) = self.buf.iter().position(|&b| b == b'\n') {
-            let line: Vec<u8> = self.buf.drain(..=pos).collect();
-            // Drop the trailing '\n' and an optional '\r'.
-            let content = &line[..line.len() - 1];
-            let text = String::from_utf8_lossy(content)
-                .trim_end_matches('\r')
-                .to_string();
-            lines.push(text);
-        }
-        if self.buf.len() > MAX_LINE_LEN {
-            tracing::warn!("dropping oversized sidecar line buffer");
-            self.buf.clear();
-        }
-        lines
-    }
-
-    /// Bytes buffered but not yet terminated by a newline.
-    pub fn pending_len(&self) -> usize {
-        self.buf.len()
-    }
-}
+/// A `parse_document` response carries every block of the book on one line and can
+/// legitimately reach several MiB; the cap only stops a runaway writer from
+/// exhausting memory, and a line past it is dropped (the call then times out and
+/// the supervisor restarts the process).
+const MAX_LINE_LEN: usize = 64 * 1024 * 1024;
 
 // ---------------------------------------------------------------------------
 // Message parsing
@@ -231,26 +186,74 @@ impl Pending {
 /// Callback invoked for every out-of-band notification (e.g. `progress`).
 pub type EventSink = Arc<dyn Fn(&str, &Value) + Send + Sync>;
 
-/// Read and dispatch lines until EOF. Malformed lines are logged and skipped.
+/// Read and dispatch lines until EOF. Malformed lines are logged and skipped, and a
+/// line longer than [`MAX_LINE_LEN`] is dropped without buffering its remainder.
 pub async fn read_loop<R: AsyncBufRead + Unpin>(reader: R, pending: Arc<Pending>, sink: EventSink) {
-    let mut lines = reader.lines();
+    read_loop_with_limit(reader, pending, sink, MAX_LINE_LEN).await
+}
+
+/// [`read_loop`] with an explicit line cap, so the framing logic is testable
+/// without writing tens of megabytes through a pipe in a unit test.
+async fn read_loop_with_limit<R: AsyncBufRead + Unpin>(
+    mut reader: R,
+    pending: Arc<Pending>,
+    sink: EventSink,
+    max_line_len: usize,
+) {
+    let mut buf: Vec<u8> = Vec::new();
+    // Set once the line being consumed exceeded the cap: the remaining bytes are
+    // discarded until its newline instead of being buffered.
+    let mut oversized = false;
+
     loop {
-        match lines.next_line().await {
-            Ok(Some(line)) => match parse_incoming(&line) {
-                Incoming::Response { id, result } => {
-                    if !pending.resolve(id, result) {
-                        tracing::debug!(id, "sidecar response for unknown or timed-out id");
-                    }
+        let (end, has_newline) = {
+            let available = match reader.fill_buf().await {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    tracing::warn!(%error, "sidecar stdout read error");
+                    break;
                 }
-                Incoming::Notification { method, params } => sink(&method, &params),
-                Incoming::Ignored => {
-                    tracing::warn!(line = %shorten(&line), "ignoring malformed sidecar line");
+            };
+            if available.is_empty() {
+                break; // EOF
+            }
+            let newline = available.iter().position(|&b| b == b'\n');
+            let end = newline.unwrap_or(available.len());
+            if !oversized {
+                buf.extend_from_slice(&available[..end]);
+                if buf.len() > max_line_len {
+                    tracing::warn!(limit = max_line_len, "dropping an oversized sidecar line");
+                    oversized = true;
+                    buf.clear();
                 }
-            },
-            Ok(None) => break,
-            Err(error) => {
-                tracing::warn!(%error, "sidecar stdout read error");
-                break;
+            }
+            (end, newline.is_some())
+        };
+        reader.consume(end + usize::from(has_newline));
+
+        if !has_newline {
+            // Mid-line: keep buffering the rest of it.
+            continue;
+        }
+        if oversized {
+            // The newline closed a line already dropped; the buffer was cleared when
+            // the cap was hit, so there is nothing to parse.
+            oversized = false;
+            continue;
+        }
+        let line = String::from_utf8_lossy(&buf)
+            .trim_end_matches('\r')
+            .to_string();
+        buf.clear();
+        match parse_incoming(&line) {
+            Incoming::Response { id, result } => {
+                if !pending.resolve(id, result) {
+                    tracing::debug!(id, "sidecar response for unknown or timed-out id");
+                }
+            }
+            Incoming::Notification { method, params } => sink(&method, &params),
+            Incoming::Ignored => {
+                tracing::warn!(line = %shorten(&line), "ignoring malformed sidecar line");
             }
         }
     }
@@ -587,26 +590,6 @@ mod tests {
     use tokio::io::{AsyncWriteExt, BufReader};
 
     #[test]
-    fn framer_buffers_partial_lines() {
-        let mut framer = LineFramer::new();
-        assert!(framer.push(b"{\"id\":1").is_empty());
-        assert_eq!(framer.pending_len(), 7);
-        let lines = framer.push(b"}\n{\"id\":2}\npar");
-        assert_eq!(lines, vec!["{\"id\":1}", "{\"id\":2}"]);
-        assert_eq!(framer.pending_len(), 3);
-        let lines = framer.push(b"tial\n");
-        assert_eq!(lines, vec!["partial"]);
-        assert_eq!(framer.pending_len(), 0);
-    }
-
-    #[test]
-    fn framer_handles_crlf_and_blank_lines() {
-        let mut framer = LineFramer::new();
-        let lines = framer.push(b"a\r\n\r\nb\n");
-        assert_eq!(lines, vec!["a", "", "b"]);
-    }
-
-    #[test]
     fn parse_incoming_correlates_ids_and_errors() {
         match parse_incoming(r#"{"jsonrpc":"2.0","id":7,"result":{"ok":true}}"#) {
             Incoming::Response { id, result } => {
@@ -825,5 +808,32 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].0, "progress");
         assert_eq!(events[0].1["total"], 2);
+    }
+
+    #[tokio::test]
+    async fn read_loop_drops_an_oversized_line_and_keeps_reading() {
+        let (mut writer, reader) = tokio::io::duplex(8192);
+        let pending = Arc::new(Pending::default());
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        pending.insert(1, tx);
+        let sink: EventSink = Arc::new(|_method: &str, _params: &Value| {});
+
+        let pending_for_loop = pending.clone();
+        let handle = tokio::spawn(async move {
+            read_loop_with_limit(BufReader::new(reader), pending_for_loop, sink, 64).await;
+        });
+
+        // The oversized line is dropped without buffering its tail, and the valid
+        // response after it still arrives.
+        writer.write_all(&[b'x'; 200]).await.unwrap();
+        writer.write_all(b"\n").await.unwrap();
+        writer
+            .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n")
+            .await
+            .unwrap();
+        drop(writer);
+        handle.await.unwrap();
+
+        assert!(rx.await.unwrap().is_ok(), "the valid response must arrive");
     }
 }
