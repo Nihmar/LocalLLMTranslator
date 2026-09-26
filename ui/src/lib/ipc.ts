@@ -29,7 +29,10 @@ import type {
   EndpointTestResult,
   EndpointUpsert,
   ExportOutcome,
+  ExportPreview,
+  ExportPreviewRequest,
   ExportRequest,
+  ExportBuildRecord,
   GlossaryTerm,
   GlossaryUpsertRequest,
   IngestStartRequest,
@@ -90,6 +93,8 @@ const COMMANDS = {
   metricsGet: "metrics_get",
   sidecarStatus: "sidecar_status",
   exportBuild: "export_build",
+  exportPreview: "export_preview",
+  exportHistory: "export_history",
   openPath: "open_path",
 } as const;
 
@@ -333,6 +338,16 @@ export function sidecarStatus(): Promise<SidecarStatus> {
 
 export function exportBuild(request: ExportRequest): Promise<ExportOutcome> {
   return call<ExportOutcome>(COMMANDS.exportBuild, { req: request });
+}
+
+/** The composed units and the `metadata.yaml` a build would use, without invoking Pandoc. */
+export function exportPreview(request: ExportPreviewRequest): Promise<ExportPreview> {
+  return call<ExportPreview>(COMMANDS.exportPreview, { req: request });
+}
+
+/** The recent build records, newest first. */
+export function exportHistory(projectId: string): Promise<ExportBuildRecord[]> {
+  return call<ExportBuildRecord[]>(COMMANDS.exportHistory, { project_id: projectId });
 }
 
 /** Opens a file or directory with the OS handler; the only filesystem command the UI needs. */

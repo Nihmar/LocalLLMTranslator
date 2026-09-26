@@ -601,14 +601,20 @@ export interface SidecarStatus {
 /** Request body of `export_build` (`pipeline::export::ExportRequest`). */
 export interface ExportRequest {
   project_id: string;
-  /** `pdf` | `epub` | `docx`. */
+  /** `pdf` | `epub` | `docx` | `html`. */
   output_format: string;
-  /** `null` lets the backend place the file under the project output directory. */
+  /** Absolute destination; `null` lets the backend place the file under the project output directory. */
   output_path?: string | null;
-  /** Pandoc template path; `null` uses the driver default. */
+  /** Absolute template override; `null` uses the format's default from `pandoc/`. */
   template?: string | null;
-  /** CSS path, meaningful for HTML/EPUB only. */
+  /** Absolute CSS override; `null` uses the format's default. */
   css?: string | null;
+  /** Include the table of contents (default true). */
+  toc?: boolean;
+  /** Build only this chapter into a standalone file. */
+  chapter_id?: string | null;
+  /** Bypass the unchanged-build skip. */
+  force?: boolean;
 }
 
 /** Result of `export_build` (`pipeline::export::ExportOutcome`). */
@@ -618,6 +624,53 @@ export interface ExportOutcome {
   units: number;
   log: string;
   duration_ms: number | null;
+  /** True when the build was skipped because nothing changed. */
+  from_cache: boolean;
+  /** Unit keys rebuilt since the previous build. */
+  changed_units: string[];
+  /** Unit keys reused from the previous build. */
+  reused_units: number;
+  build_id: string;
+}
+
+/** One entry of the build history (`pipeline::export::ExportBuildRecord`). */
+export interface ExportBuildRecord {
+  id: string;
+  output_path: string;
+  output_format: string;
+  chapter_id: string | null;
+  template: string | null;
+  css: string | null;
+  toc: boolean;
+  units: number;
+  changed_units: string[];
+  reused_units: number;
+  from_cache: boolean;
+  duration_ms: number | null;
+  built_at: string;
+}
+
+/** Request body of `export_preview` (`pipeline::export::ExportPreviewRequest`). */
+export interface ExportPreviewRequest {
+  project_id: string;
+  chapter_id?: string | null;
+}
+
+/** One composed unit of an `export_preview` (`pipeline::export::PreviewUnit`). */
+export interface PreviewUnit {
+  key: string;
+  title: string;
+  markdown: string;
+  chunks: number;
+  untranslated: number;
+}
+
+/** Result of `export_preview` (`pipeline::export::ExportPreview`). */
+export interface ExportPreview {
+  metadata_yaml: string;
+  units: PreviewUnit[];
+  total_chunks: number;
+  untranslated_chunks: number;
 }
 
 // --- event payloads ------------------------------------------------------------------------

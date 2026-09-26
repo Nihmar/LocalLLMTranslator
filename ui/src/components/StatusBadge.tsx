@@ -34,6 +34,8 @@ const STATUS_MAP: Readonly<Record<string, BadgeDescriptor>> = {
   untested: { label: "Non verificato", tone: "neutral" },
   degraded: { label: "Modalità seriale", tone: "warning" },
   parallel: { label: "Parallelo", tone: "success" },
+  // export build outcome
+  cached: { label: "Riutilizzato", tone: "neutral" },
   // qa findings / severity
   critical: { label: "Critico", tone: "danger" },
   major: { label: "Grave", tone: "warning" },
