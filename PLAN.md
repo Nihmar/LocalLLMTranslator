@@ -418,8 +418,13 @@ repeated paragraphs, title pages) without even calling the model.
   requests (pure) are re-sent.
 - **Selective resumption**: you can re-run a single chunk, a chapter, or "all chunks
   `failed`/`needs_review`".
-- **Project export/import**: `.llmtz` = zip with `project.sqlite` (copy via `VACUUM INTO`),
-  `markdown/`, `output/`, `prompts/` snapshot.
+- **Project export/import**: `.llmtz` is a ZIP with `manifest.json` (format version, app
+  version, exported-at), `project.sqlite` (a `VACUUM INTO` copy of the app database), the
+  project's `work/` directory (Markdown + assets), its `output/` directory and the `prompts/`
+  snapshot. `project_export` writes it; `project_import` extracts it under the project data
+  directory, copies the project-owned rows out of the attached archive database and rewrites the
+  absolute paths (`document.markdown_path`, `project.prompts_snapshot_dir`) to the local
+  locations. An id that already exists is rejected and no other project's rows are touched.
 
 ---
 

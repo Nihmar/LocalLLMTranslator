@@ -105,8 +105,7 @@ Codes: `-32700` parse, `-32600` invalid request, `-32601` method not found,
 | Method | Params | Result |
 |---|---|---|
 | `ping` | `{}` | `{pong, version, python, platform}` |
-| `detect_format` | `{path}` | `{format: "epub"\|"pdf"\|"markdown", backends: [str]}` |
-| `ingest` | `{path, work_dir, pdf_backend?}` | `{markdown_path, metadata{}, chapters[{title,level,order}], warnings[str], assets_dir?, assets[]}` |
+| `detect_format` | `{path}` | `{format: "epub"\|"pdf"\|"markdown", backends: [str]}` || `ingest` | `{path, work_dir, pdf_backend?}` | `{markdown_path, metadata{}, chapters[{title,level,order}], warnings[str], assets_dir?, assets[]}` |
 | `parse_document` | `{markdown_path}` | `{blocks[Block], chapters[Chapter]}` |
 | `build_chunks` | `{blocks[], budget_tokens}` | `{chunks[Chunk]}` |
 | `prepare_text` | `{block_ids?, text}` | `{llm_text, placeholders[[n,literal]], used_blocks[int]}` |
@@ -135,6 +134,7 @@ makes it safe to restart the sidecar and re-send in-flight requests.
 ### UI → Tauri
 
 Commands: `project_list`, `project_create`, `project_get`, `project_delete`,
+`project_export`, `project_import`,
 `endpoint_list`, `endpoint_upsert`, `endpoint_delete`, `endpoint_test`, `endpoint_models`,
 `role_binding_list`, `role_binding_set`, `ingest_start`, `translation_start`, `translation_pause`,
 `translation_cancel`, `recon_start`, `recon_get`, `recon_confirm`,
@@ -173,6 +173,11 @@ unchanged-build skip. It returns the outcome (including `from_cache`, `changed_u
 `{req: {project_id, chapter_id?}}` and returns the composed markdown units plus the rendered
 `metadata.yaml` without invoking Pandoc. `export_history` takes `{project_id}` and returns the
 last ten build records.
+
+`project_export` takes `{project_id, output_path}` and writes the `.llmtz`
+(ZIP with `manifest.json`, `project.sqlite`, `work/`, `output/`, `prompts/`), returning
+`{output_path, bytes, files}`. `project_import` takes `{archive_path}` and returns the imported
+`Project`.
 
 Events: `job://progress`, `log://line`, `metrics://tick`, `sidecar://status`,
 `sidecar://progress`, `export://progress`.
