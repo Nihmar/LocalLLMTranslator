@@ -15,7 +15,7 @@
 | LLM engine | **External `llama-server`** | The user starts and tunes the servers; the app detects endpoints, health, models and slots |
 | State | **SQLite** (sqlx + embedded migrations) | Checkpoints, resume, cache, audit, job queue |
 | PDF | **Pluggable interface**: `pymupdf4llm` default, `marker` optional | Default without heavy dependencies; marker can be enabled where layout quality matters |
-| Frontend | React + TS + Vite + Tailwind + CodeMirror 6 | CodeMirror 6 has `@codemirror/merge` for the required side-by-side diff |
+| Frontend | React + TS + Vite + Tailwind, **app-owned review diff** | The review UI needs a block/character diff with per-change accept/reject, which `ui/src/lib/diff.ts` provides and `node:test` can cover; CodeMirror 6 + `@codemirror/merge` remains the option if inline editing beyond the diff is ever needed. **Deviation from the original plan, recorded here deliberately** (see §11.4). |
 | Tests | pytest + ruff + pyright (Python), cargo test + clippy + rustfmt (Rust), **fake llama-server** | Deterministic, offline CI |
 
 **Product constraints**: no telemetry, no network calls except the configured endpoints,
@@ -724,7 +724,12 @@ A 5-step wizard, but each step is a freely visitable route (not a constraint):
    selection (retry, skip, re-translate with another model).
 4. **Review** — 3-column side-by-side editor (original / translated / corrected) with block-level
    and character-level diff, navigation by suggestion, accept/reject per individual
-   change, and a filterable QA report.
+   change, and a filterable QA report. The diff is rendered by `ui/src/lib/diff.ts` (a small
+   word/character diff with its own tests) instead of CodeMirror 6: the component only has to
+   *show* the two texts and the accepted change, while accept/reject is a control-plane operation
+   that rewrites a block translation and recomposes the chunk. No editor dependency is paid for
+   a read-only diff. If inline editing is needed later, CodeMirror + `@codemirror/merge` can
+   replace the component without touching the contract.
 5. **Export** — per-chapter unit, `metadata.yaml`, template/CSS/LaTeX choice, preview,
    selective rebuild of only the modified chapter, build history.
 

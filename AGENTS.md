@@ -139,6 +139,7 @@ Commands: `project_list`, `project_create`, `project_get`, `project_delete`,
 `role_binding_list`, `role_binding_set`, `ingest_start`, `translation_start`, `translation_pause`,
 `translation_cancel`, `recon_start`, `recon_get`, `recon_confirm`,
 `glossary_list`, `glossary_upsert`, `glossary_delete`,
+`review_start`, `suggestion_list`, `suggestion_accept`, `suggestion_reject`, `qa_report`,
 `job_list`, `chunk_list`, `chunk_get`, `metrics_get`, `sidecar_status`,
 `export_build`, `open_path`.
 
@@ -146,6 +147,15 @@ Commands: `project_list`, `project_create`, `project_get`, `project_delete`,
  target_lang?}}` and returns the persisted row; `glossary_delete` takes the row id; `glossary_list`
 takes `{project_id}`. Candidates proposed by the reconnaissance and the summarizer are approved,
 edited or rejected here; the translator prompt only ever sees non-rejected terms.
+
+`review_start` takes `{req: {project_id, chunk_ids?, chapter_id?, pass?, with_qa?}}`, where `pass`
+is `editor` (default `both`, also `proofreader`), and enqueues the matching `edit_chunk` /
+`proofread_chunk` / `qa_scan` jobs for the eligible chunks; it returns `{enqueued}`.
+`suggestion_list` takes `{project_id, chunk_id?, pass?, status?}` and returns `suggestion` rows;
+`suggestion_accept` and `suggestion_reject` take the suggestion id. Accepting applies the proposed
+correction to the block translation (origin `editor` or `proofreader`) and recomposes the chunk's
+`target_md`, so an export right after a review sees the accepted text. `qa_report` takes
+`{project_id, kind?, severity?, chunk_id?}` and returns the `qa_finding` rows.
 
 `recon_start` runs the `book_recon` job (candidate book profile, PLAN.md §9.4); `recon_get`
 reads it back together with the confirmed memory values and the glossary; `recon_confirm` writes
