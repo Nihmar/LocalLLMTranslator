@@ -41,7 +41,7 @@ const ROLES: ReadonlyArray<{ value: Role; label: string; description: string }> 
   { value: "translator", label: "Traduttore", description: "Traduce i chunk di prosa e tabelle." },
   { value: "editor", label: "Editor bilingue", description: "Confronta sorgente e traduzione e propone correzioni." },
   { value: "proofreader", label: "Proofreader", description: "Rifinisce il testo nella sola lingua di arrivo." },
-  { value: "orchestrator", label: "Orchestratore", description: "Riassunti, memoria di progetto, termine candidati." },
+  { value: "orchestrator", label: "Orchestratore", description: "Ricognizione del libro, riassunti, memoria di progetto, termini candidati." },
 ];
 
 const DEFAULT_PARAMS = '{\n  "temperature": 0.2,\n  "top_p": 0.95\n}';
@@ -881,7 +881,7 @@ export function ModelsView() {
                 <EmptyState
                   compact
                   title="Nessun ruolo assegnato"
-                  description="Il ruolo traduttore è obbligatorio per avviare una traduzione; editor, proofreader e orchestratore servono dalla milestone M4."
+                  description="Il ruolo traduttore è obbligatorio per avviare una traduzione; l'orchestratore serve alla ricognizione del libro, editor e proofreader dalla milestone M4."
                 />
               ) : (
                 <div className="table-scroll">
