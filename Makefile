@@ -51,9 +51,9 @@ check: build-ui lint typecheck test ## Full gate: ui build + lint + type + test
 dev: ## Run the desktop app in dev mode (requires llama-server running)
 	cd $(RUST) && cargo tauri dev
 
-build: ## Build release bundle (sidecar onedir + Tauri)
+build: ## Build release bundle (sidecar onedir + Tauri). BUNDLES=appimage limits the targets
 	cd $(SIDECAR) && $(PY) run --extra package python -m build_sidecar
-	cd $(RUST) && cargo tauri build
+	cd $(RUST) && NO_STRIP=1 cargo tauri build $(if $(BUNDLES),--bundles $(BUNDLES),)
 
 clean: ## Remove build artifacts
 	rm -rf $(SIDECAR)/.venv $(SIDECAR)/.pytest_cache $(SIDECAR)/.ruff_cache
