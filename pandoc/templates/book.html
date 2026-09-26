@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+$--
+$-- pandoc/templates/book.html
+$-- USER-EDITABLE Pandoc HTML template used as the basis for the HTML and EPUB
+$-- output of the export stage. It keeps a title block, an optional TOC and the
+$-- project stylesheet hook (the css variable) so pandoc/styles/book.css can be
+$-- injected. Standard Pandoc variables are supported: title, subtitle, author,
+$-- date, lang, css, toc, body, header-includes, ...
+$--
+$-- Usage:
+$--   pandoc input.md -o book.html --template=pandoc/templates/book.html \
+$--          --toc --css=pandoc/styles/book.css --standalone
+$--   pandoc input.md -o book.epub --template=pandoc/templates/book.html \
+$--          --css=pandoc/styles/book.css
+$--
+<html$if(lang)$ lang="$lang$" xml:lang="$lang$"$endif$>
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+<meta name="generator" content="pandoc + LocalLLMTranslator" />
+$for(author-meta)$
+<meta name="author" content="$author-meta$" />
+$endfor$
+$if(date-meta)$
+<meta name="dcterms.date" content="$date-meta$" />
+$endif$
+$if(keywords)$
+<meta name="keywords" content="$for(keywords)$$keywords$$sep$, $endfor$" />
+$endif$
+<title>$if(title-prefix)$$title-prefix$ – $endif$$pagetitle$</title>
+$for(css)$
+<link rel="stylesheet" href="$css$" />
+$endfor$
+$if(highlighting-css)$
+<style>
+$highlighting-css$
+</style>
+$endif$
+$for(header-includes)$
+$header-includes$
+$endfor$
+</head>
+<body>
+$for(include-before)$
+$include-before$
+$endfor$
+$if(title)$
+<header id="title-block-header">
+<h1 class="title">$title$</h1>
+$if(subtitle)$
+<p class="subtitle">$subtitle$</p>
+$endif$
+$for(author)$
+<p class="author">$author$</p>
+$endfor$
+$if(date)$
+<p class="date">$date$</p>
+$endif$
+</header>
+$endif$
+$if(toc)$
+<nav id="TOC" role="doc-toc">
+$if(toc-title)$
+<h2 id="toc-title">$toc-title$</h2>
+$endif$
+$table-of-contents$
+</nav>
+$endif$
+<main id="book-body">
+$body$
+</main>
+$for(include-after)$
+$include-after$
+$endfor$
+</body>
+</html>

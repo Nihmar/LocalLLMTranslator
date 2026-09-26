@@ -1,0 +1,237 @@
+/*
+ * pandoc/styles/book.css
+ * USER-EDITABLE, print-oriented stylesheet for the HTML and EPUB export path.
+ * Kept deliberately simple and self-contained (no remote fonts, no CDN) so the
+ * application stays fully offline.
+ */
+
+:root {
+  --book-fg: #1a1a1a;
+  --book-bg: #ffffff;
+  --book-muted: #555555;
+  --book-rule: #cccccc;
+  --book-link: #7a1f1f;
+  --book-max-width: 38em;
+}
+
+html {
+  font-size: 100%;
+}
+
+body {
+  color: var(--book-fg);
+  background: var(--book-bg);
+  font-family: "Liberation Serif", "DejaVu Serif", Georgia, serif;
+  line-height: 1.5;
+  margin: 0 auto;
+  max-width: var(--book-max-width);
+  padding: 2em 1.2em;
+  text-align: justify;
+  hyphens: auto;
+}
+
+/* ---- title block ---------------------------------------------------------*/
+#title-block-header {
+  margin-bottom: 3em;
+  text-align: center;
+}
+h1.title {
+  font-size: 1.9em;
+  line-height: 1.2;
+  margin-bottom: 0.2em;
+}
+p.subtitle {
+  font-size: 1.2em;
+  font-style: italic;
+  color: var(--book-muted);
+}
+p.author,
+p.date {
+  color: var(--book-muted);
+}
+
+/* ---- headings ------------------------------------------------------------*/
+h1,
+h2,
+h3,
+h4 {
+  line-height: 1.2;
+  page-break-after: avoid;
+  break-after: avoid;
+  text-align: left;
+}
+h1 {
+  font-size: 1.6em;
+  margin: 1.6em 0 0.6em;
+  page-break-before: always;
+  break-before: page;
+}
+h2 {
+  font-size: 1.3em;
+  margin: 1.4em 0 0.5em;
+}
+h3 {
+  font-size: 1.1em;
+  margin: 1.2em 0 0.4em;
+}
+
+/* ---- body text -----------------------------------------------------------*/
+p {
+  margin: 0 0 0.4em;
+  orphans: 2;
+  widows: 2;
+}
+a {
+  color: var(--book-link);
+  text-decoration: none;
+}
+strong {
+  font-weight: 700;
+}
+em {
+  font-style: italic;
+}
+blockquote {
+  margin: 1em 2em;
+  padding-left: 1em;
+  border-left: 3px solid var(--book-rule);
+  font-style: italic;
+  color: var(--book-muted);
+}
+
+/* ---- lists ---------------------------------------------------------------*/
+ul,
+ol {
+  margin: 0.6em 0 0.6em 1.5em;
+  padding: 0;
+}
+li {
+  margin-bottom: 0.15em;
+}
+
+/* ---- code ----------------------------------------------------------------*/
+code,
+kbd,
+samp,
+pre {
+  font-family: "Liberation Mono", "DejaVu Sans Mono", monospace;
+  font-size: 0.92em;
+}
+code {
+  background: #f4f4f4;
+  padding: 0.05em 0.25em;
+  border-radius: 2px;
+}
+pre {
+  background: #f4f4f4;
+  border: 1px solid var(--book-rule);
+  border-radius: 3px;
+  padding: 0.6em 0.8em;
+  overflow-x: auto;
+  page-break-inside: avoid;
+  break-inside: avoid;
+  text-align: left;
+}
+pre > code {
+  background: none;
+  padding: 0;
+}
+
+/* ---- tables --------------------------------------------------------------*/
+table {
+  border-collapse: collapse;
+  margin: 1em auto;
+  width: 100%;
+  page-break-inside: avoid;
+  break-inside: avoid;
+}
+caption {
+  caption-side: top;
+  font-style: italic;
+  color: var(--book-muted);
+  margin-bottom: 0.4em;
+}
+th,
+td {
+  border: 1px solid var(--book-rule);
+  padding: 0.3em 0.6em;
+  text-align: left;
+}
+thead th {
+  border-bottom: 2px solid var(--book-muted);
+  font-weight: 700;
+}
+tbody tr:nth-child(even) {
+  background: #fafafa;
+}
+
+/* ---- figures and images --------------------------------------------------*/
+figure {
+  margin: 1.4em 0;
+  page-break-inside: avoid;
+  break-inside: avoid;
+  text-align: center;
+}
+figure img,
+img {
+  max-width: 100%;
+  height: auto;
+}
+figcaption {
+  font-size: 0.9em;
+  font-style: italic;
+  color: var(--book-muted);
+  margin-top: 0.4em;
+}
+
+/* ---- footnotes -----------------------------------------------------------*/
+.footnotes,
+section.footnotes,
+div.endnote {
+  border-top: 1px solid var(--book-rule);
+  margin-top: 2em;
+  padding-top: 0.8em;
+  font-size: 0.9em;
+  color: var(--book-muted);
+}
+.footnotes ol,
+section.footnotes ol {
+  margin-left: 1.2em;
+}
+a.footnote-ref {
+  vertical-align: super;
+  font-size: 0.75em;
+  padding-left: 0.1em;
+}
+a.footnote-back {
+  padding-left: 0.3em;
+}
+
+/* ---- table of contents ---------------------------------------------------*/
+nav#TOC {
+  margin: 2em 0;
+}
+nav#TOC ul {
+  list-style: none;
+  margin: 0.3em 0 0.3em 1em;
+}
+nav#TOC a {
+  color: var(--book-fg);
+}
+
+/* ---- print / pagination --------------------------------------------------*/
+@page {
+  margin: 18mm 16mm;
+}
+@media print {
+  body {
+    padding: 0;
+    max-width: none;
+  }
+  h1 {
+    break-before: page;
+  }
+  a {
+    color: var(--book-fg);
+  }
+}

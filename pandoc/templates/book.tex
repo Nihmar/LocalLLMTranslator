@@ -1,0 +1,215 @@
+% -*- mode: latex -*-
+%
+% pandoc/templates/book.tex
+% USER-EDITABLE Pandoc LaTeX template, tuned for a novel / non-fiction book:
+%   * a typographic title page and a table of contents,
+%   * running heads (chapter on the outer edge, page number on the inner edge),
+%   * chapter openings with a styled heading,
+%   * footnote numbering that restarts per chapter, plus a custom rule.
+%
+% Usage:
+%   pandoc input.md -o book.pdf --template=pandoc/templates/book.tex \
+%          --pdf-engine=pdflatex --toc --top-level-division=chapter
+%
+% This template is self-contained (it does not rely on Pandoc's bundled
+% partials).  Optional metadata: title, subtitle, author, date, toc, toc-title,
+% toc-depth, numbersections, secnumdepth, linestretch, colorlinks, geometry,
+% lang.  Standard Pandoc template variables are honoured, including the body
+% placeholder and the header-includes loop.
+%
+\documentclass[
+$for(babel-otherlangs)$  $babel-otherlangs$,
+$endfor$$if(babel-lang)$  $babel-lang$,
+$endif$$if(fontsize)$  $fontsize$,
+$endif$$if(papersize)$  $papersize$paper,
+$endif$$for(classoption)$  $classoption$,
+$endfor$]{book}
+
+% --- colours / links -------------------------------------------------------
+\usepackage{xcolor}
+\PassOptionsToPackage{unicode,hidelinks}{hyperref}
+\usepackage[hyphens]{url}
+
+% --- page geometry ---------------------------------------------------------
+$if(geometry)$
+\usepackage[$for(geometry)$$geometry$$sep$,$endfor$]{geometry}
+$else$
+\usepackage[a4paper,margin=1.15in,footskip=0.6in]{geometry}
+$endif$
+
+% --- math ------------------------------------------------------------------
+\usepackage{amsmath,amssymb}
+
+% --- fonts -----------------------------------------------------------------
+\usepackage{iftex}
+\ifPDFTeX
+  \usepackage[$if(fontenc)$$fontenc$$else$T1$endif$]{fontenc}
+  \usepackage[utf8]{inputenc}
+  \usepackage{textcomp}
+  \usepackage{lmodern}
+\else
+  \usepackage{unicode-math}
+  \defaultfontfeatures{Scale=MatchLowercase}
+  \defaultfontfeatures[\rmfamily]{Ligatures=TeX,Scale=1}
+  \usepackage{lmodern}
+  $if(mainfont)$
+  \setmainfont[$for(mainfontoptions)$$mainfontoptions$$sep$,$endfor$]{$mainfont$}
+  $endif$
+  $if(sansfont)$
+  \setsansfont[$for(sansfontoptions)$$sansfontoptions$$sep$,$endfor$]{$sansfont$}
+  $endif$
+  $if(monofont)$
+  \setmonofont[$for(monofontoptions)$$monofontoptions$$sep$,$endfor$]{$monofont$}
+  $endif$
+\fi
+
+% --- unicode fallbacks for pdflatex (placeholder brackets, if they leak) ----
+\IfFileExists{newunicodechar.sty}{%
+  \usepackage{newunicodechar}%
+  \newunicodechar{⟦}{\ensuremath{[\![}}%
+  \newunicodechar{⟧}{\ensuremath{]\!]}}%
+}{}
+
+% --- typography ------------------------------------------------------------
+$if(linestretch)$
+\usepackage{setspace}
+\setstretch{$linestretch$}
+$else$
+\usepackage{parskip}
+$endif$
+\setlength{\emergencystretch}{3em}
+
+% --- tables ----------------------------------------------------------------
+\usepackage{longtable,booktabs,array}
+\usepackage{caption}
+\captionsetup[table]{skip=6pt,position=top}
+\usepackage{calc}
+\newcounter{none} % required by Pandoc for unnumbered longtables
+
+% --- graphics --------------------------------------------------------------
+\usepackage{graphicx}
+\makeatletter
+\newsavebox\pandoc@box
+\newcommand*\pandocbounded[1]{% scales an image to fit the text height/width
+  \sbox\pandoc@box{#1}%
+  \Gscale@div\@tempa{\textheight}{\dimexpr\ht\pandoc@box+\dp\pandoc@box\relax}%
+  \Gscale@div\@tempb{\linewidth}{\wd\pandoc@box}%
+  \ifdim\@tempb\p@<\@tempa\p@\let\@tempa\@tempb\fi%
+  \ifdim\@tempa\p@<\p@\scalebox{\@tempa}{\usebox\pandoc@box}%
+  \else\usebox{\pandoc@box}%
+  \fi}
+\def\fps@figure{htbp}
+\makeatother
+
+% --- running heads ---------------------------------------------------------
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[LE,RO]{\thepage}
+\fancyhead[LO]{\itshape\nouppercase{\rightmark}}
+\fancyhead[RE]{\itshape\nouppercase{\leftmark}}
+\renewcommand{\headrulewidth}{0.4pt}
+\renewcommand{\footrulewidth}{0pt}
+\fancypagestyle{plain}{%
+  \fancyhf{}%
+  \fancyfoot[C]{\thepage}%
+  \renewcommand{\headrulewidth}{0pt}%
+}
+
+% --- chapter openings ------------------------------------------------------
+\usepackage{titlesec}
+\titleformat{\chapter}[display]
+  {\normalfont\bfseries}
+  {\filright\Large\chaptername\ \thechapter}
+  {1ex}
+  {\Huge}
+\titlespacing*{\chapter}{0pt}{1.5\baselineskip}{2\baselineskip}
+\titleformat{\section}{\normalfont\Large\bfseries}{\thesection}{1em}{}
+\titleformat{\subsection}{\normalfont\large\bfseries}{\thesubsection}{1em}{}
+
+% --- footnotes -------------------------------------------------------------
+\makeatletter
+\@addtoreset{footnote}{chapter} % restart footnote numbering in every chapter
+\makeatother
+\renewcommand{\footnoterule}{%
+  \kern-3pt\hrule width 0.4\columnwidth height 0.4pt\kern 2.6pt}
+\renewcommand{\footnotesize}{\small}
+
+$if(numbersections)$
+\setcounter{secnumdepth}{$if(secnumdepth)$$secnumdepth$$else$2$endif$}
+$else$
+\setcounter{secnumdepth}{-\maxdimen}
+$endif$
+
+$if(highlighting-macros)$
+$highlighting-macros$
+$endif$
+
+\providecommand{\tightlist}{%
+  \setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}}
+
+$for(header-includes)$
+$header-includes$
+$endfor$
+
+\usepackage{bookmark}
+\IfFileExists{xurl.sty}{\usepackage{xurl}}{}
+\urlstyle{same}
+
+\hypersetup{%
+$if(title-meta)$  pdftitle={$title-meta$},$endif$
+$if(author-meta)$  pdfauthor={$author-meta$},$endif$
+$if(lang)$  pdflang={$lang$},$endif$
+$if(colorlinks)$
+  colorlinks=true,
+  linkcolor={$if(linkcolor)$$linkcolor$$else$Maroon$endif$},
+  citecolor={$if(citecolor)$$citecolor$$else$Blue$endif$},
+  urlcolor={$if(urlcolor)$$urlcolor$$else$Blue$endif$},
+$else$
+  hidelinks,
+$endif$
+  pdfcreator={LaTeX via pandoc}}
+
+\title{$title$}
+$if(subtitle)$\providecommand{\subtitle}[1]{\par{\large\itshape #1\par}}\subtitle{$subtitle$}$endif$
+\author{$for(author)$$author$$sep$ \and $endfor$}
+\date{$date$}
+
+\begin{document}
+
+\frontmatter
+% --- title page ------------------------------------------------------------
+$if(title)$
+\begin{titlepage}
+\centering
+\vspace*{0.22\textheight}
+{\Huge\bfseries $title$\par}
+$if(subtitle)$
+\vspace{0.8cm}
+{\Large\itshape $subtitle$\par}
+$endif$
+\vspace{1.6cm}
+$if(author)$
+{\large $for(author)$$author$$sep$\\$endfor$\par}
+$endif$
+\vfill
+$if(date)$
+{\large $date$\par}
+$endif$
+\end{titlepage}
+$endif$
+
+% --- table of contents -----------------------------------------------------
+$if(toc)$
+$if(toc-title)$
+\renewcommand*\contentsname{$toc-title$}
+$endif$
+\setcounter{tocdepth}{$if(toc-depth)$$toc-depth$$else$2$endif$}
+\tableofcontents
+$endif$
+
+\mainmatter
+$body$
+
+\backmatter
+\end{document}
