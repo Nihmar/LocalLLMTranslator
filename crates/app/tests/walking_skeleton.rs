@@ -1054,6 +1054,19 @@ async fn assert_fake_server_reached(
         logged,
         "the fake server never logged a chat-completions request; the endpoint was not reached"
     );
+
+    // The context budget reads `/props` and the counter uses `/tokenize` when the
+    // server exposes it; a run that never logged a tokenize request silently
+    // fell back to the heuristic on both sides.
+    let tokenizer_used = fake_log
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .iter()
+        .any(|line| line.contains("POST /tokenize"));
+    ensure!(
+        tokenizer_used,
+        "the fake server never logged a /tokenize request; the exact token counter is not wired"
+    );
     Ok(())
 }
 

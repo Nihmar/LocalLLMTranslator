@@ -166,8 +166,10 @@ impl ContextBuilder {
         Ok(rendered)
     }
 
-    /// Build the full prompt for one chunk.
-    pub fn build(&self, inputs: &ContextInputs, counter: &dyn TokenCounter) -> Result<BuiltPrompt> {
+    /// The system message plus the pieces that will be budgeted, without
+    /// filling anything. Exposed so a caller can count the exact tokens of
+    /// every piece with `/tokenize` before deciding what fits.
+    pub fn pieces(&self, inputs: &ContextInputs) -> Result<(String, Vec<BudgetPiece>)> {
         let system = self.render_system(inputs)?;
         let glossary = filter_glossary(&inputs.glossary, &inputs.chunk_text);
         let glossary_text = render_glossary(&glossary);
@@ -182,6 +184,18 @@ impl ContextBuilder {
             BudgetPiece::new(PieceKind::RollingSummary, inputs.rolling_summary.clone()),
             BudgetPiece::new(PieceKind::PreviousTail, inputs.previous_tail.clone()),
         ];
+        Ok((system, pieces))
+    }
+
+    /// Fill an already-built piece list and render the user message. See
+    /// [`Self::pieces`].
+    pub fn build_from_pieces(
+        &self,
+        inputs: &ContextInputs,
+        system: String,
+        pieces: Vec<BudgetPiece>,
+        counter: &dyn TokenCounter,
+    ) -> Result<BuiltPrompt> {
         let manifest = fill_budget(pieces, inputs.budget_tokens, counter);
 
         let env = Environment::new();
@@ -203,6 +217,12 @@ impl ContextBuilder {
             user,
             manifest,
         })
+    }
+
+    /// Build the full prompt for one chunk.
+    pub fn build(&self, inputs: &ContextInputs, counter: &dyn TokenCounter) -> Result<BuiltPrompt> {
+        let (system, pieces) = self.pieces(inputs)?;
+        self.build_from_pieces(inputs, system, pieces, counter)
     }
 }
 
@@ -383,6 +403,23 @@ mod tests {
         assert!(built.manifest.included(PieceKind::Text));
         assert!(built.manifest.included(PieceKind::SystemRules));
         assert!(!built.manifest.included(PieceKind::PreviousTail));
+    }
+
+    #[test]
+    fn pieces_and_build_from_pieces_match_build() {
+        let builder = ContextBuilder::embedded();
+        let counter = HeuristicCounter;
+        let inputs = base_inputs();
+
+        let direct = builder.build(&inputs, &counter).expect("build");
+        let (system, pieces) = builder.pieces(&inputs).expect("pieces");
+        let rebuilt = builder
+            .build_from_pieces(&inputs, system, pieces, &counter)
+            .expect("build from pieces");
+
+        assert_eq!(direct.system, rebuilt.system);
+        assert_eq!(direct.user, rebuilt.user);
+        assert_eq!(direct.manifest.total_tokens, rebuilt.manifest.total_tokens);
     }
 
     #[test]

@@ -1,5 +1,6 @@
 //! HTTP + SSE client for an external `llama-server`.
 
+use std::collections::HashMap;
 use std::pin::Pin;
 use std::time::Duration;
 
@@ -128,6 +129,22 @@ impl LlamaClient {
         } else {
             Ok(Some(parsed.tokens))
         }
+    }
+
+    /// Exact token counts via `/tokenize`, one entry per text the server
+    /// answered for. Texts the endpoint refuses are simply absent, so the
+    /// caller's counter can fall back to the heuristic estimate.
+    pub async fn token_counts(&self, texts: &[&str]) -> HashMap<String, usize> {
+        let mut counts = HashMap::new();
+        for text in texts {
+            if text.is_empty() {
+                continue;
+            }
+            if let Ok(Some(tokens)) = self.tokenize(text).await {
+                counts.insert((*text).to_string(), tokens.len());
+            }
+        }
+        counts
     }
 
     /// `POST /v1/chat/completions` with `stream: true`, parsed as SSE.

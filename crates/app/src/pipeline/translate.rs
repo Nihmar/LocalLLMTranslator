@@ -8,9 +8,8 @@ use futures_util::StreamExt;
 use serde::Serialize;
 use serde_json::Value;
 
-use super::ingest::DEFAULT_CHUNK_BUDGET;
 use super::PipelineDeps;
-use crate::context::budget::HeuristicCounter;
+use crate::context::budget::CachedCounter;
 use crate::context::builder::{ContextBuilder, ContextInputs, GlossaryEntry};
 use crate::db::models::{Block, BlockTranslation, QaFinding};
 use crate::db::repo::{self, ChunkOutcome};
@@ -156,7 +155,7 @@ async fn translate_chunk_inner(
         previous_tail: previous_tail(pool, &chunk.document_id, chunk.order_index).await?,
         chapter_title: chunk.chapter_id.clone().unwrap_or_default(),
         chunk_text: chunk.source_md.clone(),
-        budget_tokens: DEFAULT_CHUNK_BUDGET,
+        budget_tokens: crate::pipeline::resolve_endpoint_budget(&endpoint).await,
     };
 
     // Placeholder preparation happens on the sidecar (pure function).
@@ -167,8 +166,20 @@ async fn translate_chunk_inner(
     let mut inputs = inputs;
     inputs.chunk_text = prepared.llm_text.clone();
 
-    let counter = HeuristicCounter;
-    let built = builder.build(&inputs, &counter)?;
+    let (system, pieces) = builder.pieces(&inputs)?;
+    // Exact counts from `/tokenize` when the server exposes it; the counter
+    // falls back to the heuristic for anything the server did not answer for.
+    let texts: Vec<&str> = pieces
+        .iter()
+        .map(|piece| piece.text.as_str())
+        .filter(|text| !text.is_empty())
+        .collect();
+    let token_counts = match LlamaClient::new(&endpoint.base_url) {
+        Ok(client) => client.token_counts(&texts).await,
+        Err(_) => std::collections::HashMap::new(),
+    };
+    let counter = CachedCounter::new(token_counts);
+    let built = builder.build_from_pieces(&inputs, system, pieces, &counter)?;
     let prompt_hash = sha256_hex_str(&built.full_text());
     let manifest_json = serde_json::to_string(&built.manifest)?;
 

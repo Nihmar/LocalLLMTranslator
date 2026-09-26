@@ -4,14 +4,12 @@ use serde::Serialize;
 use serde_json::Value;
 
 use super::PipelineDeps;
+use crate::context::budget::DEFAULT_CHUNK_BUDGET;
 use crate::context::builder::{DEFAULT_SYSTEM_TEMPLATE, DEFAULT_USER_TEMPLATE};
 use crate::db::models::{Block, Chapter, Document};
 use crate::db::{new_id, now};
 use crate::error::{AppError, Result};
 use crate::util::sha256_hex_str;
-
-/// Fallback chunk budget when `/props` is not reachable (PLAN.md section 9.1).
-pub const DEFAULT_CHUNK_BUDGET: usize = 6000;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct IngestOutcome {
@@ -67,7 +65,10 @@ pub async fn run_ingest(
     let parsed = deps.sidecar.parse_document(&ingest.markdown_path).await?;
 
     // 3. Build chunks (never a fixed character cut: always whole blocks).
-    let budget = budget_tokens.unwrap_or(DEFAULT_CHUNK_BUDGET);
+    let budget = match budget_tokens {
+        Some(budget) => budget,
+        None => resolve_ingest_budget(deps).await,
+    };
     let built_chunks = deps.sidecar.build_chunks(&parsed.blocks, budget).await?;
 
     let extractor_version = deps
@@ -176,6 +177,21 @@ fn meta_str(metadata: &serde_json::Map<String, Value>, key: &str) -> Option<Stri
         .and_then(Value::as_str)
         .map(str::to_string)
         .filter(|s| !s.is_empty())
+}
+
+/// Budget for the sidecar chunker: the translator endpoint's `/props` when a
+/// binding exists, the documented default otherwise — ingestion may well run
+/// before any endpoint is configured.
+async fn resolve_ingest_budget(deps: &PipelineDeps) -> usize {
+    let Ok(Some(binding)) = crate::db::repo::role_binding_for(&deps.pool, "translator").await
+    else {
+        return DEFAULT_CHUNK_BUDGET;
+    };
+    let Ok(Some(endpoint)) = crate::db::repo::get_endpoint(&deps.pool, &binding.endpoint_id).await
+    else {
+        return DEFAULT_CHUNK_BUDGET;
+    };
+    crate::pipeline::resolve_endpoint_budget(&endpoint).await
 }
 
 async fn insert_chapter(

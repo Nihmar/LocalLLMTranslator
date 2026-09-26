@@ -4,9 +4,23 @@
 //! the lowest priority, so the system rules and the style guide always survive
 //! while the volatile tail is the first thing to go.
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::util::sha256_hex_str;
+
+/// Fallback context budget when `/props` is not reachable (PLAN.md section 9.1).
+pub const DEFAULT_CHUNK_BUDGET: usize = 6000;
+
+/// Fraction of `n_ctx` the chunk budget may use: the rest is reserved for the
+/// model's answer and for the prompt's own framing (PLAN.md section 9.1).
+pub const BUDGET_FRACTION: f64 = 0.6;
+
+/// Budget derived from the server's context size, never below a sane floor.
+pub fn budget_from_n_ctx(n_ctx: u32) -> usize {
+    ((f64::from(n_ctx) * BUDGET_FRACTION) as usize).max(256)
+}
 
 /// Token counting is injectable so the budget logic is testable without a
 /// running `llama-server` (which is what `/tokenize` would otherwise require).
@@ -32,6 +46,28 @@ pub struct CharsAsTokens;
 impl TokenCounter for CharsAsTokens {
     fn count(&self, text: &str) -> usize {
         text.chars().count()
+    }
+}
+
+/// Exact for the texts `/tokenize` answered for, heuristic for everything else
+/// (truncated pieces and endpoints without the route).
+#[derive(Debug, Clone, Default)]
+pub struct CachedCounter {
+    counts: HashMap<String, usize>,
+}
+
+impl CachedCounter {
+    pub fn new(counts: HashMap<String, usize>) -> Self {
+        Self { counts }
+    }
+}
+
+impl TokenCounter for CachedCounter {
+    fn count(&self, text: &str) -> usize {
+        self.counts
+            .get(text)
+            .copied()
+            .unwrap_or_else(|| HeuristicCounter.count(text))
     }
 }
 
@@ -283,6 +319,26 @@ mod tests {
         assert!(built.included(PieceKind::SystemRules));
         assert!(built.included(PieceKind::Text));
         assert!(!built.included(PieceKind::PreviousTail));
+    }
+
+    #[test]
+    fn budget_from_n_ctx_takes_the_documented_fraction() {
+        assert_eq!(budget_from_n_ctx(32_768), 19_660);
+        // The floor keeps a tiny context usable.
+        assert_eq!(budget_from_n_ctx(100), 256);
+    }
+
+    #[test]
+    fn cached_counter_prefers_exact_counts_and_falls_back() {
+        let mut counts = HashMap::new();
+        counts.insert("long text".to_string(), 2);
+        let counter = CachedCounter::new(counts);
+        assert_eq!(counter.count("long text"), 2);
+        // Unknown texts (for example a truncated piece) use the heuristic.
+        assert_eq!(
+            counter.count("a text /tokenize never saw"),
+            HeuristicCounter.count("a text /tokenize never saw")
+        );
     }
 
     #[test]
