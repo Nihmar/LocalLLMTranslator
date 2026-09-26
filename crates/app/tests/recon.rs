@@ -10,28 +10,29 @@
 //! pins the control plane side (schema request, SSE parse, clamping,
 //! persistence, glossary reuse) without a child process.
 
+mod common;
+
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use sqlx::SqlitePool;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use app_lib::context::budget::HeuristicCounter;
 use app_lib::context::builder::{ContextBuilder, ContextInputs};
-use app_lib::db::models::{Block, Chapter, Document, Job, LlmEndpoint, Project, RoleBinding};
-use app_lib::db::{self, new_id, now, repo};
+use app_lib::db::models::Job;
+use app_lib::db::repo;
 use app_lib::error::{AppError, Result as AppResult};
-use app_lib::events::{sidecar_event_sink, EventEmitter, NullEmitter};
+use app_lib::events::{EventEmitter, NullEmitter};
 use app_lib::pipeline::recon::{self, ConfirmRequest, ConfirmedTerm, MEMORY_KEY, META_KEY};
 use app_lib::pipeline::PipelineDeps;
-use app_lib::resources::ResourceGovernor;
 use app_lib::scheduler::queue::{self, NewJob};
 use app_lib::scheduler::{JobDispatcher, WorkerPool};
-use app_lib::sidecar::{SidecarClient, SpawnSpec, Supervisor};
+
+use common::{deps_for, seed_project};
 
 /// The deterministic candidate the mock model returns, shaped like
 /// `prompts/analyze_book.schema.json`.
@@ -44,148 +45,6 @@ fn sse_body() -> String {
         "usage": { "prompt_tokens": 10, "completion_tokens": 5 },
     });
     format!("data: {content}\n\ndata: {finish}\n\ndata: [DONE]\n\n")
-}
-
-/// A supervisor that is never started: `run_recon` does not touch the sidecar.
-fn unused_sidecar() -> SidecarClient {
-    let emitter: Arc<dyn EventEmitter> = Arc::new(NullEmitter);
-    let sink = sidecar_event_sink(emitter.clone());
-    let supervisor = Supervisor::new(SpawnSpec::new("/bin/true", vec![]), sink, emitter, None);
-    SidecarClient::new(supervisor)
-}
-
-async fn seed_project(
-    pool: &SqlitePool,
-    base_url: &str,
-    bind_orchestrator: bool,
-) -> Result<String> {
-    let project_id = new_id();
-    let timestamp = now();
-    repo::insert_project(
-        pool,
-        &Project {
-            id: project_id.clone(),
-            name: "recon-project".to_string(),
-            source_path: "book.epub".to_string(),
-            source_hash: "fixture-hash".to_string(),
-            source_format: "epub".to_string(),
-            source_lang: None,
-            target_lang: "Italian".to_string(),
-            doc_title: Some("The Lantern Keeper".to_string()),
-            doc_author: Some("Fixture Author".to_string()),
-            prompts_snapshot_dir: None,
-            settings_json: "{}".to_string(),
-            created_at: timestamp.clone(),
-            updated_at: timestamp.clone(),
-        },
-    )
-    .await?;
-
-    let document_id = new_id();
-    repo::insert_document(
-        pool,
-        &Document {
-            id: document_id.clone(),
-            project_id: project_id.clone(),
-            markdown_path: "/tmp/book.md".to_string(),
-            front_matter_json: r#"{"title":"The Lantern Keeper","author":"Fixture Author"}"#
-                .to_string(),
-            extractor: "epub".to_string(),
-            extractor_version: "0".to_string(),
-            created_at: timestamp.clone(),
-        },
-    )
-    .await?;
-
-    let chapter_id = new_id();
-    repo::insert_chapter(
-        pool,
-        &Chapter {
-            id: chapter_id.clone(),
-            document_id: document_id.clone(),
-            order_index: 1,
-            title: "Chapter One".to_string(),
-            level: 1,
-            block_first: 1,
-            block_last: 3,
-            summary: None,
-            summary_model: None,
-            summary_hash: None,
-            status: "pending".to_string(),
-        },
-    )
-    .await?;
-
-    for (index, text) in [
-        "The harbour was quiet that morning.",
-        "The keeper watched the light turn.",
-        "Morning came later that year.",
-    ]
-    .iter()
-    .enumerate()
-    {
-        repo::insert_block(
-            pool,
-            &Block {
-                id: format!("b{:06}", index + 1),
-                document_id: document_id.clone(),
-                chapter_id: Some(chapter_id.clone()),
-                order_index: index as i64 + 1,
-                kind: "para".to_string(),
-                level: 0,
-                source_md: (*text).to_string(),
-                source_text: (*text).to_string(),
-                translatable: true,
-                attrs_json: "{}".to_string(),
-                content_hash: format!("h{index}"),
-            },
-        )
-        .await?;
-    }
-
-    if bind_orchestrator {
-        let endpoint_id = new_id();
-        repo::upsert_endpoint(
-            pool,
-            &LlmEndpoint {
-                id: endpoint_id.clone(),
-                name: "fake-orchestrator".to_string(),
-                base_url: base_url.to_string(),
-                api_key_ref: None,
-                max_concurrency: Some(1),
-                notes: None,
-                last_health_at: None,
-                last_health_ok: None,
-                props_json: None,
-            },
-        )
-        .await?;
-        repo::upsert_role_binding(
-            pool,
-            &RoleBinding {
-                id: new_id(),
-                endpoint_id,
-                role: "orchestrator".to_string(),
-                model: "fake-model".to_string(),
-                params_json: "{}".to_string(),
-                priority: 0,
-            },
-        )
-        .await?;
-    }
-
-    Ok(project_id)
-}
-
-async fn deps_for(dir: &std::path::Path) -> Result<(SqlitePool, PipelineDeps)> {
-    let pool = db::connect(&dir.join("app.sqlite")).await?;
-    let deps = PipelineDeps::new(
-        pool.clone(),
-        unused_sidecar(),
-        ResourceGovernor::default(),
-        dir.to_path_buf(),
-    );
-    Ok((pool, deps))
 }
 
 #[tokio::test]
@@ -203,7 +62,9 @@ async fn reconnaissance_produces_a_candidate_the_user_confirms() -> Result<()> {
 
     let dir = tempfile::tempdir()?;
     let (pool, deps) = deps_for(dir.path()).await?;
-    let project_id = seed_project(&pool, &server.uri(), true).await?;
+    let project_id = seed_project(&pool, "recon", &server.uri(), true)
+        .await?
+        .project_id;
 
     // ---- run -----------------------------------------------------------------
     let outcome = recon::run_recon(&deps, None, &project_id, Some("User-pasted page.")).await?;
@@ -339,7 +200,9 @@ async fn reconnaissance_produces_a_candidate_the_user_confirms() -> Result<()> {
 async fn without_orchestrator_binding_the_step_fails_cleanly() -> Result<()> {
     let dir = tempfile::tempdir()?;
     let (pool, deps) = deps_for(dir.path()).await?;
-    let project_id = seed_project(&pool, "http://127.0.0.1:1", false).await?;
+    let project_id = seed_project(&pool, "unbound", "http://127.0.0.1:1", false)
+        .await?
+        .project_id;
 
     let error = recon::run_recon(&deps, None, &project_id, None)
         .await
@@ -370,7 +233,9 @@ async fn the_book_recon_job_reaches_the_pipeline() -> Result<()> {
 
     let dir = tempfile::tempdir()?;
     let (pool, deps) = deps_for(dir.path()).await?;
-    let project_id = seed_project(&pool, &server.uri(), true).await?;
+    let project_id = seed_project(&pool, "job", &server.uri(), true)
+        .await?
+        .project_id;
 
     let job = NewJob::new(
         &project_id,
