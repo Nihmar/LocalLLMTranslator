@@ -362,4 +362,105 @@ mod tests {
         assert!(translator.endpoint_id.is_none());
         drop(permit);
     }
+
+    #[tokio::test]
+    async fn probe_prefers_live_props_and_takes_the_minimum() {
+        use crate::db::models::{LlmEndpoint, RoleBinding};
+        use crate::db::repo;
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/props"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"total_slots":3}"#))
+            .mount(&server)
+            .await;
+
+        let (pool, _dir) = crate::db::connect_temp_file().await.expect("pool");
+        repo::upsert_endpoint(
+            &pool,
+            &LlmEndpoint {
+                id: "e1".to_string(),
+                name: "fake".to_string(),
+                base_url: server.uri(),
+                api_key_ref: None,
+                max_concurrency: Some(2),
+                notes: None,
+                last_health_at: None,
+                last_health_ok: None,
+                // Stale persisted props must lose against the live probe.
+                props_json: Some(r#"{"total_slots":9}"#.to_string()),
+            },
+        )
+        .await
+        .expect("endpoint");
+        repo::upsert_role_binding(
+            &pool,
+            &RoleBinding {
+                id: "b1".to_string(),
+                endpoint_id: "e1".to_string(),
+                role: "translator".to_string(),
+                model: "m".to_string(),
+                params_json: "{}".to_string(),
+                priority: 0,
+            },
+        )
+        .await
+        .expect("binding");
+
+        let plan = probe_endpoint_limits(&pool).await;
+        let entry = plan
+            .iter()
+            .find(|entry| entry.role == "translator")
+            .expect("translator plan");
+        assert_eq!(entry.limit, 2, "min(live slots 3, max_concurrency 2)");
+        assert!(entry.reason.contains("min"), "reason: {}", entry.reason);
+        assert!(plan.iter().all(|entry| entry.role != "editor"));
+    }
+
+    #[tokio::test]
+    async fn probe_falls_back_to_persisted_props_when_the_server_is_down() {
+        use crate::db::models::{LlmEndpoint, RoleBinding};
+        use crate::db::repo;
+
+        let (pool, _dir) = crate::db::connect_temp_file().await.expect("pool");
+        repo::upsert_endpoint(
+            &pool,
+            &LlmEndpoint {
+                id: "e1".to_string(),
+                name: "fake".to_string(),
+                base_url: "http://127.0.0.1:1".to_string(),
+                api_key_ref: None,
+                max_concurrency: None,
+                notes: None,
+                last_health_at: None,
+                last_health_ok: None,
+                props_json: Some(r#"{"total_slots":5}"#.to_string()),
+            },
+        )
+        .await
+        .expect("endpoint");
+        repo::upsert_role_binding(
+            &pool,
+            &RoleBinding {
+                id: "b1".to_string(),
+                endpoint_id: "e1".to_string(),
+                role: "editor".to_string(),
+                model: "m".to_string(),
+                params_json: "{}".to_string(),
+                priority: 0,
+            },
+        )
+        .await
+        .expect("binding");
+
+        let plan = probe_endpoint_limits(&pool).await;
+        let entry = plan
+            .iter()
+            .find(|entry| entry.role == "editor")
+            .expect("editor plan");
+        assert_eq!(entry.limit, 5, "persisted /props is the fallback");
+        assert!(entry.reason.contains("total_slots"));
+    }
 }
