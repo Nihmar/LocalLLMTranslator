@@ -298,7 +298,7 @@ export default function App() {
           ) : view === "ingest" ? (
             <IngestView project={project} onNavigate={setView} />
           ) : view === "models" ? (
-            <ModelsView project={project} />
+            <ModelsView />
           ) : view === "translate" ? (
             <TranslateView project={project} onNavigate={setView} />
           ) : view === "review" ? (

@@ -23,7 +23,6 @@ import type {
   JsonValue,
   Metrics,
   ModelInfo,
-  Project,
   Role,
   RoleBinding,
 } from "../lib/types";
@@ -34,11 +33,9 @@ import type {
  *
  * The secret never reaches this page: `api_key_ref` is the *name* of the entry in the OS keyring
  * (`PLAN.md` §5, "Nessun segreto nel database").
+ *
+ * The view is endpoint/role-scoped, not project-scoped: it takes no props.
  */
-
-export interface ModelsViewProps {
-  project: Project | null;
-}
 
 const ROLES: ReadonlyArray<{ value: Role; label: string; description: string }> = [
   { value: "translator", label: "Traduttore", description: "Traduce i chunk di prosa e tabelle." },
@@ -136,7 +133,7 @@ function healthStatus(endpoint: Endpoint): string {
   return endpoint.last_health_ok ? "ok" : "unreachable";
 }
 
-export function ModelsView(_props: ModelsViewProps) {
+export function ModelsView() {
   const [endpoints, setEndpoints] = useState<Endpoint[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);

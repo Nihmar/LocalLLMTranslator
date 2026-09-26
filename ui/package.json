@@ -9,7 +9,8 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "test": "node --test"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.1",
@@ -20,6 +21,7 @@
   "devDependencies": {
     "@eslint/js": "^9.39.5",
     "@tailwindcss/vite": "^4.3.3",
+    "@types/node": "^26.6.3",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^5.2.0",

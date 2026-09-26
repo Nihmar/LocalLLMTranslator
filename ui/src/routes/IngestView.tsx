@@ -195,6 +195,7 @@ export function IngestView({ project, onNavigate }: IngestViewProps) {
   }
 
   const chapters: Chapter[] = detail?.chapters ?? [];
+  const jobState = job?.state ?? "pending";
 
   return (
     <div className="section-stack">
@@ -413,17 +414,34 @@ export function IngestView({ project, onNavigate }: IngestViewProps) {
                 </dd>
               </dl>
 
-              {job?.last_error !== null && job?.last_error !== undefined ? (
+              {job !== null && job.last_error !== null ? (
                 <div className="banner banner-error" role="alert">
                   <span aria-hidden="true">⚠</span>
                   <span>{job.last_error}</span>
                 </div>
-              ) : (
+              ) : jobState === "failed" ? (
+                <div className="banner banner-error" role="alert">
+                  <span aria-hidden="true">⚠</span>
+                  <span>
+                    L&apos;estrazione è fallita: controlla i log e lo stato del sidecar, poi riprova.
+                  </span>
+                </div>
+              ) : jobState === "done" ? (
                 <div className="banner banner-ok" role="status">
                   <span aria-hidden="true">✓</span>
+                  <span>Estrazione completata: capitoli e chunk sono pronti.</span>
+                </div>
+              ) : jobState === "cancelled" ? (
+                <div className="banner" role="status">
+                  <span aria-hidden="true">⏹</span>
+                  <span>Estrazione annullata prima del completamento.</span>
+                </div>
+              ) : (
+                <div className="banner" role="status">
+                  <span aria-hidden="true">⏳</span>
                   <span>
-                    L&apos;estrazione gira sulla coda: i capitoli e i chunk compaiono qui man mano
-                    che il job procede.
+                    Estrazione in corso: i capitoli e i chunk compaiono qui man mano che il job
+                    procede.
                   </span>
                 </div>
               )}

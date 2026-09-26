@@ -11,8 +11,7 @@
  * - commands that take a struct declare it as `req` and receive `{ req: {...} }`;
  * - commands that take a primitive id declare it as `id` / `chunk_id` / `path`;
  * - commands with no payload (`role_binding_list`, `metrics_get`, `sidecar_status`,
- *   `translation_pause`, `translation_cancel`, `project_list`, `endpoint_list`) are called
- *   with no arguments at all.
+ *   `translation_pause`, `project_list`, `endpoint_list`) are called with no arguments at all.
  *
  * There is no direct network access anywhere in the UI: every backend interaction goes through
  * `invoke` here or through `listen` in `lib/events.ts` (`PLAN.md` §2, `AGENTS.md` §TypeScript).
@@ -78,10 +77,34 @@ export function isTauriRuntime(): boolean {
 }
 
 /**
- * Normalises anything a rejected `invoke()` can carry (Rust serialises command errors as plain
- * strings) into a displayable message. Backend text is passed through unchanged.
+ * Shape Rust's `AppError` serialises to (`crates/app/src/error.rs`). A rejected `invoke()` carries
+ * this object, not a string.
+ */
+interface SerializedAppError {
+  code: string;
+  message: string;
+  retryable: boolean;
+}
+
+/** True for the `{ code, message, retryable }` object every `AppError` serialises to. */
+function isSerializedAppError(value: unknown): value is SerializedAppError {
+  if (value === null || typeof value !== "object") {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  return typeof record["message"] === "string" && typeof record["code"] === "string";
+}
+
+/**
+ * Normalises anything a rejected `invoke()` can carry into a displayable message. Rust commands
+ * reject with the serialised `AppError` object, so that shape is unwrapped first; otherwise the
+ * usual `Error` and string forms are handled and any other value falls back to JSON. Backend text
+ * is passed through unchanged.
  */
 export function toErrorMessage(error: unknown): string {
+  if (isSerializedAppError(error)) {
+    return error.code.length > 0 ? `${error.message} (${error.code})` : error.message;
+  }
   if (error instanceof Error) {
     return error.message;
   }
@@ -185,9 +208,12 @@ export function translationPause(): Promise<Ack> {
   return call<Ack>(COMMANDS.translationPause);
 }
 
-/** Stops the worker pool and releases the leases. */
-export function translationCancel(): Promise<Ack> {
-  return call<Ack>(COMMANDS.translationCancel);
+/**
+ * Cancels the open project's translation run: the pool stops claiming work, in-flight chunks go
+ * back to `pending` and unfinished jobs are marked `cancelled`.
+ */
+export function translationCancel(projectId: string | null): Promise<Ack> {
+  return call<Ack>(COMMANDS.translationCancel, { req: { project_id: projectId } });
 }
 
 // --- jobs and chunks -----------------------------------------------------------------------

@@ -75,9 +75,10 @@ export function subscribe<TPayload>(
 }
 
 /**
- * `job://progress` — per-job progress. The payload is not a stable row (the pipeline dispatcher
- * and the sidecar supervisor emit different shapes), so consumers treat it as an invalidation
- * trigger and refetch through `job_list` / `chunk_list`.
+ * `job://progress` — per-job progress. The payload is the serialized `Job` row (see
+ * `JobProgressEvent`), the same shape `job_list` returns, but it says nothing about the other
+ * rows: consumers still treat it as an invalidation trigger and refetch through `job_list` /
+ * `chunk_list`.
  */
 export function onJobProgress(handler: (payload: JobProgressEvent) => void): Unsubscribe {
   return subscribe<JobProgressEvent>(EVENTS.jobProgress, handler);

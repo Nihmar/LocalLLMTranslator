@@ -29,10 +29,6 @@ export interface ChunkTableProps {
   chunks: readonly ChunkRow[];
   /** Opens the read-only original/target drawer. */
   onOpenDetails?: ((chunkId: string) => void) | undefined;
-  /** Rows with a command in flight: their actions are disabled. */
-  busyIds?: ReadonlySet<string> | undefined;
-  /** Rows touched by the last `job://progress` event, briefly highlighted. */
-  highlightedIds?: ReadonlySet<string> | undefined;
 }
 
 type SortKey = "order" | "chapter" | "tokens" | "status" | "model" | "attempts";
@@ -124,7 +120,7 @@ function SortButton({ label, sortKey, sort, onChange, align = "left" }: SortButt
   );
 }
 
-export function ChunkTable({ chunks, onOpenDetails, busyIds, highlightedIds }: ChunkTableProps) {
+export function ChunkTable({ chunks, onOpenDetails }: ChunkTableProps) {
   const [sort, setSort] = useState<SortState>({ key: "order", direction: "asc" });
 
   const rows = useMemo(() => {
@@ -185,14 +181,8 @@ export function ChunkTable({ chunks, onOpenDetails, busyIds, highlightedIds }: C
             </tr>
           ) : (
             rows.map((row) => {
-              const busy = busyIds?.has(row.id) === true;
-              const highlighted = highlightedIds?.has(row.id) === true;
-
               return (
-                <tr
-                  key={row.id}
-                  style={highlighted ? { outline: "1px solid var(--color-accent)" } : undefined}
-                >
+                <tr key={row.id}>
                   <td className="num" title={row.id}>
                     {formatNumber(row.order_index)}
                   </td>
@@ -250,7 +240,6 @@ export function ChunkTable({ chunks, onOpenDetails, busyIds, highlightedIds }: C
                       <button
                         type="button"
                         className="btn btn-sm btn-ghost"
-                        disabled={busy}
                         onClick={() => {
                           onOpenDetails(row.id);
                         }}

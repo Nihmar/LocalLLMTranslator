@@ -19,8 +19,6 @@ import type { LogLevel, LogLineEvent } from "../lib/types";
  */
 
 export interface LogViewProps {
-  /** Keeps lines for this project plus global lines; `null` shows everything. */
-  projectId?: string | null | undefined;
   /** Maximum retained lines. Older lines are discarded. */
   limit?: number | undefined;
   title?: string | undefined;
@@ -53,7 +51,6 @@ function pushBounded(
 }
 
 export function LogView({
-  projectId = null,
   limit = 400,
   title = "Log live",
   heightClass = "h-72",
@@ -61,7 +58,6 @@ export function LogView({
 }: LogViewProps) {
   const [lines, setLines] = useState<LogLineEvent[]>([]);
   const [minLevel, setMinLevel] = useState<LogLevel>("info");
-  const [onlyProject, setOnlyProject] = useState(projectId !== null);
   const [follow, setFollow] = useState(true);
   const [paused, setPaused] = useState(false);
 
@@ -72,10 +68,6 @@ export function LogView({
   useEffect(() => {
     pausedRef.current = paused;
   }, [paused]);
-
-  useEffect(() => {
-    setOnlyProject(projectId !== null);
-  }, [projectId]);
 
   useEffect(() => {
     const unsubscribe = onLogLine((line) => {
@@ -113,16 +105,8 @@ export function LogView({
 
   const visible = useMemo(() => {
     const threshold = LEVEL_ORDER[minLevel];
-    return lines.filter((line) => {
-      if (LEVEL_ORDER[line.level] < threshold) {
-        return false;
-      }
-      if (onlyProject && projectId !== null && typeof line.project_id === "string") {
-        return line.project_id === projectId;
-      }
-      return true;
-    });
-  }, [lines, minLevel, onlyProject, projectId]);
+    return lines.filter((line) => LEVEL_ORDER[line.level] >= threshold);
+  }, [lines, minLevel]);
 
   const handleJumpToEnd = useCallback(() => {
     setFollow(true);
@@ -169,19 +153,6 @@ export function LogView({
               <option value="error">errori</option>
             </select>
           </label>
-
-          {projectId !== null ? (
-            <label className="flex items-center gap-1 text-xs text-muted">
-              <input
-                type="checkbox"
-                checked={onlyProject}
-                onChange={(event) => {
-                  setOnlyProject(event.target.checked);
-                }}
-              />
-              Solo questo progetto
-            </label>
-          ) : null}
 
           <button
             type="button"

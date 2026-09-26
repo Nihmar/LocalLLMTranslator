@@ -529,7 +529,7 @@ export function JobsView({ project, onNavigate }: JobsViewProps) {
             </div>
           ) : null}
 
-          <LogView projectId={projectId} limit={600} title="Log di esecuzione" heightClass="h-80" />
+          <LogView limit={600} title="Log di esecuzione" heightClass="h-80" />
 
           <p className="text-[0.72rem] text-faint">
             {activeJobs > 0 ? "L'ETA si aggiorna ogni secondo." : "Nessun job attivo."}

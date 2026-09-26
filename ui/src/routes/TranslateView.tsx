@@ -27,12 +27,13 @@ import type { ViewId } from "../App";
  * (`PLAN.md` §11.3).
  *
  * The translation commands are **project-scoped**: `translation_start` takes a project and an
- * `only_retry` flag, while `translation_pause` / `translation_cancel` take no argument at all and
- * act on the whole worker pool. There is no per-chunk command, so the table offers a read-only
- * detail drawer instead of per-row retry/skip controls.
+ * `only_retry` flag and `translation_cancel` takes the project id, while `translation_pause` takes
+ * no argument and acts on the whole worker pool. There is no per-chunk command, so the table offers
+ * a read-only detail drawer instead of per-row retry/skip controls.
  *
- * `job://progress` is treated as an invalidation trigger — its payload is not a stable chunk row —
- * so the table is refetched rather than patched field by field.
+ * `job://progress` carries the serialized `Job` row; it is still treated as an invalidation trigger
+ * (one row says nothing about the others), so the table is refetched rather than patched field by
+ * field.
  */
 
 export interface TranslateViewProps {
@@ -208,8 +209,8 @@ export function TranslateView({ project, onNavigate }: TranslateViewProps) {
     setLimit(PAGE_SIZE);
   }, [projectId, statusFilter]);
 
-  // Any progress event invalidates the queue and the table; refetch instead of trusting the
-  // heterogeneous payload.
+  // Any progress event invalidates the queue and the table; refetch instead of patching the single
+  // job row it carries.
   useEffect(
     () =>
       onJobProgress(() => {
@@ -304,7 +305,9 @@ export function TranslateView({ project, onNavigate }: TranslateViewProps) {
     setActionNotice(null);
     try {
       await translationPause();
-      setActionNotice("Esecuzione sospesa: i lease sono rilasciati, la coda resta. Riprendi con «Avvia».");
+      setActionNotice(
+        "Esecuzione sospesa: la coda resta e i chunk già in corso arrivano a termine. Riprendi con «Avvia».",
+      );
       await loadMetrics();
     } catch (pauseError) {
       setActionError(toErrorMessage(pauseError));
@@ -318,7 +321,7 @@ export function TranslateView({ project, onNavigate }: TranslateViewProps) {
     setActionError(null);
     setActionNotice(null);
     try {
-      await translationCancel();
+      await translationCancel(projectId);
       setActionNotice("Esecuzione annullata: i job in attesa sono stati annullati.");
       await loadChunks();
       await loadContext();
@@ -735,8 +738,10 @@ export function TranslateView({ project, onNavigate }: TranslateViewProps) {
             <ul className="list-disc space-y-1 pl-4 text-xs text-muted">
               <li>Un chunk è l&apos;unità di lavoro e di checkpoint: ogni chunk completato è salvato.</li>
               <li>
-                «Pausa» e «Annulla» agiscono sull&apos;intero esecutore: <span className="mono-chip">translation_pause</span>{" "}
-                e <span className="mono-chip">translation_cancel</span> non prendono argomenti.
+                «Pausa» ferma l&apos;intero esecutore e non riceve argomenti (
+                <span className="mono-chip">translation_pause</span>); «Annulla» agisce sul progetto
+                aperto, il cui id viene passato a{" "}
+                <span className="mono-chip">translation_cancel</span>.
               </li>
               <li>
                 «Avvia / Riprendi» rimette in coda i chunk non completati; «Riprova falliti» solo
@@ -746,7 +751,7 @@ export function TranslateView({ project, onNavigate }: TranslateViewProps) {
             </ul>
           </div>
 
-          <LogView projectId={projectId} limit={300} heightClass="h-64" />
+          <LogView limit={300} heightClass="h-64" />
         </div>
       </div>
     </div>
