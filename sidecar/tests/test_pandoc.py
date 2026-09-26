@@ -169,3 +169,32 @@ def test_pandoc_failure_raises_pandoc_error_carrying_the_log(tmp_path: Path) -> 
     assert info.value.log
     # Atomic write: a failed build never leaves a partial export behind.
     assert not output.exists()
+
+
+def test_output_path_that_is_a_directory_raises_pandoc_error(tmp_path: Path) -> None:
+    target = tmp_path / "book_dir"
+    target.mkdir()
+
+    with pytest.raises(PandocError) as info:
+        build(
+            units=[_unit(tmp_path, "one.md", "Chapter One", "Body.\n")],
+            metadata={"title": "T"},
+            output_path=str(target),
+            output_format="html",
+        )
+    assert info.value.code == 1002
+    assert isinstance(info.value.log, str)
+    # The failed rename must not leak the sibling temp file next to the target.
+    assert not list(tmp_path.glob(f".{target.name}.*"))
+    assert target.is_dir()
+
+
+def test_unreadable_unit_raises_pandoc_error(tmp_path: Path) -> None:
+    with pytest.raises(PandocError) as info:
+        build(
+            units=[{"path": str(tmp_path / "gone.md"), "title": "Chapter"}],
+            metadata={"title": "T"},
+            output_path=str(tmp_path / "book.html"),
+            output_format="html",
+        )
+    assert info.value.code == 1002

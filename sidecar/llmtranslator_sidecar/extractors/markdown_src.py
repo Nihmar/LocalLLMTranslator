@@ -65,6 +65,10 @@ class MarkdownSourceExtractor:
             message = f"cannot read Markdown source {source.name}: {exc}"
             raise ExtractionError(message) from exc
 
+        # Strip a UTF-8 BOM before the first line is inspected: otherwise the BOM hides the
+        # opening ``---`` delimiter and the front matter is never detected.
+        text = text.removeprefix("\ufeff")
+
         warnings: list[str] = []
         return ExtractResult(
             markdown=text,

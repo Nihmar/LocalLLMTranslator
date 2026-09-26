@@ -14,7 +14,9 @@ import importlib.util
 from pathlib import Path
 from typing import Any, cast
 
-from .base import ExtractionError, ExtractResult, MissingDependencyError
+from llmtranslator_sidecar.errors import MissingDependencyError
+
+from .base import ExtractionError, ExtractResult
 from .pdf_pymupdf import pdf_metadata
 
 
@@ -34,16 +36,27 @@ def _extract_with_marker(path: str) -> str:
     """Run marker's high-level converter and return its Markdown rendering.
 
     marker ships no type information, so its modules are widened to ``Any`` at the import
-    boundary; the opaque values never reach a statically checked call site.
+    boundary; the opaque values never reach a statically checked call site. The imports and
+    the attribute wiring run inside the guarded block: a marker whose internal layout has
+    drifted (a version mismatch) is a broken install, and must surface as a missing
+    dependency rather than as an opaque internal error.
     """
-    converters = cast("Any", importlib.import_module("marker.converters.pdf"))
-    models = cast("Any", importlib.import_module("marker.models"))
-    output = cast("Any", importlib.import_module("marker.output"))
+    try:
+        converters = cast("Any", importlib.import_module("marker.converters.pdf"))
+        models = cast("Any", importlib.import_module("marker.models"))
+        output = cast("Any", importlib.import_module("marker.output"))
+        converter = converters.PdfConverter(models.create_model_dict())
+        render = output.text_from_rendered
+    except (ImportError, AttributeError) as exc:
+        message = (
+            "the installed 'marker' backend is incompatible or incomplete "
+            f"({exc}); reinstall the sidecar's optional 'marker' extra"
+        )
+        raise MissingDependencyError(message, backend="marker") from exc
 
     try:
-        converter = converters.PdfConverter(models.create_model_dict())
         rendered = converter(str(path))
-        markdown, _images, _metadata = output.text_from_rendered(rendered)
+        markdown, _images, _metadata = render(rendered)
     except Exception as exc:
         message = f"marker failed to extract {Path(path).name}: {exc}"
         raise ExtractionError(message) from exc

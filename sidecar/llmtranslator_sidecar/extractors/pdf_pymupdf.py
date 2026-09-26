@@ -23,7 +23,6 @@ from pathlib import Path
 from typing import Any
 
 import pymupdf
-import pymupdf4llm
 
 from .base import ExtractionError, ExtractResult
 
@@ -89,6 +88,12 @@ def _to_markdown(path: str) -> str:
     pymupdf.set_messages(stream=sink)
     try:
         with contextlib.redirect_stdout(sink):
+            # Imported lazily, and inside the stdout guard: pymupdf4llm drags in
+            # onnxruntime, which is heavy and is only needed when a PDF is rendered, so
+            # markdown/EPUB ingestion never pays for it — and any import-time chatter ends
+            # up in the throwaway sink instead of the NDJSON wire.
+            import pymupdf4llm  # noqa: PLC0415
+
             return str(pymupdf4llm.to_markdown(path))
     finally:
         pymupdf.set_messages(stream=previous)

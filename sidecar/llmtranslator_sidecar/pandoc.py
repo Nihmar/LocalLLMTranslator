@@ -23,14 +23,21 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from .errors import (
+    MISSING_DEPENDENCY,
+    PANDOC_FAILURE,
+    MissingDependencyError,
+    PandocError,
+)
+
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
 #: RPC error code carried on :class:`PandocError` (see ``AGENTS.md``).
-PANDOC_FAILURE_CODE = 1002
+PANDOC_FAILURE_CODE = PANDOC_FAILURE
 
 #: RPC error code carried on :class:`MissingDependencyError`.
-MISSING_DEPENDENCY_CODE = 1003
+MISSING_DEPENDENCY_CODE = MISSING_DEPENDENCY
 
 #: Environment variable that overrides the ``pandoc`` binary path.
 PANDOC_ENV = "LLMTRANSLATOR_PANDOC"
@@ -53,22 +60,6 @@ _ORDERED_KEYS: tuple[str, ...] = ("title", "author", "language", "date", "publis
 
 #: Characters that force a YAML scalar to be quoted, mirroring the Rust ``yaml_scalar``.
 _YAML_RISKY = frozenset(":#\n\"'[]{},&*!|>%@`")
-
-
-class PandocError(RuntimeError):
-    """Pandoc exited non-zero. :attr:`log` holds its combined stdout and stderr."""
-
-    code = PANDOC_FAILURE_CODE
-
-    def __init__(self, message: str, log: str = "") -> None:
-        super().__init__(message)
-        self.log = log
-
-
-class MissingDependencyError(RuntimeError):
-    """The pandoc binary could not be found on the system."""
-
-    code = MISSING_DEPENDENCY_CODE
 
 
 def _needs_quoting(value: str) -> bool:
@@ -130,7 +121,14 @@ def _combine_units(units: Sequence[Mapping[str, Any]]) -> str:
     parts: list[str] = []
     for unit in units:
         title = str(unit.get("title", "")).strip()
-        body = Path(str(unit["path"])).read_text(encoding="utf-8").strip("\n")
+        source = Path(str(unit["path"]))
+        try:
+            body = source.read_text(encoding="utf-8").strip("\n")
+        except OSError as exc:
+            # The units are the build's inputs: an unreadable one is a build failure, not
+            # a generic internal error, so it is reported with the domain error type.
+            msg = f"cannot read unit {source}: {exc}"
+            raise PandocError(msg) from exc
         if title:
             parts.append(f"# {title}")
         if body:
@@ -205,7 +203,15 @@ def build(  # noqa: PLR0913 - the six-keyword signature is frozen by AGENTS.md
             Path(temporary).unlink(missing_ok=True)
             msg = f"pandoc exited with status {completed.returncode}"
             raise PandocError(msg, log=log)
-        Path(temporary).replace(target)
+        try:
+            Path(temporary).replace(target)
+        except OSError as exc:
+            # The rename can fail on its own (target is a directory, permission denied,
+            # out of space): the temp file must not leak and the failure is a pandoc
+            # build failure, not an unmapped internal error.
+            Path(temporary).unlink(missing_ok=True)
+            msg = f"failed to move the pandoc output into {target}: {exc}"
+            raise PandocError(msg, log=log) from exc
 
     duration_ms = int((time.perf_counter() - started) * 1000)
     return {"output_path": output_path, "log": log, "duration_ms": duration_ms}

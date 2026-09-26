@@ -13,9 +13,12 @@ blocks would be silently rewritten downstream.
 from __future__ import annotations
 
 import importlib.util
+import os
 import shutil
 import subprocess
 import sys
+import types
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -60,6 +63,47 @@ def fixtures(tmp_path_factory: pytest.TempPathFactory) -> Path:
 def produced(result: dict[str, Any]) -> str:
     """Read back the single Markdown file an ``extract`` call produced."""
     return Path(str(result["markdown_path"])).read_text(encoding="utf-8")
+
+
+#: A minimal, valid EPUB 3 package assembled by hand, so the extractor can be exercised on
+#: arbitrary body markup without depending on the untyped ebooklib writer in this suite.
+_EPUB_CONTAINER = """<?xml version="1.0" encoding="utf-8"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles>
+    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+  </rootfiles>
+</container>
+"""
+
+_EPUB_OPF = """<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="bookid">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="bookid">urn:uuid:00000000-0000-0000-0000-000000000000</dc:identifier>
+    <dc:title>Synthetic</dc:title>
+    <dc:language>en</dc:language>
+  </metadata>
+  <manifest>
+    <item id="chap" href="chap.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine>
+    <itemref idref="chap"/>
+  </spine>
+</package>
+"""
+
+
+def _write_epub(path: Path, body: str) -> None:
+    """Write ``path`` as an EPUB whose single chapter body is ``body``."""
+    xhtml = (
+        '<?xml version="1.0" encoding="utf-8"?>\n'
+        '<html xmlns="http://www.w3.org/1999/xhtml"><head><title>x</title></head>'
+        f"<body>{body}</body></html>\n"
+    )
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("mimetype", "application/epub+zip", zipfile.ZIP_STORED)
+        archive.writestr("META-INF/container.xml", _EPUB_CONTAINER)
+        archive.writestr("OEBPS/content.opf", _EPUB_OPF)
+        archive.writestr("OEBPS/chap.xhtml", xhtml)
 
 
 def test_detect_format_reports_format_and_backends(fixtures: Path) -> None:
@@ -143,6 +187,9 @@ def test_extract_epub_yields_headings_paragraphs_and_metadata(
     assert "1. Fill the lamps" in markdown
     assert "> The wind rose from the *west*" in markdown
     assert "| Element | Number | Notes |" in markdown
+    # The caption is its own paragraph, blank-line separated from the delimiter row, so a
+    # GFM parser does not fold it into the table and lose the table itself.
+    assert "Stores\n\n| Element | Number | Notes |" in markdown
     assert "```sql" in markdown
     assert "![The harbour at dawn](harbour.png)" in markdown
     assert "[^1]:" in markdown and "[^2]:" in markdown
@@ -217,3 +264,129 @@ def test_extraction_error_carries_the_ingestion_code(tmp_path: Path) -> None:
     with pytest.raises(ExtractionError) as error:
         detect_format(str(mystery))
     assert error.value.code == 1001
+
+
+# -- C1: bare text nodes inside a container must not be dropped -------------------------
+
+
+def test_epub_keeps_bare_text_nodes_and_warns(tmp_path: Path) -> None:
+    source = tmp_path / "bare.epub"
+    # ebooklib normalises the XHTML while reading and drops any text before the first
+    # element, so the bare text sits where it actually reaches the extractor: between and
+    # after the block children of <body>.
+    _write_epub(
+        source,
+        "<p>First paragraph.</p>Between the blocks.<p>Second paragraph.</p>Trailing text.",
+    )
+
+    result = extract(str(source), str(tmp_path / "work"))
+    markdown = produced(result)
+
+    assert "First paragraph." in markdown
+    assert "Between the blocks." in markdown
+    assert "Second paragraph." in markdown
+    assert "Trailing text." in markdown
+    assert any("flatten" in warning for warning in result["warnings"])
+    assert serialize(split_blocks(markdown)) == markdown
+
+
+def test_epub_keeps_bare_text_directly_inside_a_div(tmp_path: Path) -> None:
+    source = tmp_path / "div.epub"
+    _write_epub(source, "<div>Inside a div.</div>")
+
+    result = extract(str(source), str(tmp_path / "work"))
+    assert "Inside a div." in produced(result)
+    assert any("flatten" in warning for warning in result["warnings"])
+
+
+def test_epub_drops_whitespace_only_text_without_a_warning(tmp_path: Path) -> None:
+    source = tmp_path / "spaces.epub"
+    _write_epub(source, "\n  <p>Only a paragraph.</p>\n\t")
+
+    result = extract(str(source), str(tmp_path / "work"))
+    assert "Only a paragraph." in produced(result)
+    assert result["warnings"] == []
+
+
+# -- m3: alt text / href characters that would break Markdown are escaped ---------------
+
+
+def test_epub_escapes_markdown_breakers_in_images_and_links(tmp_path: Path) -> None:
+    body = (
+        '<p><img src="maps/a)1.png" alt="harbour] map"/></p>'
+        '<p><a href="https://example.org/a)b">the pier</a></p>'
+    )
+    source = tmp_path / "escaping.epub"
+    _write_epub(source, body)
+
+    markdown = produced(extract(str(source), str(tmp_path / "work")))
+    assert "harbour\\] map" in markdown
+    assert "maps/a\\)1.png" in markdown
+    assert "https://example.org/a\\)b" in markdown
+    assert serialize(split_blocks(markdown)) == markdown
+
+
+# -- M3: the NDJSON transport requires that extract never writes to fd 1 ----------------
+
+
+@pytest.mark.parametrize("name", sorted(FORMATS))
+def test_extract_writes_nothing_to_stdout(fixtures: Path, tmp_path: Path, name: str) -> None:
+    captured = tmp_path / "stdout.bin"
+    saved = os.dup(1)
+    sink = captured.open("wb")
+    try:
+        sys.stdout.flush()
+        os.dup2(sink.fileno(), 1)
+        extract(str(fixtures / name), str(tmp_path / "work"))
+        sys.stdout.flush()
+    finally:
+        sys.stdout.flush()
+        os.dup2(saved, 1)
+        os.close(saved)
+        sink.close()
+
+    assert captured.read_bytes() == b"", "extract() must not write to stdout (fd 1)"
+
+
+# -- m2: a version-mismatched marker is a missing dependency, not a raw ImportError ------
+
+
+def test_marker_import_failure_maps_to_missing_dependency(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from llmtranslator_sidecar.extractors import pdf_marker
+
+    def boom(name: str) -> object:
+        raise ImportError(name)
+
+    monkeypatch.setattr(pdf_marker, "_marker_available", lambda: True)
+    monkeypatch.setattr(pdf_marker, "importlib", types.SimpleNamespace(import_module=boom))
+
+    with pytest.raises(MissingDependencyError) as error:
+        pdf_marker.MarkerPdfExtractor().extract("whatever.pdf")
+    assert error.value.code == 1003
+    assert error.value.backend == "marker"
+
+
+# -- m4: a UTF-8 BOM must not hide the YAML front matter --------------------------------
+
+
+def test_markdown_front_matter_survives_a_bom(tmp_path: Path) -> None:
+    source = tmp_path / "bom.md"
+    source.write_text("\ufeff---\ntitle: BOM Book\nauthor: BOM Author\n---\n\nBody.\n", "utf-8")
+
+    result = extract(str(source), str(tmp_path / "work"))
+    assert result["metadata"]["title"] == "BOM Book"
+    markdown = produced(result)
+    assert not markdown.startswith("\ufeff")
+    assert serialize(split_blocks(markdown)) == markdown
+
+
+# -- m1: extractor and pandoc share a single MissingDependencyError class ----------------
+
+
+def test_missing_dependency_error_is_shared_across_modules() -> None:
+    from llmtranslator_sidecar import errors, pandoc
+
+    assert MissingDependencyError is pandoc.MissingDependencyError
+    assert issubclass(MissingDependencyError, errors.SidecarError)

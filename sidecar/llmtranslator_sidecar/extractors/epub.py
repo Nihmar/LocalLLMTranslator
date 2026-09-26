@@ -116,6 +116,16 @@ def _code_block(text: str, language: str) -> str:
     return f"{fence}{language}\n{text}\n{fence}"
 
 
+def _escape_alt(text: str) -> str:
+    """Escape the brackets that would close an image's alt text early."""
+    return text.replace("\\", "\\\\").replace("[", "\\[").replace("]", "\\]")
+
+
+def _escape_destination(url: str) -> str:
+    """Escape the parentheses that would end a link destination early."""
+    return url.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+
+
 def _alignment(cell: Tag) -> str:
     classes = _classes(cell)
     if "right" in classes:
@@ -145,13 +155,11 @@ class _ChapterRenderer:
         self._warnings = warnings
         self._in_definition = False
 
+    #: Recorded the first time a bare text node has to be promoted to a paragraph.
+    _FLATTEN_WARNING = "text outside a block element was flattened into a paragraph"
+
     def render(self, root: Tag) -> str:
-        blocks = [
-            self._block(child)
-            for child in root.children
-            if isinstance(child, Tag) and child.name.lower() not in _IGNORED
-        ]
-        return "\n\n".join(block for block in blocks if block)
+        return self._children_blocks(root)
 
     # -- block level -----------------------------------------------------------
 
@@ -171,12 +179,27 @@ class _ChapterRenderer:
         return self._inline_children(tag).strip()
 
     def _children_blocks(self, tag: Tag) -> str:
-        blocks = [
-            self._block(child)
-            for child in tag.children
-            if isinstance(child, Tag) and child.name.lower() not in _IGNORED
-        ]
+        blocks: list[str] = []
+        for child in tag.children:
+            if isinstance(child, Comment):
+                continue
+            if isinstance(child, NavigableString):
+                # A non-whitespace text node directly inside a container is not valid
+                # block content, but dropping it would silently lose the source text;
+                # promote it to a paragraph instead and say the HTML had to be flattened.
+                text = _collapse(str(child)).strip()
+                if text:
+                    self._warn(self._FLATTEN_WARNING)
+                    blocks.append(text)
+                continue
+            if isinstance(child, Tag) and child.name.lower() not in _IGNORED:
+                blocks.append(self._block(child))
         return "\n\n".join(block for block in blocks if block)
+
+    def _warn(self, message: str) -> None:
+        """Record ``message`` once, so a repeated degradation does not flood the caller."""
+        if message not in self._warnings:
+            self._warnings.append(message)
 
     def _heading(self, tag: Tag) -> str:
         level = _HEADING_LEVELS[tag.name.lower()]
@@ -247,6 +270,10 @@ class _ChapterRenderer:
         if caption is not None:
             text = self._inline_children(caption).strip()
             if text:
+                # The blank line keeps the caption its own paragraph: with the caption
+                # glued to the header row a GFM parser folds both into one paragraph and
+                # never recognises the table at all. The round-trip is unaffected.
+                lines.insert(0, "")
                 lines.insert(0, text)
         return "\n".join(lines)
 
@@ -336,7 +363,7 @@ class _ChapterRenderer:
         if not isinstance(src, str) or not src.strip():
             self._warnings.append("image without a source was replaced by its alt text")
             return alt
-        return f"![{alt}]({src.strip()})"
+        return f"![{_escape_alt(alt)}]({_escape_destination(src.strip())})"
 
     def _anchor(self, tag: Tag) -> str:
         text = self._inline_children(tag)
@@ -350,9 +377,9 @@ class _ChapterRenderer:
                 # Back-reference from the note body to its marker: Markdown footnotes
                 # carry the link implicitly, so the marker itself is dropped.
                 return ""
-            return f"[{text}]({href})" if text.strip() else text
+            return f"[{text}]({_escape_destination(href)})" if text.strip() else text
         if isinstance(href, str) and href.strip():
-            return f"[{text}]({href})" if text.strip() else text
+            return f"[{text}]({_escape_destination(href)})" if text.strip() else text
         return text
 
 

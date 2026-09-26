@@ -1,10 +1,10 @@
-"""Foundation of the extractor layer: error types, result shape and shared helpers.
+"""Foundation of the extractor layer: result shape, shared helpers and error re-exports.
 
 Every extractor is a pure ``input -> output`` function with no database, no network and
-no state that survives a call, as the data plane requires. The RPC layer turns the two
-error classes below into JSON-RPC errors by their name, so their identifiers are part of
-the frozen surface: :class:`ExtractionError` maps to code ``1001`` and
-:class:`MissingDependencyError` to ``1003``.
+no state that survives a call, as the data plane requires. The domain errors themselves
+live in :mod:`llmtranslator_sidecar.errors`, shared with the pandoc bridge so a caller can
+catch one :class:`MissingDependencyError` for every backend; the RPC layer maps them to
+JSON-RPC codes by class name.
 """
 
 from __future__ import annotations
@@ -17,13 +17,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
+from llmtranslator_sidecar.errors import ExtractionError
 from llmtranslator_sidecar.parse import parse_markdown
-
-#: JSON-RPC error code for a failed ingestion (``AGENTS.md`` IPC contract).
-INGESTION_FAILED = 1001
-
-#: JSON-RPC error code for an optional backend that is not installed.
-MISSING_DEPENDENCY = 1003
 
 #: Document formats the sidecar understands, and the backends each one can use.
 BACKENDS: dict[str, list[str]] = {
@@ -45,32 +40,6 @@ _EXTENSIONS: dict[str, str] = {
     ".mdown": "markdown",
     ".mkd": "markdown",
 }
-
-
-class ExtractorError(Exception):
-    """Base class for ingestion failures the RPC layer reports as JSON-RPC errors."""
-
-    code: int = -32603
-
-    def __init__(self, message: str) -> None:
-        super().__init__(message)
-        self.message = message
-
-
-class ExtractionError(ExtractorError):
-    """Ingestion failed; the RPC layer maps this to code ``1001``."""
-
-    code = INGESTION_FAILED
-
-
-class MissingDependencyError(ExtractorError):
-    """An optional backend is not installed; maps to code ``1003``."""
-
-    code = MISSING_DEPENDENCY
-
-    def __init__(self, message: str, *, backend: str | None = None) -> None:
-        super().__init__(message)
-        self.backend = backend
 
 
 @dataclass(slots=True)

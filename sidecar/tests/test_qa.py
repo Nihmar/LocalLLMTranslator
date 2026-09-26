@@ -207,6 +207,23 @@ def test_markdown_reports_an_unbalanced_code_fence() -> None:
     assert _kinds(result) == {"markdown_malformed"}
 
 
+def test_markdown_tolerates_a_code_fence_info_change() -> None:
+    result = check(
+        source_text="```python  data\ncode line\n```\n",
+        target_text="```python data\ncode line\n```\n",
+        glossary={},
+        placeholders=[],
+    )
+    assert "markdown_malformed" not in _kinds(result)
+
+
+def test_markdown_reports_a_code_fence_char_change() -> None:
+    result = check(
+        source_text="```\ncode\n```\n", target_text="~~~\ncode\n~~~\n", glossary={}, placeholders=[]
+    )
+    assert _kinds(result) == {"markdown_malformed"}
+
+
 def test_severity_matches_the_documented_mapping() -> None:
     assert (
         check(source_text="x\n", target_text=" \n", glossary={}, placeholders=[])["findings"][0][

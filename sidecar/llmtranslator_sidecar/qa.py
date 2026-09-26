@@ -136,7 +136,9 @@ def _fence(markdown: str) -> dict[str, Any] | None:
     width = len(opening) - len(opening.lstrip(char))
     closing = re.compile(rf"^ {{0,3}}{re.escape(char)}{{{width},}}[ \t]*$")
     balanced = len(lines) > 1 and closing.match(lines[-1]) is not None
-    return {"char": char, "info": opening[width:].strip(), "balanced": balanced}
+    # Only the fence's shape is compared: the info string is free-form and a translation
+    # that merely normalises its whitespace must not be flagged as malformed Markdown.
+    return {"char": char, "width": width, "balanced": balanced}
 
 
 def _block_structure(block: Block) -> dict[str, Any]:
@@ -187,7 +189,10 @@ def _words(text: str) -> list[str]:
 
 
 def _longest_common_run(source_words: list[str], target_words: list[str], min_words: int) -> int:
-    """Longest run of identical words shared by both sides, capped below ``min_words``."""
+    """Length of the longest run of identical words shared by both sides.
+
+    Returns 0 when either side is shorter than ``min_words`` or no run reaches that length.
+    """
     if len(source_words) < min_words or len(target_words) < min_words:
         return 0
     index: dict[tuple[str, ...], list[int]] = {}

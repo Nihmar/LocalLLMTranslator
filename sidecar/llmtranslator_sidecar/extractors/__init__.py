@@ -10,10 +10,11 @@ from __future__ import annotations
 
 from typing import Any
 
+from llmtranslator_sidecar.errors import MissingDependencyError
+
 from .base import (
     ExtractionError,
     Extractor,
-    MissingDependencyError,
     atomic_write_text,
     chapters_from_markdown,
     detect_format,
