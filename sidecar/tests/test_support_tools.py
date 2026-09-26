@@ -308,14 +308,27 @@ def test_json_response_format_mode(start_server):
     assert content["issues"] == []
 
 
-def test_only_passage_after_marker_is_translated(start_server):
+def test_default_returns_only_the_translated_passage(start_server):
+    """A compliant model answers with the passage alone; the preface is not echoed."""
     base = start_server()
     message = f"CHAPTER: One\n\nPASSAGE TO TRANSLATE:\n{SAMPLE_INPUT}"
     content = http_post(
         base, "/v1/chat/completions", {"messages": [{"role": "user", "content": message}]}
     )["choices"][0]["message"]["content"]
-    assert content.startswith("CHAPTER: One"), "the volatile preface must not be translated"
+    assert not content.startswith("CHAPTER: One"), "the preface must not be echoed"
+    assert "PASSAGE TO TRANSLATE:" not in content
     # the passage keeps its leading newline, so compare against the exact source
+    assert_structure_preserved("\n" + SAMPLE_INPUT, content)
+
+
+def test_echo_prompt_prefix_fault_restores_the_preface(start_server):
+    """``--echo-prompt-prefix`` reproduces the irregular answer the pipeline rejects."""
+    base = start_server(fake.TranslationConfig(echo_prompt_prefix=True))
+    message = f"CHAPTER: One\n\nPASSAGE TO TRANSLATE:\n{SAMPLE_INPUT}"
+    content = http_post(
+        base, "/v1/chat/completions", {"messages": [{"role": "user", "content": message}]}
+    )["choices"][0]["message"]["content"]
+    assert content.startswith("CHAPTER: One"), "the echo flag must restore the preface"
     translated_passage = content.split("PASSAGE TO TRANSLATE:", 1)[1]
     assert_structure_preserved("\n" + SAMPLE_INPUT, translated_passage)
 
@@ -402,6 +415,7 @@ def test_config_from_environment(monkeypatch):
     monkeypatch.setenv("FAKE_LLAMA_TRUNCATE", "0.5")
     monkeypatch.setenv("FAKE_LLAMA_MERGE_PARAGRAPHS", "1")
     monkeypatch.setenv("FAKE_LLAMA_FAIL_RATE", "0.25")
+    monkeypatch.setenv("FAKE_LLAMA_ECHO_PROMPT_PREFIX", "1")
 
     args = fake.build_parser().parse_args([])
     cfg = fake.build_config(args)
@@ -411,6 +425,11 @@ def test_config_from_environment(monkeypatch):
     assert cfg.truncate == pytest.approx(0.5)
     assert cfg.merge_paragraphs is True
     assert cfg.fail_rate == pytest.approx(0.25)
+    assert cfg.echo_prompt_prefix is True
+
+    # the default keeps the compliant behaviour (no echoed preface)
+    monkeypatch.delenv("FAKE_LLAMA_ECHO_PROMPT_PREFIX")
+    assert fake.build_config(fake.build_parser().parse_args([])).echo_prompt_prefix is False
 
     # CLI flags win over the environment
     override = fake.build_config(fake.build_parser().parse_args(["--total-slots", "3"]))

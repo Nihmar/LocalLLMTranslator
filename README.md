@@ -125,12 +125,17 @@ framing, and a pseudo-translation that **strictly preserves the structure** (lin
 markers, heading levels, table pipes, placeholders). It exists so that a test asserting "the
 structure survived" verifies the pipeline, not the fake model.
 
-It includes fault injection to exercise the error branches:
+By default it returns only the translated passage, like a compliant
+instruction-following model. It includes fault injection to exercise the error branches:
 
 ```sh
 uv run --project sidecar python tools/fake_llama_server.py --port 8080 \
   --drop-placeholder 2 --truncate 0.5 --fail-rate 0.1
 ```
+
+`--echo-prompt-prefix` (or `FAKE_LLAMA_ECHO_PROMPT_PREFIX=1`) restores the opposite
+behaviour — echoing the non-translatable preface ahead of the passage — so the
+pipeline's `needs_review` branch stays reproducible.
 
 Test fixtures (EPUB, Markdown, PDF, plus a ~1M character EPUB):
 

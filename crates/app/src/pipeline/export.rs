@@ -57,8 +57,13 @@ pub async fn run_export(deps: &PipelineDeps, request: &ExportRequest) -> Result<
             "nothing to export: no chunk has been translated yet".into(),
         ));
     }
-    // Blocks that will fall back to the source text; reported in the build log.
-    let untranslated_blocks = repo::count_untranslated_blocks(pool, &document_id).await?;
+    // Work that will fall back to the source text. The renderer writes one chunk
+    // at a time and substitutes `chunk.source_md` whenever a chunk has no usable
+    // `target_md`, so the honest unit is the chunk — not the block. A block can be
+    // covered by its chunk's translation without having its own
+    // `block_translation` row, which is why block-based counting drifted from the
+    // actual output. This uses the same predicate as `render_chunks`.
+    let untranslated_chunks = chunks.len().saturating_sub(translated_chunks);
 
     let output_dir = deps.output_dir(&request.project_id);
     let units_dir = output_dir.join("units");
@@ -129,11 +134,12 @@ pub async fn run_export(deps: &PipelineDeps, request: &ExportRequest) -> Result<
         )
         .await?;
 
-    // Report, in the build log, how much of the book is not translated.
+    // Report, in the build log, how much of the book is not translated. Counting
+    // chunks (not blocks) keeps this in step with what `render_chunks` emitted.
     let mut log = result.log;
     log.push('\n');
     log.push_str(&format!(
-        "[export] translated chunks: {translated_chunks}/{}; untranslated blocks: {untranslated_blocks}\n",
+        "[export] translated chunks: {translated_chunks}/{}; chunks rendered from source: {untranslated_chunks}\n",
         chunks.len()
     ));
 
@@ -149,12 +155,22 @@ pub async fn run_export(deps: &PipelineDeps, request: &ExportRequest) -> Result<
     })
 }
 
-/// Whether a chunk carries translated output.
-fn chunk_has_translation(chunk: &Chunk) -> bool {
+/// The translated text to render for a chunk, or `None` when it has no usable
+/// translation.
+///
+/// Single predicate for "has a translation": a missing or whitespace-only
+/// `target_md` counts as untranslated. Both the progress count and the renderer
+/// go through it, so the reported numbers cannot drift from the emitted output.
+fn translated_text(chunk: &Chunk) -> Option<&str> {
     chunk
         .target_md
         .as_deref()
-        .is_some_and(|text| !text.trim().is_empty())
+        .filter(|text| !text.trim().is_empty())
+}
+
+/// Whether a chunk carries translated output.
+fn chunk_has_translation(chunk: &Chunk) -> bool {
+    translated_text(chunk).is_some()
 }
 
 /// Default output filename: `<sanitized project name>.<format>`.
@@ -163,12 +179,15 @@ fn export_filename(project_name: &str, output_format: &str) -> String {
 }
 
 /// Render chunk outputs (translated when available) into one Markdown unit.
+///
+/// Uses [`translated_text`] — the same predicate as the progress count — so a
+/// whitespace-only target falls back to the source exactly as it is counted.
 fn render_chunks(chunks: &[&crate::db::models::Chunk]) -> String {
     let mut out = String::new();
     for chunk in chunks {
-        match &chunk.target_md {
-            Some(text) if !text.is_empty() => out.push_str(text),
-            _ => out.push_str(&chunk.source_md),
+        match translated_text(chunk) {
+            Some(text) => out.push_str(text),
+            None => out.push_str(&chunk.source_md),
         }
         if !out.ends_with('\n') {
             out.push('\n');
@@ -244,5 +263,18 @@ mod tests {
         assert!(chunk_has_translation(&chunk("c1", Some("Ciao"), "Hello")));
         assert!(!chunk_has_translation(&chunk("c2", None, "Hello")));
         assert!(!chunk_has_translation(&chunk("c3", Some("   "), "Hello")));
+    }
+
+    #[test]
+    fn render_and_count_agree_on_blank_targets() {
+        // A whitespace-only target is untranslated for both the predicate and the
+        // renderer, so the reported count matches what is actually written.
+        let blank = chunk("c1", Some("  \n"), "# Source\n");
+        assert!(!chunk_has_translation(&blank));
+        assert_eq!(render_chunks(&[&blank]).trim(), "# Source");
+
+        let translated = chunk("c2", Some("# Ciao\n"), "# Hello\n");
+        assert!(chunk_has_translation(&translated));
+        assert_eq!(render_chunks(&[&translated]).trim(), "# Ciao");
     }
 }

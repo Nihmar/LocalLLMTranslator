@@ -70,6 +70,7 @@ CLI                     Environment                                Effect
 ``--fail-rate P``        ``FAKE_LLAMA_FAIL_RATE=P``                 HTTP 500 for a fraction of chat requests
 ``--delay-ms MS``        ``FAKE_LLAMA_DELAY_MS=MS``                 sleep before answering chat requests
 ``--merge-paragraphs``   ``FAKE_LLAMA_MERGE_PARAGRAPHS=1``          drop blank lines (corrupt block structure)
+``--echo-prompt-prefix`` ``FAKE_LLAMA_ECHO_PROMPT_PREFIX=1``        echo the prompt preface before the passage (an irregular answer)
 ``--total-slots N``      ``FAKE_LLAMA_TOTAL_SLOTS=N``               value reported by ``/props``
 ``--n-ctx N``            ``FAKE_LLAMA_N_CTX=N``                     value reported by ``/props``
 ``--port PORT``          ``FAKE_LLAMA_PORT=PORT``                   listen port (default 8080, 0 = ephemeral)
@@ -275,6 +276,7 @@ class TranslationConfig:
     fail_rate: float = 0.0
     delay_ms: int = 0
     merge_paragraphs: bool = False
+    echo_prompt_prefix: bool = False
 
     def generation_settings(self) -> dict[str, Any]:
         """Return a ``default_generation_settings``-shaped dict."""
@@ -361,11 +363,12 @@ def translate(text: str, cfg: TranslationConfig | None = None) -> str:
 
 
 def split_passage(content: str) -> tuple[str, str]:
-    """Split a user message into (non-translatable prefix, passage).
+    """Split a user message into (preface, passage) around the passage marker.
 
     Real prompts put the passage after a ``PASSAGE TO TRANSLATE:`` line; the
-    prefix (chapter title, previous context, ...) must not be translated.  When
-    the marker is absent the whole content is treated as the passage.
+    preface (chapter title, previous context, instructions, ...) is context for the
+    model.  A compliant, instruction-following model returns only the passage and
+    not the preface.  When the marker is absent the whole content is the passage.
     """
     idx = content.find(PASSAGE_MARKER)
     if idx == -1:
@@ -375,9 +378,20 @@ def split_passage(content: str) -> tuple[str, str]:
 
 
 def translate_content(content: str, cfg: TranslationConfig | None = None) -> str:
-    """Translate the passage part of a chat user-message content."""
+    """Translate only the passage of a chat user-message content.
+
+    By default the preface before ``PASSAGE TO TRANSLATE:`` is dropped, matching a
+    compliant model that answers with the translation alone.
+    ``TranslationConfig.echo_prompt_prefix`` restores the old behaviour of echoing
+    the (untranslated) preface ahead of the passage, which produces an irregular
+    answer the pipeline refuses to align (``needs_review``).
+    """
+    cfg = cfg or TranslationConfig()
     prefix, passage = split_passage(content)
-    return prefix + translate(passage, cfg)
+    translated = translate(passage, cfg)
+    if cfg.echo_prompt_prefix:
+        return prefix + translated
+    return translated
 
 
 def stream_pieces(text: str, size: int = 24) -> list[str]:
@@ -697,6 +711,9 @@ def build_config(args: argparse.Namespace) -> TranslationConfig:
         merge_paragraphs=(
             args.merge_paragraphs or _env("FAKE_LLAMA_MERGE_PARAGRAPHS") not in (None, "0")
         ),
+        echo_prompt_prefix=(
+            args.echo_prompt_prefix or _env("FAKE_LLAMA_ECHO_PROMPT_PREFIX") not in (None, "0")
+        ),
     )
 
 
@@ -716,6 +733,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--fail-rate", type=float, default=None, metavar="P", help="HTTP 500 for a fraction P of chat requests")
     parser.add_argument("--delay-ms", type=int, default=None, metavar="MS", help="sleep MS before answering chat requests")
     parser.add_argument("--merge-paragraphs", action="store_true", help="drop blank lines (corrupt structure)")
+    parser.add_argument("--echo-prompt-prefix", action="store_true", help="echo the prompt preface before the passage")
     parser.add_argument("--selftest", action="store_true", help="run internal assertions and exit")
     return parser
 
@@ -827,6 +845,16 @@ def _selftest() -> int:
         check(len(translate(SELFTEST_INPUT, tc)) < len(translate(SELFTEST_INPUT)), "truncate shortens")
         mc = TranslationConfig(merge_paragraphs=True)
         check("\n\n" not in translate(SELFTEST_INPUT, mc), "merge-paragraphs")
+
+        # default: only the passage, never the echoed preface; the echo flag restores it
+        message = f"PREFACE\n\nPASSAGE TO TRANSLATE:\n{SELFTEST_INPUT}"
+        preface, passage = split_passage(message)
+        check(translate_content(message) == translate(passage), "default drops the preface")
+        check(
+            translate_content(message, TranslationConfig(echo_prompt_prefix=True))
+            == preface + translate(passage),
+            "echo-prompt-prefix restores the preface",
+        )
 
         # fail rate 1.0 over HTTP
         fail_server, fail_thread, fail_base = create_and_start("127.0.0.1", 0, TranslationConfig(fail_rate=1.0))

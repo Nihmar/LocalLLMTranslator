@@ -95,11 +95,16 @@ async fn translate_chunk_inner(
         .iter()
         .filter_map(|id| by_id.get(id.as_str()).copied())
         .collect();
-    let translatable: Vec<&&Block> = chunk_blocks.iter().filter(|b| b.translatable).collect();
-
     // ---- Two-level cache: block-level memory first ----------------------
-    let from_cache = try_memory_reuse(deps, &chunk.id, &translatable, &model, &target_lang).await?;
-    if from_cache {
+    if let Some(reused) =
+        try_memory_reuse(deps, &chunk.id, &chunk_blocks, &model, &target_lang).await?
+    {
+        // Compose the chunk's markdown from the rows just written: each
+        // translatable block takes its reused translation and every other block
+        // its own source. Persisting the chunk source as a whole (the old
+        // behaviour) marked a chunk `done` with an untranslated body.
+        let translations = translations_from_map(&chunk_blocks, &reused);
+        let target_md = compose_target_md(&chunk_blocks, &translations);
         let outcome = ChunkOutcome {
             chunk_id: chunk.id.clone(),
             status: "done".into(),
@@ -107,7 +112,7 @@ async fn translate_chunk_inner(
             model_id: Some(model),
             params_json: Some(binding.params_json.clone()),
             context_manifest_json: None,
-            target_md: Some(chunk.source_md.clone()),
+            target_md: Some(target_md),
             error: None,
         };
         repo::finish_chunk(pool, &outcome).await?;
@@ -314,6 +319,25 @@ async fn translate_chunk_inner(
         }
     }
 
+    // Persist the validated, placeholder-free markdown, never the raw model
+    // response: the raw text (still holding ⟦n⟧ tokens) is preserved in
+    // `llm_call.response_text` for audit. When the block alignment is not
+    // trustworthy `target_md` stays NULL, so the chunk is `needs_review` and
+    // export falls back to its source instead of emitting unvalidated text —
+    // a LaTeX build must never see a placeholder token.
+    let translations: Vec<Option<&str>> = chunk_blocks
+        .iter()
+        .enumerate()
+        .map(|(index, block)| {
+            if block.translatable {
+                reinject.blocks_md.get(index).map(String::as_str)
+            } else {
+                None
+            }
+        })
+        .collect();
+    let target_md = aligned_target_md(block_count_ok, &chunk_blocks, &translations);
+
     let status = if needs_review_reason.is_some() {
         "needs_review"
     } else {
@@ -328,7 +352,7 @@ async fn translate_chunk_inner(
             model_id: Some(model),
             params_json: Some(binding.params_json.clone()),
             context_manifest_json: Some(manifest_json),
-            target_md: Some(response_text),
+            target_md,
             error: needs_review_reason.clone(),
         },
     )
@@ -342,16 +366,24 @@ async fn translate_chunk_inner(
     })
 }
 
+/// Try to satisfy a chunk from the block-level translation memory.
+///
+/// On a full hit it writes one `block_translation` row per translatable block and
+/// returns the `block_id -> text_md` map it just persisted, so the caller can
+/// compose the chunk's `target_md` from the reused text. On the first miss it
+/// returns `None` and the chunk falls through to real inference.
 async fn try_memory_reuse(
     deps: &PipelineDeps,
     chunk_id: &str,
-    translatable: &[&&Block],
+    chunk_blocks: &[&Block],
     model: &str,
     target_lang: &str,
-) -> Result<bool> {
+) -> Result<Option<HashMap<String, String>>> {
+    let translatable: Vec<&&Block> = chunk_blocks.iter().filter(|b| b.translatable).collect();
     if translatable.is_empty() {
-        return Ok(false);
+        return Ok(None);
     }
+    let mut reused: HashMap<String, String> = HashMap::new();
     for block in translatable {
         match repo::memory_get(&deps.pool, &block.content_hash, model, target_lang).await? {
             Some(text_md) => {
@@ -360,7 +392,7 @@ async fn try_memory_reuse(
                     &BlockTranslation {
                         block_id: block.id.clone(),
                         chunk_id: chunk_id.to_string(),
-                        text_md,
+                        text_md: text_md.clone(),
                         placeholders_ok: true,
                         origin: ROLE.to_string(),
                         edited_by_user: false,
@@ -368,11 +400,68 @@ async fn try_memory_reuse(
                     },
                 )
                 .await?;
+                reused.insert(block.id.clone(), text_md);
             }
-            None => return Ok(false),
+            None => return Ok(None),
         }
     }
-    Ok(true)
+    Ok(Some(reused))
+}
+
+/// Compose a chunk's validated, placeholder-free markdown from its blocks, the
+/// same way the sidecar's `render()` builds its output: a block contributes its
+/// translation when it has one and its own source otherwise, and the blocks are
+/// joined with a blank line (how `Chunk.source_md` joins them).
+///
+/// `translations` is positional: entry `i` corresponds to `chunk_blocks[i]`, and
+/// `None` means "no translation for this block".
+///
+/// Non-translatable blocks (code fences, raw HTML, figures, footnotes, ...) ALWAYS
+/// come from `source_md`, never from the model. The model is not asked to translate
+/// them, so any text attributed to them would be unvalidated — and a stray rewrite
+/// of a code fence or an `<img>` would silently corrupt the output.
+fn compose_target_md(chunk_blocks: &[&Block], translations: &[Option<&str>]) -> String {
+    let parts: Vec<&str> = chunk_blocks
+        .iter()
+        .enumerate()
+        .map(|(index, block)| {
+            if block.translatable {
+                translations
+                    .get(index)
+                    .copied()
+                    .flatten()
+                    .unwrap_or(block.source_md.as_str())
+            } else {
+                block.source_md.as_str()
+            }
+        })
+        .collect();
+    parts.join("\n\n")
+}
+
+/// Positional translations for [`compose_target_md`], derived from a
+/// `block_id -> text_md` map (the memory-reuse path, where the reused rows were
+/// just written).
+fn translations_from_map<'a>(
+    chunk_blocks: &[&'a Block],
+    reuse: &'a HashMap<String, String>,
+) -> Vec<Option<&'a str>> {
+    chunk_blocks
+        .iter()
+        .map(|block| reuse.get(&block.id).map(String::as_str))
+        .collect()
+}
+
+/// The `target_md` to persist for a chunk: the composed translation when the block
+/// alignment is trustworthy (`block_count_ok`), or `None` otherwise. `None` means
+/// the chunk is `needs_review`, the raw reply is preserved in
+/// `llm_call.response_text`, and export falls back to the chunk's source.
+fn aligned_target_md(
+    block_count_ok: bool,
+    chunk_blocks: &[&Block],
+    translations: &[Option<&str>],
+) -> Option<String> {
+    block_count_ok.then(|| compose_target_md(chunk_blocks, translations))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -613,6 +702,82 @@ fn manifest_to_json(manifest: &crate::context::budget::BudgetedContext) -> Resul
 mod tests {
     use super::*;
     use crate::context::budget::{BudgetedContext, PieceKind, PieceReport};
+    use crate::db::models::Block;
+
+    /// A minimal `Block` for the composition tests.
+    fn test_block(id: &str, kind: &str, translatable: bool, source_md: &str) -> Block {
+        Block {
+            id: id.to_string(),
+            document_id: "d".into(),
+            chapter_id: None,
+            order_index: 0,
+            kind: kind.into(),
+            level: 0,
+            source_md: source_md.into(),
+            source_text: source_md.into(),
+            translatable,
+            attrs_json: "{}".into(),
+            content_hash: format!("h-{id}"),
+        }
+    }
+
+    #[test]
+    fn compose_target_md_uses_translation_and_keeps_non_translatable_from_source() {
+        let para = test_block("b1", "para", true, "The old harbour");
+        let code = test_block("b2", "code", false, "```sql\nSELECT 1;\n```");
+        let blocks = [&para, &code];
+        // The model also returned the code block "translated"; it is ignored
+        // because a non-translatable block always comes from its source.
+        let translations = [Some("Il vecchio porto"), Some("```sql\nSELECT 2;\n```")];
+        let composed = compose_target_md(&blocks, &translations);
+        assert_eq!(composed, "Il vecchio porto\n\n```sql\nSELECT 1;\n```");
+        assert!(!composed.contains("SELECT 2;"));
+        assert!(!composed.contains('\u{27e6}'));
+    }
+
+    #[test]
+    fn compose_target_md_falls_back_to_source_when_a_translation_is_missing() {
+        let first = test_block("b1", "para", true, "Hello");
+        let second = test_block("b2", "para", true, "World");
+        let blocks = [&first, &second];
+        let translations = [Some("Ciao"), None];
+        assert_eq!(compose_target_md(&blocks, &translations), "Ciao\n\nWorld");
+    }
+
+    #[test]
+    fn untrustworthy_alignment_leaves_target_md_null() {
+        let para = test_block("b1", "para", true, "Hello");
+        let blocks = [&para];
+        let translations = [Some("Ciao")];
+        // A block-count mismatch means `needs_review` and no target, so export
+        // falls back to the source instead of emitting unvalidated text.
+        assert_eq!(aligned_target_md(false, &blocks, &translations), None);
+        assert_eq!(
+            aligned_target_md(true, &blocks, &translations).as_deref(),
+            Some("Ciao")
+        );
+    }
+
+    #[test]
+    fn reuse_path_composes_the_reused_text_and_never_the_chunk_source() {
+        let para = test_block("b1", "para", true, "The harbour was quiet.");
+        let figure = test_block("b2", "figure", false, "![harbour](harbour.png)");
+        let blocks = [&para, &figure];
+        let mut reuse: HashMap<String, String> = HashMap::new();
+        reuse.insert("b1".to_string(), "Il porto era tranquillo.".to_string());
+
+        let translations = translations_from_map(&blocks, &reuse);
+        // The figure is not translatable, so the memory never holds a row for it.
+        assert_eq!(translations[1], None);
+        let composed = compose_target_md(&blocks, &translations);
+        assert_eq!(
+            composed,
+            "Il porto era tranquillo.\n\n![harbour](harbour.png)"
+        );
+        // The old bug persisted the whole chunk source as the translation.
+        let chunk_source = format!("{}\n\n{}", para.source_md, figure.source_md);
+        assert_ne!(composed, chunk_source);
+    }
 
     #[test]
     fn seed_is_deterministic_and_role_specific() {

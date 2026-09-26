@@ -96,9 +96,16 @@ impl RpcErrorObject {
 impl From<RpcErrorObject> for AppError {
     fn from(e: RpcErrorObject) -> Self {
         let retryable = e.is_retryable();
+        // Fold the JSON-RPC `data` payload into the message: a pandoc failure (code
+        // 1002) carries its build log there, and dropping it left the failure
+        // undiagnosable.
+        let message = match e.data {
+            Some(data) if !data.is_null() => format!("{} [data: {data}]", e.message),
+            _ => e.message,
+        };
         AppError::Sidecar {
             code: e.code,
-            message: e.message,
+            message,
             retryable,
         }
     }
@@ -627,6 +634,18 @@ mod tests {
             data: None,
         });
         assert!(internal.retryable());
+
+        // A pandoc failure carries its build log in `data`; it must survive into
+        // the message, or the failure is undiagnosable.
+        let pandoc = AppError::from(RpcErrorObject {
+            code: 1002,
+            message: "pandoc failed".into(),
+            data: Some(serde_json::json!({ "log": "! LaTeX Error: Unicode character ⟦" })),
+        });
+        assert!(pandoc.retryable());
+        let text = pandoc.to_string();
+        assert!(text.contains("pandoc failed"));
+        assert!(text.contains("LaTeX Error"));
     }
 
     #[tokio::test]
