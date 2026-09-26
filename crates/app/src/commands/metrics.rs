@@ -14,6 +14,17 @@ pub struct JobCount {
     pub count: i64,
 }
 
+/// Build the queue-depth histogram from `(state, count)` rows.
+///
+/// Shared by `metrics_get` and the `metrics://tick` ticker so both emit the same
+/// `{state, count}` objects the UI's `JobCount` type declares. Emitting the raw
+/// pairs instead produced `[["done", 3], …]`, which the UI cannot parse.
+pub fn job_counts(rows: Vec<(String, i64)>) -> Vec<JobCount> {
+    rows.into_iter()
+        .map(|(state, count)| JobCount { state, count })
+        .collect()
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Metrics {
     pub vram: Option<VramInfo>,
@@ -34,11 +45,7 @@ pub async fn metrics_get(state: State<'_, AppState>) -> Result<Metrics> {
         .unwrap_or(None);
     let snapshot = state.resources.snapshot(detected, None);
 
-    let jobs = queue::count_by_state(&state.pool)
-        .await?
-        .into_iter()
-        .map(|(state, count)| JobCount { state, count })
-        .collect();
+    let jobs = job_counts(queue::count_by_state(&state.pool).await?);
 
     Ok(Metrics {
         vram: snapshot.vram,
@@ -50,4 +57,24 @@ pub async fn metrics_get(state: State<'_, AppState>) -> Result<Metrics> {
         worker_running: state.worker.is_running(),
         worker_paused: state.worker.is_paused(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::job_counts;
+
+    #[test]
+    fn job_counts_serialize_as_state_and_count_objects() {
+        // The same predicate the UI's `JobCount` type expects, shared by
+        // `metrics_get` and the `metrics://tick` ticker.
+        let rows = vec![("done".to_string(), 3i64), ("pending".to_string(), 1)];
+        let value = serde_json::to_value(job_counts(rows)).expect("serialize");
+        assert_eq!(
+            value,
+            serde_json::json!([
+                { "state": "done", "count": 3 },
+                { "state": "pending", "count": 1 }
+            ])
+        );
+    }
 }

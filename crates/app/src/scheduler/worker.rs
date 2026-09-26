@@ -81,13 +81,33 @@ impl WorkerPool {
         self.inner.permits.available_permits()
     }
 
-    /// Start the worker loops. Idempotent: calling it while running is a no-op.
+    /// Start the worker loops and clear any pending pause.
+    ///
+    /// This is the "start / resume" entry point: a user-initiated start always
+    /// clears `paused`, so a queue stopped with [`WorkerPool::pause`] resumes.
+    /// The spawn itself is idempotent.
     pub fn start(&self) {
+        self.inner.paused.store(false, Ordering::SeqCst);
+        self.spawn_loops();
+    }
+
+    /// Start the worker loops in the paused state.
+    ///
+    /// Used at boot to restore an explicit pause persisted in SQLite. The flag is
+    /// set *before* any worker loop is scheduled, so a loop picked up
+    /// concurrently by another runtime thread cannot claim a job in the gap
+    /// between starting and pausing.
+    pub fn start_paused(&self) {
+        self.inner.paused.store(true, Ordering::SeqCst);
+        self.spawn_loops();
+    }
+
+    /// Spawn the reaper and the claim loops if the pool is not already running.
+    fn spawn_loops(&self) {
         if self.inner.running.swap(true, Ordering::SeqCst) {
             return;
         }
         self.inner.cancelled.store(false, Ordering::SeqCst);
-        self.inner.paused.store(false, Ordering::SeqCst);
 
         let worker_count = self.inner.worker_count.max(1);
         let mut handles = self.inner.workers.lock();
@@ -186,6 +206,18 @@ async fn run_job(inner: &Arc<Inner>, job: Job) {
     emit_job(&*inner.emitter, &job);
 
     if let Err(error) = queue::mark_running(&inner.pool, &job.id).await {
+        // Surface the failure on `log://line` as well as tracing: the job stays
+        // `leased` in the database, so without this the 90 s wait until the lease
+        // reaper returns it to `pending` is silent and looks like a hang.
+        emit_log(
+            &*inner.emitter,
+            "warn",
+            "worker",
+            format!(
+                "job {} ({}) could not be marked running; it stays leased until the lease reaper retries it: {error}",
+                job.id, job.kind
+            ),
+        );
         tracing::warn!(job_id = %job.id, %error, "could not mark job running");
         return;
     }
@@ -459,6 +491,87 @@ mod tests {
                 .iter()
                 .any(|payload| payload["state"] == "failed"),
             "no failed job event emitted"
+        );
+    }
+
+    fn idle_worker(pool: SqlitePool) -> WorkerPool {
+        WorkerPool::new(
+            pool,
+            Arc::new(CountingDispatcher {
+                executions: Arc::new(AtomicU32::new(0)),
+                fail_from: u32::MAX,
+            }),
+            Arc::new(crate::events::NullEmitter),
+            1,
+            1,
+        )
+    }
+
+    #[tokio::test]
+    async fn a_user_start_resumes_a_paused_pool() {
+        let (pool, _dir) = connect_temp_file().await.expect("pool");
+        let worker = idle_worker(pool);
+        worker.pause();
+        assert!(worker.is_paused());
+
+        // `translation_start`/`ingest_start` call `start()`: it must clear the
+        // pause, otherwise a queue stopped by the user could never resume.
+        worker.start();
+        assert!(!worker.is_paused());
+        assert!(worker.is_running());
+        worker.cancel();
+    }
+
+    #[tokio::test]
+    async fn start_paused_keeps_the_pool_paused_and_running() {
+        let (pool, _dir) = connect_temp_file().await.expect("pool");
+        let worker = idle_worker(pool);
+
+        // Boot restore path: loop is live but stays paused until the user starts.
+        worker.start_paused();
+        assert!(worker.is_paused());
+        assert!(worker.is_running());
+        worker.cancel();
+    }
+
+    #[tokio::test]
+    async fn mark_running_failure_is_observable_on_log_line() {
+        let (pool, _dir) = connect_temp_file().await.expect("pool");
+        seed_project(&pool).await;
+        let id = queue::enqueue(
+            &pool,
+            &queue::NewJob::new("p", "translate_chunk", serde_json::Value::Null),
+        )
+        .await
+        .expect("enqueue");
+        let job = queue::get_job(&pool, &id)
+            .await
+            .expect("get")
+            .expect("some");
+
+        let emitter = Arc::new(crate::events::RecordingEmitter::new());
+        let worker = WorkerPool::new(
+            pool.clone(),
+            Arc::new(CountingDispatcher {
+                executions: Arc::new(AtomicU32::new(0)),
+                fail_from: u32::MAX,
+            }),
+            emitter.clone(),
+            1,
+            1,
+        );
+
+        // A closed pool makes the `mark_running` write fail deterministically.
+        pool.close().await;
+        run_job(&worker.inner, job).await;
+
+        let warned = emitter
+            .events_named("log://line")
+            .iter()
+            .any(|payload| payload["source"] == "worker" && payload["level"] == "warn");
+        assert!(
+            warned,
+            "a mark_running failure must be observable on log://line"
         );
     }
 }

@@ -346,7 +346,37 @@ impl Supervisor {
             }
         });
 
+        // A `shutdown` may have landed between the entry check and publishing the
+        // kill sender above; it would then have found nothing to signal and the
+        // child we just spawned would stay alive unreaped (`kill_on_drop` never
+        // fires because the supervisor lives in `AppState` for the whole process).
+        // Re-check now that the sender exists and terminate the child if so.
+        if self.abort_spawn_if_stopping() {
+            return Err(AppError::SidecarUnavailable(
+                "sidecar is shutting down".into(),
+            ));
+        }
+
         Ok(())
+    }
+
+    /// Terminate a child spawned while `shutdown` was in progress.
+    ///
+    /// Call this only after the per-spawn kill sender has been published, so the
+    /// signal can actually reach the waiter. Returns `true` when the supervisor
+    /// was stopping and the spawn was aborted (the child is killed by its waiter
+    /// task reacting to the kill channel).
+    fn abort_spawn_if_stopping(&self) -> bool {
+        if !self.stopping.load(Ordering::SeqCst) {
+            return false;
+        }
+        self.running.store(false, Ordering::SeqCst);
+        *self.writer.lock() = None;
+        if let Some(kill) = self.kill.lock().take() {
+            let _ = kill.send(());
+        }
+        self.set_status(SidecarStatus::stopped());
+        true
     }
 
     fn handle_exit(self: &Arc<Self>, code: Option<i32>) {
@@ -480,5 +510,42 @@ mod tests {
     fn bundled_path_is_none_when_absent() {
         let dir = tempfile::tempdir().expect("tempdir");
         assert!(bundled_sidecar_path(Some(&dir.path().to_path_buf())).is_none());
+    }
+
+    fn test_supervisor() -> Arc<Supervisor> {
+        let sink: EventSink = Arc::new(|_method: &str, _params: &Value| {});
+        Supervisor::new(
+            SpawnSpec::new("python", Vec::new()),
+            sink,
+            Arc::new(crate::events::NullEmitter),
+            None,
+        )
+    }
+
+    #[test]
+    fn abort_spawn_if_stopping_signals_a_child_spawned_during_shutdown() {
+        let supervisor = test_supervisor();
+        let (kill_tx, mut kill_rx) = oneshot::channel::<()>();
+        *supervisor.kill.lock() = Some(kill_tx);
+        supervisor.running.store(true, Ordering::SeqCst);
+        // `shutdown` landed while the spawn was in flight: it found no kill
+        // sender, so the freshly spawned child has not been signalled yet.
+        supervisor.stopping.store(true, Ordering::SeqCst);
+
+        assert!(supervisor.abort_spawn_if_stopping());
+        assert!(!supervisor.is_running());
+        assert_eq!(supervisor.status().state, SidecarState::Stopped);
+        assert!(
+            kill_rx.try_recv().is_ok(),
+            "the child spawned during shutdown must be signalled"
+        );
+    }
+
+    #[test]
+    fn abort_spawn_if_stopping_is_a_noop_while_running() {
+        let supervisor = test_supervisor();
+        supervisor.running.store(true, Ordering::SeqCst);
+        assert!(!supervisor.abort_spawn_if_stopping());
+        assert!(supervisor.is_running());
     }
 }

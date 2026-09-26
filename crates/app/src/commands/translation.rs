@@ -24,6 +24,17 @@ pub struct TranslationStartResult {
     pub running: bool,
 }
 
+/// Request for `translation_cancel`.
+///
+/// The optional `project_id` scopes the cancellation to a single project; when
+/// omitted every project's translation work is cancelled, preserving the old
+/// global behaviour for callers that do not pass the argument.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct TranslationCancelRequest {
+    #[serde(default)]
+    pub project_id: Option<String>,
+}
+
 /// Whether `translation_start` may enqueue a `translate_chunk` job for a chunk in
 /// the given state.
 ///
@@ -74,26 +85,55 @@ pub async fn translation_start(
 #[tauri::command]
 pub async fn translation_pause(state: State<'_, AppState>) -> Result<Ack> {
     state.worker.pause();
+    // Persist the explicit pause so it survives a relaunch: `build_state` used to
+    // start the pool unconditionally, silently resuming LLM work the user had
+    // stopped.
+    repo::set_app_state(&state.pool, repo::KEY_WORKER_PAUSED, "1").await?;
     Ok(Ack::done())
 }
 
+/// Cancel the unfinished translation work of one project.
+///
+/// The optional `project_id` scopes the cancellation: with it only that project's
+/// `translate_chunk` jobs are cancelled and its `running` chunks are returned to
+/// `pending`; without it every project is cancelled. Previously the command took
+/// no argument and cancelled *every* unfinished job in the database, so one
+/// project's "Annulla" destroyed another project's queued work.
 #[tauri::command]
-pub async fn translation_cancel(state: State<'_, AppState>) -> Result<Ack> {
+pub async fn translation_cancel(
+    state: State<'_, AppState>,
+    req: Option<TranslationCancelRequest>,
+) -> Result<Ack> {
+    let project_id = req.and_then(|request| request.project_id);
     state.worker.cancel();
     // A chunk mid-run keeps `running` when its job task is aborted; return those
     // to `pending` so a later start can retry them, then cancel every unfinished
-    // job and announce each `cancelled` transition.
-    repo::reset_running_chunks(&state.pool).await?;
-    let cancelled = queue::cancel_active(&state.pool).await?;
+    // job of the project and announce each `cancelled` transition.
+    repo::reset_running_chunks(&state.pool, project_id.as_deref()).await?;
+    let cancelled = queue::cancel_active(&state.pool, project_id.as_deref()).await?;
     for job in &cancelled {
         crate::events::emit_job(&*state.emitter, job);
     }
+    // Cancelling clears any persisted pause: there is no queued work to resume.
+    repo::delete_app_state(&state.pool, repo::KEY_WORKER_PAUSED).await?;
     Ok(Ack::done())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::chunk_is_eligible;
+    use super::{chunk_is_eligible, TranslationCancelRequest};
+
+    #[test]
+    fn cancel_request_project_id_is_optional() {
+        let none: TranslationCancelRequest =
+            serde_json::from_value(serde_json::json!({})).expect("empty request");
+        assert!(none.project_id.is_none());
+
+        let some: TranslationCancelRequest =
+            serde_json::from_value(serde_json::json!({ "project_id": "p1" }))
+                .expect("scoped request");
+        assert_eq!(some.project_id.as_deref(), Some("p1"));
+    }
 
     #[test]
     fn eligibility_matches_chunk_lifecycle() {

@@ -185,14 +185,18 @@ pub async fn reap_expired(pool: &SqlitePool) -> Result<u64> {
 /// Return every job left `leased`/`running` to `pending`.
 ///
 /// Called once at start-up: a freshly launched process owns no lease, so any
-/// in-flight job from a previous run is stale and must be claimable again. This
-/// mirrors the reaper (bump `attempts`, record the reason) but without the lease
-/// expiry filter, so recovery is immediate rather than waiting out the lease.
-/// Returns the number of jobs requeued.
+/// in-flight job from a previous run is stale and must be claimable again. Unlike
+/// the reaper it does not wait for the lease to expire, so recovery is immediate.
+///
+/// An interruption is *not* a failed attempt, so `attempts` is deliberately left
+/// untouched: only [`reap_expired`] consumes the retry budget. Bumping it here
+/// meant every normal relaunch (which leaves in-flight jobs `running`) ate one
+/// attempt, so a handful of restarts exhausted `max_attempts` and the next
+/// genuine error failed the job. Returns the number of jobs requeued.
 pub async fn requeue_in_flight(pool: &SqlitePool) -> Result<u64> {
     let res = sqlx::query(
         "UPDATE job SET state='pending', lease_owner=NULL, lease_expires_at=NULL, \
-         attempts=attempts+1, last_error='interrupted by restart' \
+         last_error='interrupted by restart' \
          WHERE state IN ('leased','running')",
     )
     .execute(pool)
@@ -213,14 +217,21 @@ pub async fn cancel(pool: &SqlitePool, id: &str) -> Result<bool> {
     Ok(res.rows_affected() > 0)
 }
 
-/// Cancel every unfinished job, returning the affected rows so callers can emit
-/// one `job://progress` event per `cancelled` transition.
-pub async fn cancel_active(pool: &SqlitePool) -> Result<Vec<Job>> {
+/// Cancel unfinished translation jobs, returning the affected rows so callers
+/// can emit one `job://progress` event per `cancelled` transition.
+///
+/// Only `translate_chunk` jobs are considered, and `project_id` scopes the
+/// cancellation: with `Some` only that project is affected, with `None` every
+/// project is. Without the filter, one project's "Annulla" destroyed another
+/// project's queued and running translation work.
+pub async fn cancel_active(pool: &SqlitePool, project_id: Option<&str>) -> Result<Vec<Job>> {
     let rows = sqlx::query_as::<_, Job>(
         "UPDATE job SET state='cancelled', finished_at=?1, lease_owner=NULL, lease_expires_at=NULL \
-         WHERE state IN ('pending','leased','running') RETURNING *",
+         WHERE state IN ('pending','leased','running') AND kind='translate_chunk' \
+         AND (?2 IS NULL OR project_id = ?2) RETURNING *",
     )
     .bind(now())
+    .bind(project_id)
     .fetch_all(pool)
     .await?;
     Ok(rows)
@@ -357,7 +368,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn requeue_in_flight_recovers_even_live_leases() {
+    async fn requeue_in_flight_recovers_live_leases_without_consuming_attempts() {
         let (pool, _dir) = connect_temp_file().await.expect("pool");
         insert_test_project(&pool, "proj").await;
         let id = enqueue(&pool, &NewJob::new("proj", "translate_chunk", Value::Null))
@@ -372,40 +383,79 @@ mod tests {
         assert_eq!(requeue_in_flight(&pool).await.expect("requeue"), 1);
         let job = get_job(&pool, &id).await.expect("get").expect("some");
         assert_eq!(job.state, "pending");
-        assert_eq!(job.attempts, 1);
+        // A restart is an interruption, not a failed attempt: the retry budget
+        // must be untouched, otherwise repeated relaunches would drive `attempts`
+        // to the limit and the next genuine error would fail the job.
+        assert_eq!(job.attempts, 0, "requeue_in_flight must not bump attempts");
         assert!(job.lease_owner.is_none());
         assert!(job.lease_expires_at.is_none());
         // Claimable again.
-        assert!(claim(&pool, "w2").await.expect("claim").is_some());
+        let reclaimed = claim(&pool, "w2").await.expect("claim").expect("some");
+        assert_eq!(reclaimed.attempts, 0);
+
+        // The lease reaper stays the only attempt-consuming recovery path.
+        sqlx::query(
+            "UPDATE job SET state='running', lease_expires_at='2000-01-01T00:00:00.000Z' WHERE id=?1",
+        )
+        .bind(id.as_str())
+        .execute(&pool)
+        .await
+        .expect("expire");
+        assert_eq!(reap_expired(&pool).await.expect("reap"), 1);
+        let reaped = get_job(&pool, &id).await.expect("get").expect("some");
+        assert_eq!(reaped.attempts, 1, "the reaper must consume one attempt");
     }
 
     #[tokio::test]
-    async fn cancel_active_returns_and_cancels_unfinished_jobs() {
+    async fn cancel_active_scopes_to_one_projects_translation_jobs() {
         let (pool, _dir) = connect_temp_file().await.expect("pool");
         insert_test_project(&pool, "proj").await;
+        insert_test_project(&pool, "other").await;
+
+        // proj: one pending, one (claimed + running) translation job.
         let pending = enqueue(&pool, &NewJob::new("proj", "translate_chunk", Value::Null))
             .await
             .expect("enqueue");
         let running = enqueue(&pool, &NewJob::new("proj", "translate_chunk", Value::Null))
             .await
             .expect("enqueue");
-        // First claimed job becomes the running one.
         let claimed = claim(&pool, "w1").await.expect("claim").expect("some");
         mark_running(&pool, &claimed.id).await.expect("running");
+        // A completed job of the same project is left alone.
         let done = enqueue(&pool, &NewJob::new("proj", "translate_chunk", Value::Null))
             .await
             .expect("enqueue");
         complete(&pool, &done).await.expect("complete");
+        // Another project's queued translation work must survive.
+        let other_pending = enqueue(&pool, &NewJob::new("other", "translate_chunk", Value::Null))
+            .await
+            .expect("enqueue");
+        // Non-translation jobs are never touched by `translation_cancel`.
+        let other_kind = enqueue(&pool, &NewJob::new("proj", "summarize", Value::Null))
+            .await
+            .expect("enqueue");
 
-        let mut cancelled = cancel_active(&pool).await.expect("cancel");
+        let mut cancelled = cancel_active(&pool, Some("proj")).await.expect("cancel");
         cancelled.sort_by(|a, b| a.id.cmp(&b.id));
         let ids: Vec<&str> = cancelled.iter().map(|j| j.id.as_str()).collect();
-        assert_eq!(ids.len(), 2);
+        assert_eq!(ids.len(), 2, "only proj's unfinished translation jobs");
         assert!(ids.contains(&pending.as_str()));
         assert!(ids.contains(&running.as_str()));
         assert!(cancelled.iter().all(|j| j.state == "cancelled"));
-        // A completed job is left alone.
-        assert!(ids.iter().all(|id| **id != done));
+
+        // Everything else is left in its original state.
+        for id in [&done, &other_pending, &other_kind] {
+            let job = get_job(&pool, id).await.expect("get").expect("some");
+            assert_ne!(job.state, "cancelled", "job {id} must survive");
+        }
+        assert_eq!(
+            get_job(&pool, &other_pending)
+                .await
+                .expect("get")
+                .expect("some")
+                .state,
+            "pending"
+        );
     }
 
     #[tokio::test]

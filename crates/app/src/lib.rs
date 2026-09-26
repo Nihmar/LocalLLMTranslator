@@ -186,7 +186,7 @@ async fn build_state(app: &tauri::AppHandle) -> Result<AppState> {
             tracing::warn!(%error, "could not requeue in-flight jobs at boot");
             0
         });
-    let reset_chunks = crate::db::repo::reset_running_chunks(&pool)
+    let reset_chunks = crate::db::repo::reset_running_chunks(&pool, None)
         .await
         .unwrap_or_else(|error| {
             tracing::warn!(%error, "could not reset running chunks at boot");
@@ -232,9 +232,28 @@ async fn build_state(app: &tauri::AppHandle) -> Result<AppState> {
         4.max(snapshot.suggested_parallel),
     ));
 
+    // Restore an explicit pause persisted by `translation_pause`: without this
+    // the unconditional start below would silently resume LLM work the user had
+    // stopped. The flag is read before starting so `start_paused` can publish it
+    // before any worker loop is scheduled.
+    let restored_paused = crate::db::repo::get_app_state(&pool, crate::db::repo::KEY_WORKER_PAUSED)
+        .await
+        .unwrap_or_else(|error| {
+            tracing::warn!(%error, "could not read the persisted worker pause flag");
+            None
+        })
+        .as_deref()
+        == Some("1");
+
     // Start the pool at boot: this claims pending/leased jobs (resume) and runs
-    // the lease reaper, so recovery does not depend on a user action.
-    worker.start();
+    // the lease reaper, so recovery does not depend on a user action. A persisted
+    // pause is honoured instead of auto-resuming.
+    if restored_paused {
+        tracing::info!("restoring the paused worker pool from the previous session");
+        worker.start_paused();
+    } else {
+        worker.start();
+    }
 
     spawn_status_forwarder(app.clone(), supervisor.clone());
     spawn_metrics_ticker(
@@ -287,9 +306,13 @@ fn spawn_metrics_ticker(
                 .await
                 .unwrap_or(None);
             let snapshot = resources.snapshot(detected, None);
-            let jobs = crate::scheduler::queue::count_by_state(&pool)
-                .await
-                .unwrap_or_default();
+            // Same `{state, count}` shape `metrics_get` returns (the UI's
+            // `JobCount` type expects objects, not `[state, count]` pairs).
+            let jobs = crate::commands::metrics::job_counts(
+                crate::scheduler::queue::count_by_state(&pool)
+                    .await
+                    .unwrap_or_default(),
+            );
             emit(
                 &app,
                 EVENT_METRICS_TICK,
