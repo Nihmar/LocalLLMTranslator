@@ -331,6 +331,29 @@ def test_book_profile_json_schema_returns_the_candidate_profile(start_server):
     }
 
 
+def test_chapter_summary_json_schema_returns_the_rolling_memory(start_server):
+    """A ``chapter_summary`` schema request answers with the deterministic summary."""
+    base = start_server()
+    response = http_post(
+        base,
+        "/v1/chat/completions",
+        {
+            "messages": [{"role": "user", "content": "summarise this chapter"}],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": fake.CHAPTER_SUMMARY_SCHEMA_NAME},
+            },
+        },
+    )
+    content = json.loads(response["choices"][0]["message"]["content"])
+    assert content == fake.CHAPTER_SUMMARY
+    assert {entry["kind"] for entry in content["new_terms"]} == {
+        "term",
+        "do_not_translate",
+    }
+    assert content["style_notes"]
+
+
 def test_recon_broken_answers_prose_not_json(start_server):
     """``--recon-broken`` exercises the control plane's parse-failure branch."""
     base = start_server(fake.TranslationConfig(recon_broken=True))
@@ -785,6 +808,18 @@ def test_analyze_book_marker_and_schema_match_plan():
     assert proper_noun["required"] == ["source", "kind"]
     # The caps exist in the schema; the control plane clamps again in Rust.
     assert schema["properties"]["synopsis"]["maxLength"] > 0
+    assert schema["properties"]["style_notes"]["maxItems"] == 8
+
+
+def test_summarizer_schema_matches_plan():
+    schema = json.loads((PROMPTS_DIR / "summarizer.schema.json").read_text(encoding="utf-8"))
+    assert schema["type"] == "object"
+    assert schema["required"] == ["summary", "new_terms", "style_notes"]
+
+    term = schema["properties"]["new_terms"]["items"]
+    assert term["properties"]["kind"]["enum"] == ["term", "proper_noun", "do_not_translate"]
+    assert term["required"] == ["source", "target", "kind"]
+    assert schema["properties"]["new_terms"]["maxItems"] == 8
     assert schema["properties"]["style_notes"]["maxItems"] == 8
 
 

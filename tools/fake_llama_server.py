@@ -113,6 +113,10 @@ FAKE_MODEL = "fake-model"
 #: (PLAN.md section 9.4). The fake answers with :data:`BOOK_PROFILE`.
 BOOK_PROFILE_SCHEMA_NAME = "book_profile"
 
+#: ``response_format.json_schema.name`` that marks a chapter-summary request
+#: (PLAN.md section 8). The fake answers with :data:`CHAPTER_SUMMARY`.
+CHAPTER_SUMMARY_SCHEMA_NAME = "chapter_summary"
+
 #: Deterministic candidate book profile, shaped like the schema in
 #: ``prompts/analyze_book.schema.json``. Deliberately includes one
 #: ``do_not_translate`` and one ``proper_noun`` entry so both glossary branches
@@ -140,6 +144,23 @@ BOOK_PROFILE: dict[str, Any] = {
 #: Non-JSON answer used by ``FAKE_LLAMA_RECON_BROKEN`` to exercise the
 #: control plane's parse-failure branch.
 RECON_BROKEN_TEXT = "I could not decide, so here is a short essay about lighthouses instead."
+
+#: Deterministic rolling-memory answer, shaped like
+#: ``prompts/summarizer.schema.json``. It proposes one new term and one
+#: ``do_not_translate`` name so the candidate-glossary path is exercised.
+CHAPTER_SUMMARY: dict[str, Any] = {
+    "summary": "The keeper wakes before dawn and watches the light turn over the harbour.",
+    "new_terms": [
+        {"source": "keeper", "target": "guardiano", "kind": "term", "note": "recurring role"},
+        {
+            "source": "Harbour Light",
+            "target": "Harbour Light",
+            "kind": "do_not_translate",
+            "note": "name of the lighthouse",
+        },
+    ],
+    "style_notes": ["The narrator favours long, flowing sentences."],
+}
 
 #: Line that introduces the passage to translate inside the user message.
 PASSAGE_MARKER = "PASSAGE TO TRANSLATE:"
@@ -642,6 +663,10 @@ def make_handler(cfg: TranslationConfig) -> type[BaseHTTPRequestHandler]:
                     else json.dumps(BOOK_PROFILE, ensure_ascii=False)
                 )
                 finish_reason = "stop"
+            elif wants_json and schema_name == CHAPTER_SUMMARY_SCHEMA_NAME:
+                # rolling chapter memory (PLAN.md section 8)
+                text = json.dumps(CHAPTER_SUMMARY, ensure_ascii=False)
+                finish_reason = "stop"
             elif wants_json:
                 # editor/proofreader JSON mode
                 text = json.dumps({"verdict": "ok", "issues": []}, ensure_ascii=False)
@@ -922,6 +947,23 @@ def _selftest() -> int:
         check(
             json.loads(recon["choices"][0]["message"]["content"]) == BOOK_PROFILE,
             "book-profile answer",
+        )
+
+        # rolling memory: the chapter_summary schema selects the summary answer
+        summary = post(
+            "/v1/chat/completions",
+            {
+                "model": FAKE_MODEL,
+                "messages": [{"role": "user", "content": "summarise this chapter"}],
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {"name": CHAPTER_SUMMARY_SCHEMA_NAME},
+                },
+            },
+        )
+        check(
+            json.loads(summary["choices"][0]["message"]["content"]) == CHAPTER_SUMMARY,
+            "chapter-summary answer",
         )
 
         # fail rate 1.0 over HTTP
