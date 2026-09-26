@@ -87,12 +87,10 @@ jobs:
         run: cargo --version && rustc --version
       - name: Format
         run: cargo fmt --all -- --check
-      - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
-      - name: Test
-        run: cargo test
-      # `tauri::generate_context!` needs the frontend bundle to exist, so the UI job
-      # runs first and this job rebuilds it: the two are not independent.
+      # `tauri::generate_context!` embeds the frontend bundle at COMPILE time, so `ui/dist`
+      # must exist before any cargo command that builds the crate — clippy and test
+      # included, not just `cargo check`. The ui job cannot hand its `dist` over to this
+      # one, so it is built here, and it is the first step that can fail on the frontend.
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -101,5 +99,9 @@ jobs:
       - name: Build frontend for the context macro
         working-directory: ui
         run: npm ci && npm run build
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Test
+        run: cargo test
       - name: Check
         run: cargo check
