@@ -147,14 +147,20 @@ def build(  # noqa: PLR0913 - the keyword signature is frozen by AGENTS.md
     template: str | None = None,
     css: str | None = None,
     resource_path: Sequence[str] | None = None,
+    toc: bool = False,
+    lua_filters: Sequence[str] | None = None,
+    top_level_division: str | None = None,
 ) -> dict[str, Any]:
     """Render ``units`` to ``output_path`` in ``output_format``.
 
     ``units`` are ``{"path", "title"}`` per-chapter Markdown files, combined in the given
     order with each title as a top-level heading. ``resource_path`` lists the directories
     pandoc searches for relative targets (extracted media such as ``assets/<name>``), since
-    the combined document lives in a throwaway directory. Returns ``output_path``, the
-    combined pandoc output as ``log``, and the wall time as ``duration_ms``.
+    the combined document lives in a throwaway directory. ``toc`` adds the table of contents,
+    ``lua_filters`` the ordered ``--lua-filter`` arguments (footnotes, tables, EPUB cleanup)
+    and ``top_level_division`` the book-style top-level heading (``chapter`` for LaTeX/PDF).
+    Returns ``output_path``, the combined pandoc output as ``log``, and the wall time as
+    ``duration_ms``.
     """
     binary = _resolve_binary()
     writer = _writer_for(output_format)
@@ -188,6 +194,11 @@ def build(  # noqa: PLR0913 - the keyword signature is frozen by AGENTS.md
             command.append(f"--template={template}")
         if css:
             command.append(f"--css={css}")
+        if toc:
+            command.append("--toc")
+        if top_level_division:
+            command.append(f"--top-level-division={top_level_division}")
+        command.extend(f"--lua-filter={lua_filter}" for lua_filter in lua_filters or ())
         if resource_path:
             command.append(f"--resource-path={os.pathsep.join(resource_path)}")
 

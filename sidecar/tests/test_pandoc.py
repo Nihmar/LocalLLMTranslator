@@ -18,6 +18,7 @@ from llmtranslator_sidecar.pandoc import MissingDependencyError, PandocError, bu
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TEMPLATE = REPO_ROOT / "pandoc" / "templates" / "book.html"
 CSS = REPO_ROOT / "pandoc" / "styles" / "book.css"
+FOOTNOTES_FILTER = REPO_ROOT / "pandoc" / "filters" / "footnotes.lua"
 
 #: A 4x4 PNG, the same bytes the fixture generator embeds in `content.epub`.
 PNG_NAME = "harbour.png"
@@ -254,3 +255,49 @@ def test_without_a_resource_path_relative_media_is_dropped(tmp_path: Path) -> No
 
     assert not _embedded_images(output)
     assert output.is_file(), "a missing resource is a warning, not a failed build"
+
+
+def test_toc_and_lua_filters_are_applied(tmp_path: Path) -> None:
+    """`toc` and `lua_filters` reach pandoc, and the filters actually run."""
+    units = [
+        _unit(
+            tmp_path,
+            "one.md",
+            "Chapter One",
+            "The harbour was quiet.[^1]\n\n[^1]: A note kept for the end.\n",
+        )
+    ]
+    output = tmp_path / "book.html"
+    build(
+        units=units,
+        metadata={"title": "Test Book", "footnotes-endnotes": True},
+        output_path=str(output),
+        output_format="html",
+        toc=True,
+        lua_filters=[str(FOOTNOTES_FILTER)],
+    )
+
+    html = output.read_text(encoding="utf-8")
+    # The TOC is generated from the unit heading.
+    assert 'id="TOC"' in html
+    # The footnotes filter turned the note into an endnote section, which is the
+    # filter's documented deterministic form when `footnotes-endnotes` is set.
+    assert "A note kept for the end." in html
+    assert "endnote" in html
+    assert "[1]" in html
+
+
+def test_top_level_division_is_forwarded(tmp_path: Path) -> None:
+    """`top_level_division=chapter` is accepted by the LaTeX writer (skipped without one)."""
+    if LATEX_ENGINE is None:
+        pytest.skip("no LaTeX engine is available")
+    units = [_unit(tmp_path, "one.md", "Chapter One", "Body.\n")]
+    output = tmp_path / "book.pdf"
+    build(
+        units=units,
+        metadata={"title": "Test Book"},
+        output_path=str(output),
+        output_format="pdf",
+        top_level_division="chapter",
+    )
+    assert output.read_bytes().startswith(b"%PDF")
