@@ -301,3 +301,39 @@ def test_top_level_division_is_forwarded(tmp_path: Path) -> None:
         top_level_division="chapter",
     )
     assert output.read_bytes().startswith(b"%PDF")
+
+
+def test_a_hung_pandoc_is_killed_and_reported(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A pandoc that never returns must not block the sequential RPC loop forever."""
+    slow = tmp_path / "slow-pandoc"
+    slow.write_text("#!/bin/sh\nsleep 30\n", encoding="utf-8")
+    slow.chmod(0o755)
+    monkeypatch.setenv("LLMTRANSLATOR_PANDOC", str(slow))
+    monkeypatch.setenv("LLMTRANSLATOR_PANDOC_TIMEOUT", "0.2")
+
+    output = tmp_path / "book.html"
+    with pytest.raises(PandocError, match="timed out"):
+        build(
+            units=[_unit(tmp_path, "one.md", "Chapter One", "Body.\n")],
+            metadata={"title": "Test Book"},
+            output_path=str(output),
+            output_format="html",
+        )
+
+    # No half-written artefact and no leaked temp file next to the target.
+    assert not output.exists()
+    assert list(tmp_path.glob(".book.html.*")) == []
+
+
+def test_timeout_defaults_when_the_override_is_invalid(monkeypatch: pytest.MonkeyPatch) -> None:
+    from llmtranslator_sidecar.pandoc import DEFAULT_TIMEOUT_SECONDS, timeout_seconds
+
+    monkeypatch.delenv("LLMTRANSLATOR_PANDOC_TIMEOUT", raising=False)
+    assert timeout_seconds() == DEFAULT_TIMEOUT_SECONDS
+    for invalid in ("nonsense", "0", "-3"):
+        monkeypatch.setenv("LLMTRANSLATOR_PANDOC_TIMEOUT", invalid)
+        assert timeout_seconds() == DEFAULT_TIMEOUT_SECONDS
+    monkeypatch.setenv("LLMTRANSLATOR_PANDOC_TIMEOUT", "1.5")
+    assert timeout_seconds() == 1.5

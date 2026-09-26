@@ -6,6 +6,10 @@ removed before the function returns. The writer writes to a temporary file next 
 ``output_path`` and that file is then renamed into place, so a crashed build never replaces
 a good export with a half-written one. The only durable artefact is ``output_path``.
 
+Every run is bounded: a pandoc that does not finish within ``LLMTRANSLATOR_PANDOC_TIMEOUT``
+seconds (default 600) is killed and reported as a build failure. The RPC loop is sequential,
+so a hung writer would otherwise block every later request until the client abandons it.
+
 The metadata document follows the same YAML conventions as the Rust ``BookMetadata``:
 ``title`` first, then ``author``/``language``/``date``/``publisher``/``identifier`` when
 present, then any extra front-matter key, with a scalar-quoting rule that keeps a value
@@ -41,6 +45,14 @@ MISSING_DEPENDENCY_CODE = MISSING_DEPENDENCY
 
 #: Environment variable that overrides the ``pandoc`` binary path.
 PANDOC_ENV = "LLMTRANSLATOR_PANDOC"
+
+#: Environment variable that overrides the pandoc run timeout, in seconds.
+PANDOC_TIMEOUT_ENV = "LLMTRANSLATOR_PANDOC_TIMEOUT"
+
+#: A pandoc run that takes longer than this is killed. The sidecar's JSON-RPC loop is
+#: sequential, so a hung pandoc would block every later request until the client times out
+#: and abandons it, leaving the worker unable to make progress.
+DEFAULT_TIMEOUT_SECONDS = 600.0
 
 #: Requested output format -> pandoc writer. An unknown format falls back to its own name.
 _WRITERS: dict[str, str] = {
@@ -104,6 +116,18 @@ def _render_metadata(metadata: Mapping[str, Any]) -> str:
 def _writer_for(output_format: str) -> str:
     normalized = output_format.strip().lower()
     return _WRITERS.get(normalized, normalized)
+
+
+def timeout_seconds() -> float:
+    """The pandoc timeout, overridable for tests and for unusually slow builds."""
+    raw = os.environ.get(PANDOC_TIMEOUT_ENV)
+    if raw is None:
+        return DEFAULT_TIMEOUT_SECONDS
+    try:
+        value = float(raw)
+    except ValueError:
+        return DEFAULT_TIMEOUT_SECONDS
+    return value if value > 0 else DEFAULT_TIMEOUT_SECONDS
 
 
 def _resolve_binary() -> str:
@@ -170,6 +194,7 @@ def build(  # noqa: PLR0913 - the keyword signature is frozen by AGENTS.md
     target.parent.mkdir(parents=True, exist_ok=True)
 
     started = time.perf_counter()
+    timeout = timeout_seconds()
     with tempfile.TemporaryDirectory(prefix="llmtranslator-pandoc-") as work:
         work_dir = Path(work)
         (work_dir / "metadata.yaml").write_text(_render_metadata(metadata), encoding="utf-8")
@@ -208,7 +233,16 @@ def build(  # noqa: PLR0913 - the keyword signature is frozen by AGENTS.md
                 capture_output=True,
                 text=True,
                 check=False,
+                timeout=timeout,
             )
+        except subprocess.TimeoutExpired as exc:
+            Path(temporary).unlink(missing_ok=True)
+            partial = "".join(
+                stream if isinstance(stream, str) else (stream or b"").decode("utf-8", "replace")
+                for stream in (exc.stdout, exc.stderr)
+            )
+            msg = f"pandoc timed out after {timeout:g}s"
+            raise PandocError(msg, log=partial) from exc
         except OSError as exc:
             Path(temporary).unlink(missing_ok=True)
             msg = f"failed to run pandoc: {exc}"
