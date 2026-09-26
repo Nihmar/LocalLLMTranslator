@@ -58,6 +58,7 @@ const KIND_LABELS: Readonly<Record<string, string>> = {
   ingest: "Ingestione",
   translate_chunk: "Traduzione chunk",
   summarize: "Riassunto",
+  book_recon: "Ricognizione",
   edit_chunk: "Revisione editor",
   proofread_chunk: "Proofread",
   qa_scan: "Scansione QA",

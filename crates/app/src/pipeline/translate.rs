@@ -421,7 +421,9 @@ async fn translate_chunk_inner(
 /// On a full hit it writes one `block_translation` row per translatable block and
 /// returns the `block_id -> text_md` map it just persisted, so the caller can
 /// compose the chunk's `target_md` from the reused text. On the first miss it
-/// returns `None` and the chunk falls through to real inference.
+/// returns `None` and the chunk falls through to real inference; the rows already
+/// written for earlier blocks are left in place, and the inference path overwrites
+/// them with the fresh translation (the upsert is keyed on `block_id` + `origin`).
 async fn try_memory_reuse(
     deps: &PipelineDeps,
     chunk_id: &str,

@@ -47,6 +47,7 @@ export type JobKind =
   | "ingest"
   | "translate_chunk"
   | "summarize"
+  | "book_recon"
   | "edit_chunk"
   | "proofread_chunk"
   | "qa_scan"

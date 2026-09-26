@@ -783,6 +783,9 @@ A 5-step wizard, but each step is a freely visitable route (not a constraint):
    build is skipped and reported as such, `changed_units`/`reused_units` say what moved, and
    `chapter_id` builds one chapter standalone. The preview returns the composed markdown and the
    `metadata.yaml` without invoking Pandoc; the build history is the last ten records.
+   `export_build` currently runs the build inline in the command; the `export_unit` job kind is
+   dispatched by the worker but nothing enqueues it yet, so pausing the queue does not pause an
+   export. Quoting the build through the queue is future work.
 
 Plus: **Job dashboard** (per-chunk progress, ETA computed from the real throughput, log, resources)
 and **Projects** (multiple, resume, export/import `.llmtz`).
@@ -818,13 +821,19 @@ what makes it safe to restart it and re-send the in-flight requests.
   `recon_start`, `recon_get`, `recon_confirm`, `glossary_list`, `glossary_upsert`, `glossary_delete`,
   `job_list`, `chunk_get`, `review_start`, `suggestion_list/accept/reject`, `qa_report`,
   `export_build`, `export_preview`, `export_history`, `metrics_get`.
-- Events: `job://progress`, `log://line`, `metrics://tick`, `qa://finding`, `sidecar://status`,
-  `sidecar://progress`, `export://progress`.
+- Events: `job://progress`, `log://line`, `metrics://tick`, `sidecar://status`,
+  `sidecar://progress`, `export://progress`. Findings are not pushed: the UI reads them
+  through `qa_report` and refetches when a `job://progress` transition says a chunk moved.
 
 `job://progress` carries the serialized `job` row at every transition the control plane owns;
 views treat it as an invalidation trigger and refetch through commands. `sidecar://progress`
 forwards the sidecar's out-of-band `progress` notifications unchanged, and `log://line`
 (`{ts, level, source, message}`) carries the sidecar's stderr and the worker's failures.
+
+API keys: `llm_endpoint.api_key_ref` stores only the *name* of the keyring entry and
+`LlamaClient` accepts a bearer key, but no code reads the OS keyring yet, so an endpoint that
+requires authentication is not usable today. Wiring the keyring lookup is future work; the
+no-secrets-in-the-database rule already holds.
 
 ---
 

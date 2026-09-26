@@ -564,8 +564,6 @@ pub async fn run_proofread_chunk(
 // Accept / reject
 // ---------------------------------------------------------------------------
 
-/// Re-write a chunk's `target_md` from its current block translations, so the
-/// exporter sees the accepted text.
 /// Select the eligible chunks and enqueue the requested passes. Returns the new
 /// job ids; an equivalent pending job suppresses a duplicate.
 pub async fn enqueue_review_jobs(
@@ -626,6 +624,8 @@ pub async fn enqueue_review_jobs(
     Ok(jobs)
 }
 
+/// Re-write a chunk's `target_md` from its current block translations, so the
+/// exporter sees the accepted text.
 pub async fn recompose_chunk(pool: &SqlitePool, chunk_id: &str) -> Result<()> {
     let chunk = repo::get_chunk(pool, chunk_id)
         .await?

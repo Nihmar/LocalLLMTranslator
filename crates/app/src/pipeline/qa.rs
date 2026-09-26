@@ -1,10 +1,12 @@
 //! QA scan (PLAN.md §11.4): run the sidecar's heuristics on a translated chunk
 //! and persist the findings.
 //!
-//! The scan runs inline right after a chunk is translated — with the raw model
-//! reply, so the placeholder check has real `⟦n⟧` tokens to inspect — and can be
-//! re-run later through the `qa_scan` job when the glossary changed. Findings are
-//! advisory: they never change a chunk's status, they only feed the report the
+//! The scan runs right after a chunk is translated, on the *validated, placeholder-free*
+//! markdown and with an empty placeholder map: placeholder integrity is enforced earlier
+//! by `reinject` (a failure marks the chunk `needs_review` and writes its own finding), so
+//! by the time the heuristics run there is no `⟦n⟧` token left to inspect. The scan can be
+//! re-run later through the `qa_scan` job, for example after a glossary change. Findings
+//! are advisory: they never change a chunk's status, they only feed the report the
 //! reviewer reads.
 
 use serde::{Deserialize, Serialize};

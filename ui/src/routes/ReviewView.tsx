@@ -28,10 +28,11 @@ import type { ViewId } from "../App";
 /**
  * Step 4 of the wizard (`PLAN.md` §11.4): the bilingual editor.
  *
- * Three columns per block — original, translated, corrected — with a word-level diff rendered by
- * `lib/diff.ts`. Suggestions come from the editor and proofreader passes; accepting one rewrites
- * the block translation and recomposes the chunk on the control plane, rejecting one only changes
- * its status. The QA report below is advisory and filterable.
+ * Three columns per block — original, translated, corrected — with a diff rendered by the
+ * CodeMirror 6 merge view (`components/CodeEditor.tsx`). Suggestions come from the editor
+ * and proofreader passes; accepting one rewrites the block translation and recomposes the
+ * chunk on the control plane, rejecting one only changes its status. The QA report below is
+ * advisory and filterable.
  */
 
 export interface ReviewViewProps {
