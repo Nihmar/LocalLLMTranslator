@@ -215,12 +215,12 @@ export function ChunkTable({ chunks, onOpenDetails }: ChunkTableProps) {
                   <td>
                     <span className="flex items-center gap-1">
                       <StatusBadge status={row.status} pulse={row.status === "running"} />
-                      {row.error !== null && row.error.length > 0 ? (
-                        <span className="text-danger" title={truncate(row.error, 400)}>
-                          ⚠
-                        </span>
-                      ) : null}
                     </span>
+                    {row.error !== null && row.error.length > 0 ? (
+                      <span className="mt-1 block text-[0.68rem] text-danger" title={row.error}>
+                        {truncate(row.error, 60)}
+                      </span>
+                    ) : null}
                   </td>
 
                   <td>
