@@ -6,6 +6,7 @@ import { ResourceGauge } from "../components/ResourceGauge";
 import { StatusBadge } from "../components/StatusBadge";
 import { onJobProgress, onMetricsTick } from "../lib/events";
 import { useTicker } from "../lib/hooks";
+import { KIND_LABELS, jobKindLabel, payloadChunkId } from "../lib/jobs";
 import {
   countLabel,
   estimateRemainingMs,
@@ -42,31 +43,6 @@ export interface JobsViewProps {
 const JOB_LIMIT = 1000;
 const TERMINAL_STATES: ReadonlySet<string> = new Set(["done", "failed", "cancelled"]);
 
-/** The chunk a translate job belongs to lives in its payload, not on the job row. */
-function payloadChunkId(payloadJson: string): string | null {
-  try {
-    const parsed: unknown = JSON.parse(payloadJson);
-    if (typeof parsed === "object" && parsed !== null) {
-      const value = (parsed as { chunk_id?: unknown }).chunk_id;
-      return typeof value === "string" ? value : null;
-    }
-  } catch {
-    // A malformed payload must not break the progress trigger.
-  }
-  return null;
-}
-
-const KIND_LABELS: Readonly<Record<string, string>> = {
-  ingest: "Ingestione",
-  translate_chunk: "Traduzione chunk",
-  summarize: "Riassunto",
-  book_recon: "Ricognizione",
-  edit_chunk: "Revisione editor",
-  proofread_chunk: "Proofread",
-  qa_scan: "Scansione QA",
-  export_unit: "Export",
-};
-
 const STATE_FILTERS: ReadonlyArray<{ value: string; label: string }> = [
   { value: "all", label: "Tutti gli stati" },
   { value: "pending", label: "In attesa" },
@@ -81,10 +57,6 @@ const KIND_FILTERS: ReadonlyArray<{ value: string; label: string }> = [
   { value: "all", label: "Tutti i tipi" },
   ...Object.entries(KIND_LABELS).map(([value, label]) => ({ value, label })),
 ];
-
-function kindLabel(kind: string): string {
-  return KIND_LABELS[kind] ?? kind;
-}
 
 interface EtaView {
   etaMs: number | null;
@@ -495,7 +467,7 @@ export function JobsView({ project, onNavigate }: JobsViewProps) {
                         <td className="num" title={job.id}>
                           {shortId(job.id, 8)}
                         </td>
-                        <td className="text-ink-soft">{kindLabel(job.kind)}</td>
+                        <td className="text-ink-soft">{jobKindLabel(job.kind)}</td>
                         <td>
                           <StatusBadge
                             status={job.state}
