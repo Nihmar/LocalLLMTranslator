@@ -342,29 +342,28 @@ not travel, and an existing project id is rejected instead of overwritten.
 - Nothing that requires a GPU or downloaded models on the default path: the `marker` exception
   is an optional extra and stays out of the bundle.
 
-## Diagnostica e log
+## Diagnostics and logs
 
-Ogni evento utile è registrato in un file giornaliero sotto la cartella dati dell'app:
-`logs/llmtz.<data>.log` (su Linux `~/.local/share/org.localllmtranslator.app/logs/`).
-Contiene transizioni dei job (avvio, esito, durata), una riga per ogni chiamata al modello
-(ruolo, modello, token, latenza, esito), le transizioni di stato del sidecar e **gli errori
-che l'interfaccia ti ha mostrato**. Lanciando l'app da terminale i log si vedono anche lì;
-`RUST_LOG=debug` alza il livello.
+Everything worth keeping is written to a daily file under the app data directory:
+`logs/llmtz.<date>.log` (on Linux `~/.local/share/org.localllmtranslator.app/logs/`). It holds
+the job transitions (start, outcome, duration), one line per model call (role, model, tokens,
+answer and reasoning sizes, latency, outcome), the sidecar's state transitions and **the errors
+the UI showed you**. Starting the app from a terminal prints the same lines there; `RUST_LOG=debug`
+raises the level.
 
-Il testo dei libri, i prompt, le risposte e i valori del glossario **non** finiscono nei
-log: quelli restano nella tabella `llm_call` del database locale, che non esce mai dalla
-macchina.
+Book text, prompts, responses and glossary values **never** reach the logs: they stay in the
+local database's `llm_call` table, which never leaves the machine.
 
-Dal dashboard **Job** (pannello "Diagnostica") puoi:
+From the **Job** dashboard ("Diagnostica" panel) you can:
 
-- **Apri cartella log** per vedere i file;
-- **Esporta diagnostica**: crea `<dati>/diagnostics/llmtz-diagnostics-<timestamp>.zip` con i
-  cinque log più recenti (ultimi 5 MB ciascuno) e un `report.json` con versioni, stato del
-  sidecar e del worker, coda, job falliti ed errori delle chiamate. È pensato per essere
-  allegato a una segnalazione e non contiene database né contenuti del libro.
+- **Apri cartella log** to open the directory holding the files;
+- **Esporta diagnostica**: writes `<data>/diagnostics/llmtz-diagnostics-<timestamp>.zip` with the
+  five newest logs (last 5 MB each) and a `report.json` carrying versions, sidecar and worker
+  state, the queue, failed jobs and the errors of the model calls. It is meant to be attached to
+  a report: it holds no database and no book content.
 
-Quando qualcosa non funziona: esporta il bundle (o prendi il file di log del giorno) e
-allegalo alla descrizione di cosa stavi facendo.
+When something goes wrong: export the bundle (or take the day's log file) and attach it together
+with a description of what you were doing.
 
 ## License
 
