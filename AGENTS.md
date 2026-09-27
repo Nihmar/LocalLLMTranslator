@@ -147,7 +147,7 @@ Commands: `project_list`, `project_create`, `project_get`, `project_delete`,
 `series_recon_confirm`,
 `review_start`, `suggestion_list`, `suggestion_accept`, `suggestion_reject`, `qa_report`,
 `qa_finding_set_status`,
-`job_list`, `chunk_list`, `chunk_get`, `metrics_get`, `sidecar_status`,
+`job_list`, `job_cancel`, `chunk_list`, `chunk_get`, `metrics_get`, `sidecar_status`,
 `log_frontend_error`, `diagnostics_paths`, `diagnostics_export`,
 `export_build`, `export_preview`, `export_history`, `open_path`.
 

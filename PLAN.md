@@ -935,7 +935,7 @@ what makes it safe to restart it and re-send the in-flight requests.
   `series_glossary_list`, `series_glossary_upsert`, `series_glossary_delete`,
   `series_variant_upsert`, `series_variant_delete`, `series_promote_term`,
   `series_export`, `series_import`, `series_qa_scan`, `series_recon_start`, `series_recon_confirm`,
-  `job_list`, `chunk_get`, `review_start`, `suggestion_list/accept/reject`, `qa_report`,
+  `job_list`, `job_cancel`, `chunk_get`, `review_start`, `suggestion_list/accept/reject`, `qa_report`,
   `qa_finding_set_status`, `log_frontend_error`, `diagnostics_paths`, `diagnostics_export`,
   `export_build`, `export_preview`, `export_history`, `metrics_get`.
 - Events: `job://progress`, `log://line`, `metrics://tick`, `sidecar://status`,
@@ -943,7 +943,14 @@ what makes it safe to restart it and re-send the in-flight requests.
   through `qa_report` and refetches when a `job://progress` transition says a chunk moved.
 
 `job://progress` carries the serialized `job` row at every transition the control plane owns;
-views treat it as an invalidation trigger and refetch through commands. `sidecar://progress`
+views treat it as an invalidation trigger and refetch through commands. `job_cancel` takes
+`{job_ids[]}` and interrupts those jobs **without stopping the queue**: a running job has its
+in-flight call abandoned (the worker polls a per-job cancellation flag and re-reads the row before
+writing an outcome, so a cancelled row is never revived by `complete` or `retry_or_fail`), a queued
+one is cancelled in the database, and an interrupted `translate_chunk` returns its chunk to
+`pending` so a later `translation_start` picks it up again. The result reports `cancelled[]` and
+`skipped[]` (ids that had already finished). This is deliberately narrower than
+`translation_cancel`, which pauses the pool and aborts every worker. `sidecar://progress`
 forwards the sidecar's out-of-band `progress` notifications unchanged, and `log://line`
 (`{ts, level, source, message}`) carries the sidecar's stderr and the worker's job transitions
 (start, completion) and failures, so the live log pane shows activity during a run.
