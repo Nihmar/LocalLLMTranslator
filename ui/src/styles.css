@@ -569,6 +569,39 @@
     align-items: stretch;
   }
 
+  /* --- live chapter preview --- */
+  .preview-reader {
+    max-height: 30rem;
+    overflow: auto;
+    border: 1px solid var(--color-line);
+    border-radius: 0.55rem;
+    background-color: var(--color-canvas);
+    padding: 0.9rem 1.1rem;
+    font-size: 0.875rem;
+    line-height: 1.7;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .preview-segment + .preview-segment {
+    margin-top: 0.7rem;
+  }
+
+  /* Source text standing in for a chunk that has not been translated yet. */
+  .preview-segment[data-translated="false"] {
+    color: var(--color-muted);
+  }
+
+  .preview-gap {
+    display: block;
+    margin-bottom: 0.15rem;
+    font-family: var(--font-mono);
+    font-size: 0.62rem;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--color-warn);
+  }
+
   /* --- misc --- */
   .spinner {
     display: inline-block;
