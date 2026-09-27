@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { StatusBadge } from "./components/StatusBadge";
 import { onSidecarStatus } from "./lib/events";
 import { projectGet, sidecarStatus, toErrorMessage } from "./lib/ipc";
@@ -13,9 +13,14 @@ import { SeriesView } from "./routes/SeriesView";
 import { TranslateView } from "./routes/TranslateView";
 
 /**
- * Application shell: sidebar navigation plus a typed view switcher.
+ * Application shell: a grouped sidebar plus a typed view switcher.
  *
- * There is deliberately no routing library: the wizard has seven fixed destinations, a
+ * The navigation is split by **scope**, not by step number: the four project steps only make
+ * sense while a project is open and only appear then, while "Progetti", "Modelli", "Serie" and
+ * "Job" are application-wide destinations that are always reachable. The open project itself
+ * lives in the header, so it stays visible on every page (`PLAN.md` §11).
+ *
+ * There is deliberately no routing library: the wizard has fixed destinations, a
  * `useState<ViewId>` is smaller, fully typed and needs no dependency. `PLAN.md` §11 calls each
  * step "a route you can visit freely" — which is exactly what this switcher provides.
  *
@@ -35,24 +40,35 @@ export type ViewId =
 
 interface NavEntry {
   id: ViewId;
-  /** Wizard step number, or a bullet for the dashboard. */
+  /** Wizard step number for the project flow, or a bullet for the application destinations. */
   step: string;
   label: string;
   hint: string;
 }
 
-const NAV_ENTRIES: readonly NavEntry[] = [
-  { id: "projects", step: "0", label: "Progetti", hint: "Elenco, creazione, apertura" },
+/** Steps of the translation pipeline; scoped to the open project, in reading order. */
+const PROJECT_NAV: readonly NavEntry[] = [
   { id: "ingest", step: "1", label: "Ingestione", hint: "File, formato, capitoli" },
-  { id: "models", step: "2", label: "Modelli", hint: "Endpoint, salute, ruoli" },
-  { id: "translate", step: "3", label: "Traduzione", hint: "Chunk, avvio, risorse" },
-  { id: "review", step: "4", label: "Revisione", hint: "Diff bilingue, suggerimenti, QA" },
-  { id: "export", step: "5", label: "Export", hint: "PDF, EPUB, DOCX" },
+  { id: "translate", step: "2", label: "Traduzione", hint: "Capitoli, anteprima, chunk" },
+  { id: "review", step: "3", label: "Revisione", hint: "Diff bilingue, suggerimenti, QA" },
+  { id: "export", step: "4", label: "Export", hint: "PDF, EPUB, DOCX" },
+];
+
+/** Application-wide destinations, independent of any project. */
+const APP_NAV: readonly NavEntry[] = [
+  { id: "projects", step: "•", label: "Progetti", hint: "Elenco, creazione, apertura" },
+  { id: "models", step: "•", label: "Modelli", hint: "Endpoint, salute, ruoli" },
   { id: "series", step: "•", label: "Serie", hint: "Canone condiviso tra i libri" },
   { id: "jobs", step: "•", label: "Job", hint: "Coda, ETA, log live" },
 ];
 
+const PROJECT_VIEWS: ReadonlySet<ViewId> = new Set(PROJECT_NAV.map((entry) => entry.id));
+
 const STORAGE_KEY = "llmtranslator.current_project_id";
+
+const PRIVACY_NOTE =
+  "Nessuna telemetria, nessun font remoto, nessuna chiamata di rete oltre agli endpoint " +
+  "llama-server che configuri tu.";
 
 function readStoredProjectId(): string | null {
   try {
@@ -72,6 +88,41 @@ function writeStoredProjectId(projectId: string | null): void {
   } catch {
     // Storage unavailable: the selection simply does not survive a reload.
   }
+}
+
+function NavGroup({
+  title,
+  entries,
+  current,
+  onSelect,
+}: {
+  title: string;
+  entries: readonly NavEntry[];
+  current: ViewId;
+  onSelect: (view: ViewId) => void;
+}) {
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="nav-group-label">{title}</div>
+      {entries.map((entry) => (
+        <button
+          key={entry.id}
+          type="button"
+          className="nav-item"
+          title={entry.hint}
+          aria-current={entry.id === current ? "page" : undefined}
+          onClick={() => {
+            onSelect(entry.id);
+          }}
+        >
+          <span className="nav-index" aria-hidden="true">
+            {entry.step}
+          </span>
+          <span className="truncate text-[0.82rem] font-medium">{entry.label}</span>
+        </button>
+      ))}
+    </div>
+  );
 }
 
 export default function App() {
@@ -109,8 +160,8 @@ export default function App() {
         setProject(restored.project);
       })
       .catch(() => {
-        // The project was deleted or the backend is unreachable: forget the stale id.
-        writeStoredProjectId(null);
+        // The project was deleted or the backend is unreachable: the persistence effect below
+        // forgets the stale id once `restoring` settles.
       })
       .finally(() => {
         if (!cancelled) {
@@ -123,6 +174,13 @@ export default function App() {
     };
   }, []);
 
+  // A project step with no project open has nothing to show: fall back to the project list.
+  useEffect(() => {
+    if (project === null && PROJECT_VIEWS.has(view)) {
+      setView("projects");
+    }
+  }, [project, view]);
+
   useEffect(() => {
     void refreshSidecar();
   }, [refreshSidecar]);
@@ -134,20 +192,27 @@ export default function App() {
 
   const handleOpenProject = useCallback((opened: Project) => {
     setProject(opened);
-    writeStoredProjectId(opened.id);
   }, []);
 
-  const currentEntry = useMemo(
-    () => NAV_ENTRIES.find((entry) => entry.id === view) ?? NAV_ENTRIES[0],
-    [view],
-  );
+  // The open project is the single persisted piece of navigation state. Writing it from an
+  // effect (after the restore settled) keeps the stored id and the header in step, including
+  // when the project is deleted from the list.
+  useEffect(() => {
+    if (!restoring) {
+      writeStoredProjectId(project?.id ?? null);
+    }
+  }, [project, restoring]);
+
+  const handleDeleteProject = useCallback((deletedId: string) => {
+    setProject((current) => (current?.id === deletedId ? null : current));
+  }, []);
 
   const sidecarReady = sidecar !== null && sidecar.state === "running";
 
   return (
     <div className="app-canvas">
-      {/* Sidebar */}
-      <aside className="flex w-64 shrink-0 flex-col gap-3 border-r border-line bg-surface/60 p-3">
+      {/* Sidebar: project steps first, application destinations below. */}
+      <aside className="flex w-60 shrink-0 flex-col gap-4 border-r border-line bg-surface/60 p-3">
         <div className="flex items-center gap-2 px-1 py-1">
           <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-accent font-mono text-sm font-bold text-canvas">
             iL
@@ -162,112 +227,117 @@ export default function App() {
           </span>
         </div>
 
-        <nav className="flex flex-col gap-1" aria-label="Sezioni dell'applicazione">
-          {NAV_ENTRIES.map((entry) => (
-            <button
-              key={entry.id}
-              type="button"
-              className="nav-item"
-              aria-current={entry.id === view ? "page" : undefined}
-              onClick={() => {
-                setView(entry.id);
-              }}
-            >
-              <span className="nav-index" aria-hidden="true">
-                {entry.step}
-              </span>
-              <span className="min-w-0">
-                <span className="block truncate text-[0.82rem] font-medium">{entry.label}</span>
-                <span className="block truncate text-[0.68rem] text-faint">{entry.hint}</span>
-              </span>
-            </button>
-          ))}
+        {project === null ? (
+          <div className="flex flex-col gap-1">
+            <div className="nav-group-label">Progetto</div>
+            <div className="rounded-lg border border-dashed border-line-strong p-3 text-center">
+              <p className="text-xs text-muted">
+                {restoring ? "Ripristino dell'ultimo progetto…" : "Nessun progetto aperto."}
+              </p>
+              <button
+                type="button"
+                className="btn btn-primary btn-sm mt-2 w-full"
+                onClick={() => {
+                  setView("projects");
+                }}
+              >
+                Scegli un progetto
+              </button>
+            </div>
+          </div>
+        ) : (
+          <nav aria-label="Sezioni del progetto aperto">
+            <NavGroup
+              title="Progetto"
+              entries={PROJECT_NAV}
+              current={view}
+              onSelect={setView}
+            />
+          </nav>
+        )}
+
+        <nav aria-label="Sezioni dell'applicazione">
+          <NavGroup title="Applicazione" entries={APP_NAV} current={view} onSelect={setView} />
         </nav>
 
-        <div className="mt-auto flex flex-col gap-2 rounded-lg border border-line bg-canvas p-2.5">
-          <div className="flex items-center justify-between gap-2">
-            <span className="stat-label">Sidecar</span>
-            <StatusBadge
-              status={sidecarError === null ? (sidecar?.state ?? "starting") : "error"}
-              pulse={sidecar !== null && (sidecar.state === "starting" || sidecar.state === "restarting")}
-              label={
-                sidecarError !== null
-                  ? "Stato non leggibile"
-                  : sidecar === null
-                    ? "Interrogazione…"
-                    : sidecar.state === "running"
-                      ? "In esecuzione"
-                      : undefined
-              }
-            />
-          </div>
-
-          <dl className="grid grid-cols-2 gap-x-2 gap-y-0.5 font-mono text-[0.66rem] text-muted">
-            <dt className="text-faint">stato</dt>
-            <dd className="truncate">{sidecar?.state ?? "—"}</dd>
-            <dt className="text-faint">pid</dt>
-            <dd className="truncate">{sidecar?.pid ?? "—"}</dd>
-            <dt className="text-faint">tentativi</dt>
-            <dd className="truncate">{sidecar?.attempts ?? "—"}</dd>
-          </dl>
-
-          {sidecar?.message !== null && sidecar?.message !== undefined ? (
-            <p className="text-[0.66rem] text-danger" title={sidecar.message}>
-              {sidecar.message}
-            </p>
-          ) : null}
-
-          <button type="button" className="btn btn-sm btn-ghost" onClick={() => void refreshSidecar()}>
-            Aggiorna stato
-          </button>
-        </div>
-
-        <p className="px-1 text-[0.62rem] leading-relaxed text-faint">
-          Nessuna telemetria, nessun font remoto, nessuna chiamata di rete oltre agli endpoint
-          llama-server che configuri tu.
+        <p
+          className="mt-auto px-1 text-[0.62rem] leading-relaxed text-faint"
+          title={PRIVACY_NOTE}
+        >
+          Offline. Nessuna telemetria, nessuna chiamata di rete verso l&apos;esterno.
         </p>
       </aside>
 
       {/* Main column */}
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-line bg-surface/60 px-5 py-3">
-          <div className="min-w-0">
-            <h1 className="truncate text-sm font-semibold text-ink">
-              {currentEntry?.label ?? ""}
-              <span className="ml-2 font-normal text-muted">
-                {currentEntry?.hint ?? ""}
-              </span>
-            </h1>
-            <p className="truncate text-[0.7rem] text-faint">
-              {project === null
-                ? restoring
-                  ? "Ripristino del progetto…"
-                  : "Nessun progetto aperto"
-                : `Progetto: ${project.name} · ${project.source_lang ?? "?"} → ${project.target_lang}`}
-            </p>
+          <div className="min-w-0 flex-1">
+            {project === null ? (
+              <>
+                <h1 className="truncate text-sm font-semibold text-ink">Nessun progetto aperto</h1>
+                <p className="truncate text-[0.7rem] text-faint">
+                  {restoring
+                    ? "Ripristino dell'ultimo progetto…"
+                    : "Apri o crea un progetto per iniziare la pipeline di traduzione."}
+                </p>
+              </>
+            ) : (
+              <>
+                <h1 className="flex min-w-0 items-center gap-2 text-base font-semibold text-ink">
+                  <span className="truncate" title={project.name}>
+                    {project.name}
+                  </span>
+                  <span className="mono-chip shrink-0">
+                    {project.source_lang ?? "?"} → {project.target_lang}
+                  </span>
+                </h1>
+                <p
+                  className="truncate font-mono text-[0.68rem] text-faint"
+                  title={project.source_path}
+                >
+                  {project.source_path}
+                </p>
+              </>
+            )}
           </div>
 
-          <div className="flex items-center gap-2">
-            {project !== null ? (
-              <span className="mono-chip" title={project.source_path}>
-                {project.source_path.length > 42
-                  ? `…${project.source_path.slice(-41)}`
-                  : project.source_path}
-              </span>
-            ) : null}
+          <div className="flex shrink-0 items-center gap-2">
             <button
               type="button"
-              className="btn btn-sm"
+              className="btn btn-sm btn-ghost"
               disabled={sidecar === null && sidecarError === null}
+              title={
+                sidecar === null
+                  ? "Verifica lo stato del sidecar"
+                  : `Sidecar ${sidecar.state}${
+                      sidecar.pid === null ? "" : ` · pid ${String(sidecar.pid)}`
+                    }${sidecar.attempts > 0 ? ` · ${String(sidecar.attempts)} tentativi` : ""}`
+              }
               onClick={() => {
                 void refreshSidecar();
               }}
             >
-              {sidecarReady ? "Sidecar pronto" : "Verifica sidecar"}
+              <StatusBadge
+                status={sidecarError === null ? (sidecar?.state ?? "starting") : "error"}
+                pulse={
+                  sidecar !== null &&
+                  (sidecar.state === "starting" || sidecar.state === "restarting")
+                }
+                label={
+                  sidecarError !== null
+                    ? "Stato non leggibile"
+                    : sidecar === null
+                      ? "Interrogazione…"
+                      : sidecar.state === "running"
+                        ? "Sidecar pronto"
+                        : undefined
+                }
+              />
             </button>
+
             <button
               type="button"
-              className="btn btn-sm btn-ghost"
+              className="btn btn-sm"
               onClick={() => {
                 setView("projects");
               }}
@@ -296,6 +366,7 @@ export default function App() {
             <ProjectsView
               currentProjectId={project?.id ?? null}
               onOpenProject={handleOpenProject}
+              onDeleteProject={handleDeleteProject}
               onNavigate={setView}
             />
           ) : view === "series" ? (

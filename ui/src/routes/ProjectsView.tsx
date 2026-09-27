@@ -32,6 +32,8 @@ import type { ViewId } from "../App";
 export interface ProjectsViewProps {
   currentProjectId: string | null;
   onOpenProject: (project: Project) => void;
+  /** Reports a deleted project so the shell can drop it as the open one. */
+  onDeleteProject: (projectId: string) => void;
   onNavigate: (view: ViewId) => void;
 }
 
@@ -89,7 +91,7 @@ interface FormErrors {
   target_lang?: string | undefined;
 }
 
-export function ProjectsView({ currentProjectId, onOpenProject, onNavigate }: ProjectsViewProps) {
+export function ProjectsView({ currentProjectId, onOpenProject, onDeleteProject, onNavigate }: ProjectsViewProps) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -220,6 +222,7 @@ export function ProjectsView({ currentProjectId, onOpenProject, onNavigate }: Pr
       await projectDelete(projectId);
       setProjects((current) => current.filter((project) => project.id !== projectId));
       setConfirmDeleteId(null);
+      onDeleteProject(projectId);
     } catch (deleteError) {
       setActionError(toErrorMessage(deleteError));
     } finally {
