@@ -232,10 +232,14 @@ Before sending text to the model, inline elements are replaced with opaque token
 | `` `x = 1` `` | `⟦5⟧` | 5=opaque span, text unchanged |
 | `[^3]` | `⟦6⟧` | 6=footnote reference |
 | `$E=mc^2$` | `⟦7⟧` | 7=opaque math |
+| `\- Bonjour` (escaped dialogue dash, §4.1) | `⟦8⟧ Bonjour` | 8=`\-` — a line-initial marker must not reach the model |
 
 Advantages: URLs, inline code, math and notes cannot be translated or corrupted; the model
 sees only prose. The map is a **pure function** of `source_text`, so it does not need to be
-persisted — it is regenerated identically.
+persisted — it is regenerated identically. The escaped dialogue dash belongs here for the same
+reason: shown `\- Bonjour` the model answers `- Bonjour`, which Markdown reads as a list, and
+that is not the paragraph the chunk declared — measured on a real book, the answer came back with
+66 blocks against the 47 the chunk held.
 
 Post-translation validation: every placeholder must appear **exactly once**. If it is missing
 or duplicated → retry with a message listing the missing tokens → then fallback to

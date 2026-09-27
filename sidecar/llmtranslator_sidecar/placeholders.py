@@ -1,4 +1,4 @@
-"""Inline placeholder substitution.
+r"""Inline placeholder substitution.
 
 Asking a model to "preserve the Markdown" does not survive contact with real text: URLs
 get translated, inline code gets mangled, footnote markers drift. So inline markup is
@@ -15,6 +15,12 @@ Opaque atoms are replaced by a single token whose content never enters the promp
     `x = 1`               ->  ⟦5⟧
     $E=mc^2$              ->  ⟦6⟧
     [^3]                  ->  ⟦7⟧
+
+So is a line that opens with an escaped block marker — the dash a book prints for dialogue,
+escaped by the extractor so the paragraph does not read as a list. See it and the model answers
+``- Bonjour``::
+
+    \- Bonjour            ->  ⟦8⟧ Bonjour
 
 The map is a pure function of the input, so it never needs to be persisted: regenerating
 it from the same source always yields the same tokens in the same order.
@@ -45,7 +51,13 @@ _VARIANT_RES: tuple[re.Pattern[str], ...] = (
 )
 
 _MASTER_RE = re.compile(
-    r"(?P<code>(?P<code_fence>`+)(?P<code_body>.+?)(?P=code_fence))"
+    # A line that opens with an *escaped* block marker: the dash a book prints for dialogue,
+    # which the extractor escapes so the paragraph does not read as a list. The model must
+    # not see it — asked to translate ``\- Bonjour`` it answers ``- Bonjour``, and a list is
+    # not the paragraph the chunk declared — so the escape travels as a token like any other
+    # literal the model is not allowed to touch.
+    r"(?P<escape>(?m:^(?:\\[-+*#>|]|\d{1,9}\\[.)])))"
+    r"|(?P<code>(?P<code_fence>`+)(?P<code_body>.+?)(?P=code_fence))"
     r"|(?P<math_block>\$\$.+?\$\$)"
     r"|(?P<math>\$[^$\n]+?\$)"
     r"|(?P<image>!\[[^\]]*\]\([^)\s]*\))"
@@ -62,13 +74,14 @@ _MASTER_RE = re.compile(
 )
 
 _OPAQUE_KINDS = frozenset(
-    {"code", "math_block", "math", "image", "footnote", "autolink", "url", "html"},
+    {"code", "math_block", "math", "image", "footnote", "autolink", "url", "html", "escape"},
 )
 _PAIR_KINDS = frozenset({"strong", "strong_underscore", "strike", "em", "em_underscore"})
 
 #: Names in the order the alternatives appear, so the matched one can be identified
 #: without relying on ``lastgroup`` (which reports the innermost group).
 _ALTERNATIVES: tuple[str, ...] = (
+    "escape",
     "code",
     "math_block",
     "math",

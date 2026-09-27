@@ -8,6 +8,7 @@ variant tolerance are both tested here.
 
 from __future__ import annotations
 
+from llmtranslator_sidecar.parse import split_blocks
 from llmtranslator_sidecar.placeholders import reinject, substitute
 
 
@@ -20,6 +21,54 @@ def test_untouched_response_round_trips_exactly() -> None:
     assert result.missing == []
     assert result.duplicated == []
     assert not result.reordered
+
+
+def test_a_dialogue_dash_is_lifted_out_of_the_prompt() -> None:
+    # The extractor escapes the dash a book prints for dialogue so the paragraph does not read
+    # as a list. Handed to the model as `- Bonjour` it answers `- Bonjour` back, which is a
+    # list: the escape travels as a token instead, like every other literal it must not touch.
+    text = "\\- Bonjour, dit-il.\n\n\\- Allons-y !"
+    llm_text, placeholders = substitute(text)
+
+    assert "- Bonjour" not in llm_text, llm_text
+    assert "Bonjour" in llm_text
+    assert [literal for _, literal in placeholders] == ["\\-", "\\-"]
+
+    restored = reinject(llm_text, placeholders)
+    assert restored.text == text
+    assert restored.ok
+
+
+def test_the_escape_comes_back_on_a_translated_answer() -> None:
+    llm_text, placeholders = substitute("\\- Bonjour, dit-il.")
+    answer = llm_text.replace("Bonjour, dit-il.", "Eccolo, disse.")
+
+    restored = reinject(answer, placeholders)
+
+    assert restored.text == "\\- Eccolo, disse."
+    # The restored text is the paragraph the chunk declared, not a one-item list.
+    assert [block.kind for block in split_blocks(restored.text)] == ["para"]
+
+
+def test_a_real_item_marker_is_left_to_the_model() -> None:
+    text = "- Bonjour\n- Allons-y !"
+    llm_text, placeholders = substitute(text)
+
+    assert llm_text == text
+    assert placeholders == []
+
+
+def test_an_escaped_ordered_delimiter_is_lifted_too() -> None:
+    llm_text, placeholders = substitute("1\\. pas un élément")
+
+    assert llm_text == "⟦1⟧ pas un élément"
+    assert [literal for _, literal in placeholders] == ["1\\."]
+
+
+def test_an_escape_inside_a_line_is_not_claimed() -> None:
+    # Only the marker that opens a line changes the block: a stray `\-` in the prose is text.
+    text = "Una nota - e un trattino \\- interno."
+    assert substitute(text) == (text, [])
 
 
 def test_urls_never_reach_the_prompt() -> None:
