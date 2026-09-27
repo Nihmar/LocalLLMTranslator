@@ -862,6 +862,12 @@ A 5-step wizard, but each step is a freely visitable route (not a constraint):
    field) plus chunk table (`pending/running/done/failed/needs_review`) with tokens,
    attempts, model; start/pause/resume; live log; resource gauge; actions on multiple
    selection (retry, skip, re-translate with another model).
+   Above the chunk table sits a chapter outline with the same aggregated statuses; double-clicking
+   a chapter (or pressing Enter on its row, or its «Anteprima» button) opens a live preview
+   composed client-side from the chunk rows already loaded — translated chunks show their target,
+   the rest their source in grey — so a run can be followed chapter by chapter without waiting
+   for the export. The status filter applies to the table only: counters, outline and preview
+   always describe the whole project.
 4. **Review** — 3-column side-by-side editor (original / translated / corrected) with block-level
    and character-level diff, navigation by suggestion, accept/reject per individual
    change, and a filterable QA report. The diff is a read-only CodeMirror 6 merge view
