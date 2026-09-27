@@ -2,6 +2,8 @@
 //!
 //! The claim statement is the one specified in PLAN.md section 6.
 
+use std::collections::HashSet;
+
 use serde_json::Value;
 use sqlx::SqlitePool;
 
@@ -84,6 +86,36 @@ pub async fn has_pending(
     .fetch_one(pool)
     .await?;
     Ok(count > 0)
+}
+
+/// The chunks that already carry an unfinished job of one kind, for one project.
+///
+/// The batch form of [`has_pending`] for a caller that walks a whole book: starting
+/// the translation twice must not enqueue a second job for a chunk that is already
+/// waiting, or the duplicate translates the chunk again once it is `done`.
+pub async fn active_chunk_ids(
+    pool: &SqlitePool,
+    project_id: &str,
+    kind: &str,
+) -> Result<HashSet<String>> {
+    let payloads: Vec<String> = sqlx::query_scalar(
+        "SELECT payload_json FROM job WHERE project_id = ?1 AND kind = ?2 \
+         AND state IN ('pending', 'leased', 'running')",
+    )
+    .bind(project_id)
+    .bind(kind)
+    .fetch_all(pool)
+    .await?;
+    Ok(payloads
+        .iter()
+        .filter_map(|payload| serde_json::from_str::<Value>(payload).ok())
+        .filter_map(|payload| {
+            payload
+                .get("chunk_id")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .collect())
 }
 
 /// Insert a new pending job and return its id.
@@ -375,6 +407,65 @@ mod tests {
         .execute(pool)
         .await
         .expect("project");
+    }
+
+    /// Starting a translation twice must not queue a chunk a second time: only the
+    /// unfinished jobs of that kind and project count, never a settled or cancelled one.
+    #[tokio::test]
+    async fn active_chunk_ids_are_the_chunks_with_unfinished_jobs() {
+        let (pool, _dir) = connect_temp_file().await.expect("pool");
+        insert_test_project(&pool, "proj").await;
+        insert_test_project(&pool, "other").await;
+
+        let payload = |chunk: &str| serde_json::json!({ "chunk_id": chunk });
+        enqueue(
+            &pool,
+            &NewJob::new("proj", "translate_chunk", payload("c-waiting")),
+        )
+        .await
+        .expect("waiting");
+        let running = enqueue(
+            &pool,
+            &NewJob::new("proj", "translate_chunk", payload("c-running")),
+        )
+        .await
+        .expect("running");
+        mark_running(&pool, &running).await.expect("running");
+        let finished = enqueue(
+            &pool,
+            &NewJob::new("proj", "translate_chunk", payload("c-done")),
+        )
+        .await
+        .expect("done");
+        complete(&pool, &finished).await.expect("complete");
+        let cancelled = enqueue(
+            &pool,
+            &NewJob::new("proj", "translate_chunk", payload("c-cancelled")),
+        )
+        .await
+        .expect("cancelled");
+        cancel(&pool, &cancelled).await.expect("cancel");
+        // Another kind, and another project: neither is this project's translation work.
+        enqueue(
+            &pool,
+            &NewJob::new("proj", "edit_chunk", payload("c-editor")),
+        )
+        .await
+        .expect("edit");
+        enqueue(
+            &pool,
+            &NewJob::new("other", "translate_chunk", payload("c-elsewhere")),
+        )
+        .await
+        .expect("other");
+
+        let active = active_chunk_ids(&pool, "proj", "translate_chunk")
+            .await
+            .expect("active");
+        assert_eq!(
+            active,
+            HashSet::from(["c-waiting".to_string(), "c-running".to_string()])
+        );
     }
 
     #[tokio::test]
