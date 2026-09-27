@@ -196,8 +196,8 @@ the canon, or marking the finding resolved). A chunk re-scan replaces its findin
 Diagnostics: Rust writes structured `tracing` events to stdout and to a daily file under the
 app data dir (`logs/llmtz.<date>.log`), starting before the app state is built. The file
 carries job transitions (start, outcome, duration), one line per model call (role, model,
-tokens, latency, outcome), sidecar status changes and the errors the UI shows; it never
-carries book text, prompts, responses or glossary values. The frontend calls
+tokens, answer and reasoning sizes, latency, outcome), sidecar status changes and the errors the
+UI shows; it never carries book text, prompts, responses or glossary values. The frontend calls
 `log_frontend_error({command, message})` for every rejected `invoke`; `diagnostics_paths`
 returns `{data_dir, log_dir}` and `diagnostics_export` writes
 `<data_dir>/diagnostics/llmtz-diagnostics-<timestamp>.zip` with the newest logs and a

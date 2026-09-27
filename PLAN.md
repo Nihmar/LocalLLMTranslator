@@ -479,6 +479,24 @@ repeated paragraphs, title pages) without even calling the model.
 - `chat_stream(req) -> Stream<Delta>` → `POST /v1/chat/completions` with `stream: true`, SSE
   parsing, support for `response_format: json_schema` and `grammar` (GBNF) for editor and proofreader
 
+A `Delta` carries the answer (`content`) and the **thinking** (`reasoning_content`) separately: a
+reasoning model streams its reasoning first, and mixing the two would feed the thinking to the
+translator as if it were text. The reasoning is never parsed as the answer; it is logged as a size
+and stored in `llm_call.reasoning_text`, which is what makes an empty answer explainable.
+
+`chat_call` is the single entry point for a role call. It forwards the sampling parameters of the
+binding plus `chat_template_kwargs` verbatim, the per-request channel for chat-template variables:
+that is how a role turns the thinking off (`{"enable_thinking": false}`) without touching the
+server. A **structured** pass (`response_format: json_schema`) goes through `run_structured_call`,
+which retries once, with an explicit instruction, when the answer carries no JSON object at all —
+and doubles the app's own token default for that retry when the first attempt ran out of budget,
+never overriding a `max_tokens` the binding set. A reply that was merely truncated (a `{` without
+its closing brace) is not retried: the same call would truncate again. The retry's prompt hash
+differs, so both attempts stay in `llm_call`.
+
+A rejected answer gains the outcome of the call — stop reason, answer and reasoning sizes, budget —
+which is safe in the log file and in the UI because it never quotes the text.
+
 Concurrency limit per endpoint = `min(role_binding.max_concurrency, props.total_slots)`.
 
 ### 7.2 Prefix stability (important for performance)
@@ -858,8 +876,10 @@ are the translation pipeline; the sidebar shows them only while a project is ope
 order, and each one is a freely visitable route (not a constraint). The **application
 destinations** — Projects, Models, Series and the Job dashboard — are always reachable,
 independent of the open project; they come first in the sidebar, so opening or closing a book
-never moves the entries above. The open project is pinned in the header (name, language pair,
-source path), so the current book is unambiguous on every page.
+never moves the entries above. A project also reaches, beside its four steps, the **Glossario**:
+the terms the translator prompt reads, reviewed as a destination of its own instead of inside a
+collapsed panel. The open project is pinned in the header (name, language pair, source path), so
+the current book is unambiguous on every page.
 
 1. **Ingestion** — drag&drop, format detection, chapter and block preview, PDF backend
    choice, extraction result with warnings.
@@ -904,6 +924,14 @@ source path), so the current book is unambiguous on every page.
 
 Plus: **Job dashboard** (per-chunk progress, ETA computed from the real throughput, log, resources)
 and **Projects** (multiple, resume, export/import `.llmtz`).
+
+The **Glossario** destination edits the same `glossary_term` rows as the book profile panel, with
+room for the job: the terms that wait for a decision (candidates and conflicts) come first, a
+status filter and a free-text search narrow the table, and the header counts what is pending. The
+order and the filters read the **persisted** row, so approving a candidate does not move it while
+the cursor is still in the row; the source identifies the row and is therefore not editable — a
+rename is a new term plus a removal. One "Salva" writes every changed row with the revision it was
+loaded from and reports a stale row instead of overwriting it (§9.2, §12.2).
 
 The **job monitor** is a dialog, reachable from the header of every page and from the translation
 page: it lists the jobs of the open project (or of every project, when the scope is widened), names
@@ -1038,6 +1066,7 @@ context); M6 after M3 (concurrency requires the versioned glossary).
 |---|---|
 | The model loses placeholders or rewrites the structure | Structural validation per chunk + targeted retry + fallback to raw Markdown + `qa_finding` for manual review (M1, M4) |
 | Original↔translation block alignment fails on irregular output | Compare the number of blocks; if different → `needs_review` instead of aligning by force (M1) |
+| A reasoning model spends the whole budget thinking and answers nothing | The thinking is streamed into `reasoning_content`, which the client keeps out of the answer and stores for audit; a role can turn the thinking off with `chat_template_kwargs`; a structured pass retries once with a larger default budget; the failure names the stop reason, the sizes and the budget (M4) |
 | Packaging of the Python sidecar on 3 OSes | `onedir` sidecar (not `onefile`: faster startup, fewer AV false positives), bundled as a Tauri resource; smoke test in CI on Linux, manual build on macOS/Windows (M0, M7) |
 | Python 3.14 without PyInstaller/torch wheels | Pin **Python 3.12** in the sidecar (already available via uv) |
 | Marker drags in torch (GB) | Optional extra, never in the default bundle; the `PdfExtractor` interface keeps it out of the core (M2) |

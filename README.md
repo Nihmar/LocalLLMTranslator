@@ -131,6 +131,30 @@ llama-server -m models/qwen2.5-14b-instruct-q6_k.gguf \
 server exposes. If `/props` is unreachable or VRAM cannot be determined, the scheduler
 **degrades to serial execution** without errors, stating the reason in the UI.
 
+### Reasoning models (thinking)
+
+The editor, the reconnaissance and the summarizer ask for **JSON** and cap the answer
+(900–1500 tokens by default). A reasoning model streams its thinking first, so the budget can be
+spent before the JSON starts: the call then comes back with no answer at all and the job fails
+with `the … answer contains no JSON object (finish_reason=length, answer=0 chars, reasoning=…
+chars, max_tokens=…)`. The fixed pass is named in the parentheses; the thinking of every call is
+kept in `llm_call.reasoning_text` for the same diagnosis. Two ways out, both per role in
+**Modelli → Parametri di generazione** of a binding:
+
+```json
+{ "temperature": 0.2, "top_p": 0.95, "chat_template_kwargs": { "enable_thinking": false } }
+```
+
+```json
+{ "temperature": 0.2, "top_p": 0.95, "max_tokens": 8192 }
+```
+
+The first turns the thinking off for that role (the key is forwarded to `llama-server` verbatim;
+`reasoning_effort` works there too when the chat template accepts it), the second gives the
+thinking and the JSON room to coexist. A structured pass already retries once and doubles the
+app's own budget when the first attempt ran out, but a `max_tokens` you set yourself is
+respected, never overridden.
+
 ---
 
 ## Development

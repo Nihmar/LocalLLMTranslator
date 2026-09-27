@@ -1059,7 +1059,7 @@ export function ModelsView() {
               <FormField
                 label="Parametri di generazione"
                 htmlFor="binding-params"
-                hint="Oggetto JSON passato a llama-server (temperature, top_p, seed, grammar…)."
+                hint="Oggetto JSON passato a llama-server (temperature, top_p, seed, max_tokens, grammar, chat_template_kwargs…)."
                 error={bindingError}
               >
                 <textarea
