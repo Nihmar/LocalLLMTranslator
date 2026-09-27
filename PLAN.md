@@ -930,7 +930,8 @@ what makes it safe to restart it and re-send the in-flight requests.
 `job://progress` carries the serialized `job` row at every transition the control plane owns;
 views treat it as an invalidation trigger and refetch through commands. `sidecar://progress`
 forwards the sidecar's out-of-band `progress` notifications unchanged, and `log://line`
-(`{ts, level, source, message}`) carries the sidecar's stderr and the worker's failures.
+(`{ts, level, source, message}`) carries the sidecar's stderr and the worker's job transitions
+(start, completion) and failures, so the live log pane shows activity during a run.
 
 API keys: `llm_endpoint.api_key_ref` stores only the *name* of the keyring entry and
 `LlamaClient` accepts a bearer key, but no code reads the OS keyring yet, so an endpoint that

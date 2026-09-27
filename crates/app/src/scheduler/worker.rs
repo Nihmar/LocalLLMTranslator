@@ -292,6 +292,15 @@ async fn run_job(inner: &Arc<Inner>, job: Job) {
         return;
     }
     emit_current_job(inner, &job.id).await;
+    // Announce the start on `log://line` too: the live log pane is the only
+    // progress the user sees while a long job runs, and the control plane emits
+    // nothing else on success.
+    emit_log(
+        &*inner.emitter,
+        "info",
+        "worker",
+        format!("job {} ({}) started", job.id, job.kind),
+    );
     tracing::info!(
         job_id = %job.id,
         kind = %job.kind,
@@ -317,6 +326,15 @@ async fn run_job(inner: &Arc<Inner>, job: Job) {
                 tracing::warn!(job_id = %job.id, %error, "could not complete job");
             } else {
                 emit_current_job(inner, &job.id).await;
+                emit_log(
+                    &*inner.emitter,
+                    "info",
+                    "worker",
+                    format!(
+                        "job {} ({}) completed in {duration_ms} ms",
+                        job.id, job.kind
+                    ),
+                );
                 tracing::info!(
                     job_id = %job.id,
                     kind = %job.kind,
@@ -583,6 +601,46 @@ mod tests {
                 .any(|payload| payload["state"] == "failed"),
             "no failed job event emitted"
         );
+    }
+
+    #[tokio::test]
+    async fn a_completed_job_is_visible_on_the_worker_log() {
+        let (pool, _dir) = connect_temp_file().await.expect("pool");
+        seed_project(&pool).await;
+        queue::enqueue(
+            &pool,
+            &queue::NewJob::new("p", "translate_chunk", serde_json::Value::Null),
+        )
+        .await
+        .expect("enqueue");
+
+        let emitter = Arc::new(crate::events::RecordingEmitter::new());
+        let dispatcher = Arc::new(CountingDispatcher {
+            executions: Arc::new(AtomicU32::new(0)),
+            fail_from: u32::MAX,
+        });
+        let worker = WorkerPool::new(pool.clone(), dispatcher, emitter.clone(), 1, 1);
+        worker.start();
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let completed = emitter.events_named("log://line").iter().any(|payload| {
+                payload["source"] == "worker"
+                    && payload["level"] == "info"
+                    && payload["message"]
+                        .as_str()
+                        .is_some_and(|message| message.contains("completed"))
+            });
+            if completed {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "a successful job must appear on log://line"
+            );
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        worker.cancel();
     }
 
     /// Records the maximum number of concurrent translate_chunk executions.
