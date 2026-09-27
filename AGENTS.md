@@ -136,7 +136,7 @@ makes it safe to restart the sidecar and re-send in-flight requests.
 Commands: `project_list`, `project_create`, `project_get`, `project_delete`,
 `project_export`, `project_import`,
 `endpoint_list`, `endpoint_upsert`, `endpoint_delete`, `endpoint_test`, `endpoint_models`,
-`role_binding_list`, `role_binding_set`, `ingest_start`, `translation_start`, `translation_pause`,
+`role_binding_list`, `role_binding_set`, `role_binding_delete`, `ingest_start`, `translation_start`, `translation_pause`,
 `translation_cancel`, `recon_start`, `recon_get`, `recon_confirm`,
 `glossary_list`, `glossary_upsert`, `glossary_delete`,
 `series_list`, `series_create`, `series_get`, `series_update`, `series_delete`,

@@ -865,6 +865,10 @@ source path), so the current book is unambiguous on every page.
    choice, extraction result with warnings.
 2. **Models** — endpoint CRUD (URL, health-check, model list from `/v1/models`, `props`),
    role assignment, savable profiles, VRAM/slot indicator.
+   A binding is one row per (role, endpoint): assigning the same pair again updates that row
+   instead of adding a twin, and `role_binding_delete` removes it, so a model can be unassigned
+   from a role it was given earlier. A role may keep several bindings, ordered by priority
+   (the highest wins in `role_binding_for`).
 3. **Translation** — book profile panel (the reconnaissance result of §9.4, confirmed field by
    field) plus chunk table (`pending/running/done/failed/needs_review`) with tokens,
    attempts, model; start/pause/resume; live log; resource gauge; actions on multiple
@@ -935,7 +939,8 @@ what makes it safe to restart it and re-send the in-flight requests.
 
 ### 12.2 Tauri (commands + events)
 
-- Commands: `project_*`, `endpoint_*`, `role_binding_*`, `ingest_start`, `translation_start/pause/resume/cancel`,
+- Commands: `project_*`, `endpoint_*`, `role_binding_list`, `role_binding_set`, `role_binding_delete`,
+  `ingest_start`, `translation_start/pause/resume/cancel`,
   `recon_start`, `recon_get`, `recon_confirm`, `glossary_list`, `glossary_upsert`, `glossary_delete`,
   `series_list`, `series_create`, `series_get`, `series_update`, `series_delete`, `project_set_series`,
   `series_glossary_list`, `series_glossary_upsert`, `series_glossary_delete`,
