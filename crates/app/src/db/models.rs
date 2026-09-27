@@ -116,6 +116,7 @@ pub struct Suggestion {
     pub quote: Option<String>,
     pub status: String,
     pub created_at: String,
+    pub decided_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]

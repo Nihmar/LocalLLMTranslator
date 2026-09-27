@@ -115,6 +115,7 @@ async fn editor_pass_creates_a_suggestion_and_accept_rewrites_the_block() -> Res
     // recomposed, so an export right after sees the fix.
     let accepted = review::accept_suggestion(&deps, &suggestion.id).await?;
     assert_eq!(accepted.status, "accepted");
+    assert!(accepted.decided_at.is_some(), "the decision is timestamped");
     let translations = repo::list_block_translations(&pool, &fixture.chunk_id).await?;
     let edited = translations
         .iter()
@@ -176,6 +177,7 @@ async fn reject_marks_the_suggestion_without_touching_the_text() -> Result<()> {
         .expect("a suggestion");
     let rejected = review::reject_suggestion(&pool, &suggestion.id).await?;
     assert_eq!(rejected.status, "rejected");
+    assert!(rejected.decided_at.is_some(), "the decision is timestamped");
     let chunk = repo::get_chunk(&pool, &fixture.chunk_id)
         .await?
         .expect("chunk");

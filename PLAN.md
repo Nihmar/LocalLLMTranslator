@@ -334,7 +334,8 @@ CREATE TABLE suggestion (                   -- editor/proofreader proposals
   block_id TEXT, field TEXT, original TEXT, proposed TEXT,
   reason TEXT, severity TEXT, quote TEXT,
   status TEXT NOT NULL DEFAULT 'pending',   -- pending|accepted|rejected|superseded
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,                 -- when the pass proposed the change
+  decided_at TEXT                           -- when the user decided; NULL while pending
 );
 
 CREATE TABLE qa_finding (

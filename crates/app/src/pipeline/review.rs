@@ -430,6 +430,7 @@ pub async fn run_edit_chunk(
                 quote: (!issue.quote.is_empty()).then_some(issue.quote),
                 status: "pending".to_string(),
                 created_at: now(),
+                decided_at: None,
             },
         )
         .await?;
@@ -552,6 +553,7 @@ pub async fn run_proofread_chunk(
                 quote: None,
                 status: "pending".to_string(),
                 created_at: now(),
+                decided_at: None,
             },
         )
         .await?;

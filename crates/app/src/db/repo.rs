@@ -1013,10 +1013,13 @@ pub async fn insert_suggestion(pool: &SqlitePool, s: &Suggestion) -> Result<()> 
     Ok(())
 }
 
+/// Record a decision on a suggestion. `decided_at` is stamped here and never
+/// cleared, which is what turns the retained row into a correction history entry.
 pub async fn set_suggestion_status(pool: &SqlitePool, id: &str, status: &str) -> Result<()> {
-    sqlx::query("UPDATE suggestion SET status = ?2 WHERE id = ?1")
+    sqlx::query("UPDATE suggestion SET status = ?2, decided_at = ?3 WHERE id = ?1")
         .bind(id)
         .bind(status)
+        .bind(now())
         .execute(pool)
         .await?;
     Ok(())
