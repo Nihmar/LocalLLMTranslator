@@ -207,9 +207,10 @@ impl LlamaClient {
                     match serde_json::from_str::<StreamChunk>(payload) {
                         Ok(chunk) => {
                             let delta = chunk.into_delta();
-                            // A metadata-only event (no content, no finish reason)
-                            // is not worth surfacing on its own.
+                            // A metadata-only event (no content, no reasoning, no
+                            // finish reason) is not worth surfacing on its own.
                             if delta.content.is_empty()
+                                && delta.reasoning.is_empty()
                                 && delta.finish_reason.is_none()
                                 && delta.usage.is_none()
                             {
@@ -288,24 +289,33 @@ struct StreamChoice {
 struct StreamDeltaBody {
     #[serde(default)]
     content: Option<String>,
+    /// Thinking of a reasoning model: `llama-server` streams it separately from the
+    /// answer, so it must not be dropped (it is the only clue when an answer is empty).
+    #[serde(default)]
+    reasoning_content: Option<String>,
 }
 
 impl StreamChunk {
     fn into_delta(self) -> Delta {
         let StreamChunk { choices, usage } = self;
         let choice = choices.into_iter().next();
-        let (content, finish_reason) = match choice {
+        let (content, reasoning, finish_reason) = match choice {
             Some(c) => (
                 c.delta
                     .as_ref()
                     .and_then(|d| d.content.clone())
                     .unwrap_or_default(),
+                c.delta
+                    .as_ref()
+                    .and_then(|d| d.reasoning_content.clone())
+                    .unwrap_or_default(),
                 c.finish_reason,
             ),
-            None => (String::new(), None),
+            None => (String::new(), String::new(), None),
         };
         Delta {
             content,
+            reasoning,
             finish_reason,
             usage,
             raw: None,
@@ -393,6 +403,68 @@ mod tests {
         assert_eq!(usage.and_then(|u| u.completion_tokens), Some(2));
         assert!(saw_done);
         assert!(raw.contains("\"content\":\"Ciao \""));
+    }
+
+    /// A reasoning model streams `reasoning_content` before any `content`: those events
+    /// carry no answer but must reach the caller, otherwise a budget exhausted while
+    /// thinking looks like a server that answered nothing at all.
+    #[tokio::test]
+    async fn keeps_reasoning_content_separate_from_content() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(
+                        [
+                            r#"data: {"choices":[{"delta":{"role":"assistant","content":""}}]}"#,
+                            r#"data: {"choices":[{"delta":{"reasoning_content":"peso "}}]}"#,
+                            r#"data: {"choices":[{"delta":{"reasoning_content":"bene"}}]}"#,
+                            r#"data: {"choices":[{"delta":{},"finish_reason":"length"}]}"#,
+                            "data: [DONE]",
+                            "",
+                        ]
+                        .join("\n\n"),
+                    ),
+            )
+            .mount(&server)
+            .await;
+
+        let client = LlamaClient::new(server.uri()).expect("client");
+        let req = ChatRequest::new("m", vec![ChatMessage::user("hi")]);
+        let mut stream = client.chat_stream(req).await.expect("stream");
+
+        let mut content = String::new();
+        let mut reasoning = String::new();
+        let mut finish = None;
+        while let Some(item) = stream.next().await {
+            let delta = item.expect("delta");
+            if delta.done {
+                break;
+            }
+            content.push_str(&delta.content);
+            reasoning.push_str(&delta.reasoning);
+            if delta.finish_reason.is_some() {
+                finish = delta.finish_reason;
+            }
+        }
+        assert_eq!(content, "");
+        assert_eq!(reasoning, "peso bene");
+        assert_eq!(finish.as_deref(), Some("length"));
+    }
+
+    /// The request body carries the per-request chat-template variables verbatim.
+    #[tokio::test]
+    async fn serialises_chat_template_kwargs() {
+        let mut req = ChatRequest::new("m", vec![ChatMessage::user("hi")]);
+        req.chat_template_kwargs = Some(serde_json::json!({ "enable_thinking": false }));
+        let body = serde_json::to_value(&req).expect("serialize");
+        assert_eq!(body["chat_template_kwargs"]["enable_thinking"], false);
+
+        let plain = ChatRequest::new("m", vec![ChatMessage::user("hi")]);
+        let body = serde_json::to_value(&plain).expect("serialize");
+        assert!(body.get("chat_template_kwargs").is_none());
     }
 
     #[tokio::test]

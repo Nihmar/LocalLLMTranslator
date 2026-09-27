@@ -79,6 +79,11 @@ pub struct ChatRequest {
     pub response_format: Option<ResponseFormat>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub grammar: Option<String>,
+    /// Per-request chat-template variables (`llama-server`'s `chat_template_kwargs`),
+    /// e.g. `{"enable_thinking": false}`. A reasoning model otherwise spends the whole
+    /// `max_tokens` budget thinking and returns no answer at all.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chat_template_kwargs: Option<serde_json::Value>,
 }
 
 impl ChatRequest {
@@ -93,6 +98,7 @@ impl ChatRequest {
             seed: None,
             response_format: None,
             grammar: None,
+            chat_template_kwargs: None,
         }
     }
 }
@@ -114,6 +120,10 @@ pub struct TokenUsage {
 pub struct Delta {
     /// The content fragment of this event (empty for metadata-only events).
     pub content: String,
+    /// The reasoning fragment of this event. A reasoning model streams its thinking
+    /// here (`reasoning_content`) and only then the answer into `content`, so this is
+    /// **never** part of the answer the callers parse.
+    pub reasoning: String,
     /// Present when the server closed the completion.
     pub finish_reason: Option<String>,
     /// Present when the server reports usage.
