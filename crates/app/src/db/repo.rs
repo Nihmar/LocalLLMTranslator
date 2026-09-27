@@ -173,6 +173,23 @@ pub async fn role_binding_for(pool: &SqlitePool, role: &str) -> Result<Option<Ro
     Ok(row)
 }
 
+/// The binding of one role on one endpoint, used to update that row instead of adding a twin.
+pub async fn find_role_binding(
+    pool: &SqlitePool,
+    role: &str,
+    endpoint_id: &str,
+) -> Result<Option<RoleBinding>> {
+    let row = sqlx::query_as::<_, RoleBinding>(
+        "SELECT * FROM role_binding WHERE role = ?1 AND endpoint_id = ?2 \
+         ORDER BY priority DESC LIMIT 1",
+    )
+    .bind(role)
+    .bind(endpoint_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}
+
 /// Remove one binding. Returns the number of rows deleted, so a caller can tell whether the
 /// assignment existed at all.
 pub async fn delete_role_binding(pool: &SqlitePool, id: &str) -> Result<u64> {
@@ -1408,6 +1425,54 @@ mod tests {
         assert!(role_binding_for(&pool, "translator")
             .await
             .expect("lookup")
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn find_role_binding_matches_the_pair_not_the_model() {
+        let pool = connect_memory().await.expect("pool");
+        upsert_endpoint(
+            &pool,
+            &LlmEndpoint {
+                id: "e1".to_string(),
+                name: "e1".to_string(),
+                base_url: "http://127.0.0.1:8080".to_string(),
+                api_key_ref: None,
+                max_concurrency: None,
+                notes: None,
+                last_health_at: None,
+                last_health_ok: None,
+                props_json: None,
+            },
+        )
+        .await
+        .expect("endpoint");
+        upsert_role_binding(
+            &pool,
+            &RoleBinding {
+                id: "b1".to_string(),
+                endpoint_id: "e1".to_string(),
+                role: "translator".to_string(),
+                model: "first-model".to_string(),
+                params_json: "{}".to_string(),
+                priority: 0,
+            },
+        )
+        .await
+        .expect("b1");
+
+        let found = find_role_binding(&pool, "translator", "e1")
+            .await
+            .expect("find")
+            .expect("some");
+        assert_eq!(found.id, "b1");
+        assert!(find_role_binding(&pool, "editor", "e1")
+            .await
+            .expect("find")
+            .is_none());
+        assert!(find_role_binding(&pool, "translator", "other")
+            .await
+            .expect("find")
             .is_none());
     }
 

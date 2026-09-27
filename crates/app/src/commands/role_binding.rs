@@ -37,8 +37,17 @@ pub async fn role_binding_set(
         Value::Null => "{}".to_string(),
         other => serde_json::to_string(other)?,
     };
+    // Without an explicit id, re-assigning a role on the same endpoint updates that binding
+    // instead of adding a second row for the same pair: the UI treats (role, endpoint) as one
+    // assignment, and a twin would silently shadow it in `role_binding_for` by priority.
+    let id = match req.id {
+        Some(id) => Some(id),
+        None => repo::find_role_binding(&state.pool, &req.role, &req.endpoint_id)
+            .await?
+            .map(|existing| existing.id),
+    };
     let binding = RoleBinding {
-        id: req.id.unwrap_or_else(new_id),
+        id: id.unwrap_or_else(new_id),
         endpoint_id: req.endpoint_id,
         role: req.role,
         model: req.model,
