@@ -127,6 +127,72 @@
     border-radius: var(--radius-panel);
   }
 
+  /* --- modal dialogs --- */
+  .dialog-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 1.5rem;
+  }
+
+  .dialog-backdrop {
+    position: absolute;
+    inset: 0;
+    background-color: rgb(6 8 14 / 72%);
+  }
+
+  .dialog {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    max-height: 100%;
+    min-height: 0;
+    background-color: var(--color-surface);
+    border: 1px solid var(--color-line-strong);
+    border-radius: var(--radius-panel);
+    box-shadow: 0 24px 60px rgb(0 0 0 / 45%);
+  }
+
+  .dialog:focus {
+    outline: none;
+  }
+
+  .dialog-compact {
+    width: min(30rem, 100%);
+  }
+
+  .dialog-wide {
+    width: min(64rem, 100%);
+  }
+
+  .dialog-full {
+    width: 100%;
+    height: 100%;
+  }
+
+  .dialog-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.85rem 1.15rem;
+    border-bottom: 1px solid var(--color-line);
+  }
+
+  .dialog-body {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    min-height: 0;
+    overflow: auto;
+    padding: 1rem 1.15rem;
+  }
+
   .panel-pad {
     padding: 1rem 1.15rem;
   }
