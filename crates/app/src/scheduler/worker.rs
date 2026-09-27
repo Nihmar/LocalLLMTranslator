@@ -275,21 +275,40 @@ async fn run_job(inner: &Arc<Inner>, job: Job) {
     // `job` is the row returned by `claim`, i.e. the `leased` transition.
     emit_job(&*inner.emitter, &job);
 
-    if let Err(error) = queue::mark_running(&inner.pool, &job.id).await {
-        // Surface the failure on `log://line` as well as tracing: the job stays
-        // `leased` in the database, so without this the 90 s wait until the lease
-        // reaper returns it to `pending` is silent and looks like a hang.
-        emit_log(
-            &*inner.emitter,
-            "warn",
-            "worker",
-            format!(
-                "job {} ({}) could not be marked running; it stays leased until the lease reaper retries it: {error}",
-                job.id, job.kind
-            ),
-        );
-        tracing::warn!(job_id = %job.id, %error, "could not mark job running");
-        return;
+    match queue::mark_running(&inner.pool, &job.id).await {
+        Ok(true) => {}
+        Ok(false) => {
+            // The row left `leased` while the worker was starting it: cancelled by the user, or
+            // requeued by the reaper. Either way the job is not ours to run, and writing an
+            // outcome for it would overwrite the cancellation.
+            emit_log(
+                &*inner.emitter,
+                "info",
+                "worker",
+                format!(
+                    "job {} ({}) was no longer leased when the worker picked it up; skipping",
+                    job.id, job.kind
+                ),
+            );
+            tracing::info!(job_id = %job.id, kind = %job.kind, "job left leased before start");
+            return;
+        }
+        Err(error) => {
+            // Surface the failure on `log://line` as well as tracing: the job stays
+            // `leased` in the database, so without this the 90 s wait until the lease
+            // reaper returns it to `pending` is silent and looks like a hang.
+            emit_log(
+                &*inner.emitter,
+                "warn",
+                "worker",
+                format!(
+                    "job {} ({}) could not be marked running; it stays leased until the lease reaper retries it: {error}",
+                    job.id, job.kind
+                ),
+            );
+            tracing::warn!(job_id = %job.id, %error, "could not mark job running");
+            return;
+        }
     }
     emit_current_job(inner, &job.id).await;
     // Announce the start on `log://line` too: the live log pane is the only

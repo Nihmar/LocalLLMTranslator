@@ -154,13 +154,20 @@ pub async fn pending_kinds(pool: &SqlitePool) -> Result<Vec<(String, i64)>> {
 }
 
 /// Move a claimed job to `running` (called when a worker actually picks it up).
-pub async fn mark_running(pool: &SqlitePool, id: &str) -> Result<()> {
-    sqlx::query("UPDATE job SET state='running', started_at=COALESCE(started_at, ?2) WHERE id=?1")
-        .bind(id)
-        .bind(now())
-        .execute(pool)
-        .await?;
-    Ok(())
+///
+/// Returns `false` when the row is no longer `leased`: it was cancelled between the claim and
+/// this call. The guard matters because the update would otherwise resurrect a cancelled job —
+/// the worker would run it to completion and overwrite the cancellation.
+pub async fn mark_running(pool: &SqlitePool, id: &str) -> Result<bool> {
+    let res = sqlx::query(
+        "UPDATE job SET state='running', started_at=COALESCE(started_at, ?2) \
+         WHERE id=?1 AND state='leased'",
+    )
+    .bind(id)
+    .bind(now())
+    .execute(pool)
+    .await?;
+    Ok(res.rows_affected() > 0)
 }
 
 /// Renew the lease while the job runs. Returns false if the lease was lost.
@@ -483,6 +490,33 @@ mod tests {
         assert_eq!(reap_expired(&pool).await.expect("reap"), 1);
         let reaped = get_job(&pool, &id).await.expect("get").expect("some");
         assert_eq!(reaped.attempts, 1, "the reaper must consume one attempt");
+    }
+
+    #[tokio::test]
+    async fn mark_running_refuses_a_row_that_left_the_leased_state() {
+        let (pool, _dir) = connect_temp_file().await.expect("pool");
+        insert_test_project(&pool, "proj").await;
+        let id = enqueue(&pool, &NewJob::new("proj", "translate_chunk", Value::Null))
+            .await
+            .expect("enqueue");
+        claim(&pool, "w1").await.expect("claim");
+        assert!(
+            cancel(&pool, &id).await.expect("cancel"),
+            "a claimed job is cancellable"
+        );
+
+        // Starting the claimed job after its cancellation must not resurrect it: that would run
+        // the work and let the worker overwrite the `cancelled` row with an outcome.
+        assert!(!mark_running(&pool, &id).await.expect("mark"));
+        let job = get_job(&pool, &id).await.expect("get").expect("some");
+        assert_eq!(job.state, "cancelled");
+
+        // A finished job is not cancellable either, so the caller can tell the user nothing moved.
+        let done = enqueue(&pool, &NewJob::new("proj", "translate_chunk", Value::Null))
+            .await
+            .expect("enqueue");
+        complete(&pool, &done).await.expect("complete");
+        assert!(!cancel(&pool, &done).await.expect("cancel"));
     }
 
     #[tokio::test]
