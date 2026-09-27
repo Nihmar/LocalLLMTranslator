@@ -173,6 +173,16 @@ pub async fn role_binding_for(pool: &SqlitePool, role: &str) -> Result<Option<Ro
     Ok(row)
 }
 
+/// Remove one binding. Returns the number of rows deleted, so a caller can tell whether the
+/// assignment existed at all.
+pub async fn delete_role_binding(pool: &SqlitePool, id: &str) -> Result<u64> {
+    let res = sqlx::query("DELETE FROM role_binding WHERE id = ?1")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(res.rows_affected())
+}
+
 // ---------------------------------------------------------------------------
 // project_memory
 // ---------------------------------------------------------------------------
@@ -1346,6 +1356,59 @@ mod tests {
         .execute(pool)
         .await
         .expect("chunk");
+    }
+
+    #[tokio::test]
+    async fn delete_role_binding_removes_one_assignment() {
+        let pool = connect_memory().await.expect("pool");
+        for id in ["e1", "e2"] {
+            upsert_endpoint(
+                &pool,
+                &LlmEndpoint {
+                    id: id.to_string(),
+                    name: id.to_string(),
+                    base_url: "http://127.0.0.1:8080".to_string(),
+                    api_key_ref: None,
+                    max_concurrency: None,
+                    notes: None,
+                    last_health_at: None,
+                    last_health_ok: None,
+                    props_json: None,
+                },
+            )
+            .await
+            .expect("endpoint");
+        }
+        let translator = RoleBinding {
+            id: "b1".to_string(),
+            endpoint_id: "e1".to_string(),
+            role: "translator".to_string(),
+            model: "m1".to_string(),
+            params_json: "{}".to_string(),
+            priority: 10,
+        };
+        let editor = RoleBinding {
+            id: "b2".to_string(),
+            endpoint_id: "e2".to_string(),
+            role: "editor".to_string(),
+            model: "m2".to_string(),
+            params_json: "{}".to_string(),
+            priority: 0,
+        };
+        upsert_role_binding(&pool, &translator).await.expect("b1");
+        upsert_role_binding(&pool, &editor).await.expect("b2");
+
+        assert_eq!(delete_role_binding(&pool, "b1").await.expect("delete"), 1);
+        // Deleting what is not there is not an error: the UI may race with another window.
+        assert_eq!(delete_role_binding(&pool, "b1").await.expect("delete"), 0);
+
+        let left = list_role_bindings(&pool).await.expect("list");
+        assert_eq!(left.len(), 1, "only the removed row is gone");
+        assert_eq!(left[0].id, "b2");
+        assert!(role_binding_for(&pool, "translator")
+            .await
+            .expect("lookup")
+            .is_none());
     }
 
     #[tokio::test]

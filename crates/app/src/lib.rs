@@ -192,6 +192,7 @@ pub fn run() {
             commands::endpoint::endpoint_models,
             commands::role_binding::role_binding_list,
             commands::role_binding::role_binding_set,
+            commands::role_binding::role_binding_delete,
             commands::ingest::ingest_start,
             commands::translation::translation_start,
             commands::translation::translation_pause,

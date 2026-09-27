@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::State;
 
+use super::Ack;
 use crate::db::models::RoleBinding;
 use crate::db::{new_id, repo};
 use crate::error::Result;
@@ -46,6 +47,16 @@ pub async fn role_binding_set(
     };
     repo::upsert_role_binding(&state.pool, &binding).await?;
     Ok(binding)
+}
+
+/// Remove a role assignment.
+///
+/// The counterpart of `role_binding_set`: without it an assignment made once could never be
+/// undone through the UI, and the row kept deciding which endpoint a role used.
+#[tauri::command]
+pub async fn role_binding_delete(state: State<'_, AppState>, id: String) -> Result<Ack> {
+    repo::delete_role_binding(&state.pool, &id).await?;
+    Ok(Ack::done())
 }
 
 /// Convenience payload for the UI: which roles are currently bound.
