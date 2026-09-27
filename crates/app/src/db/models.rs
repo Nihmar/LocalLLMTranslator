@@ -257,6 +257,9 @@ pub struct LlmCall {
     pub prompt_text: Option<String>,
     pub prompt_compressed: Option<bool>,
     pub response_text: Option<String>,
+    /// The thinking of a reasoning model, as streamed in `reasoning_content`: kept for
+    /// audit only, never parsed as the answer.
+    pub reasoning_text: Option<String>,
     pub finish_reason: Option<String>,
     pub prompt_tokens: Option<i64>,
     pub completion_tokens: Option<i64>,

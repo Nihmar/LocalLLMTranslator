@@ -72,6 +72,9 @@ pub async fn run_chat_call(deps: &PipelineDeps, call: &ChatCall<'_>) -> Result<S
 
     let started = Instant::now();
     let mut content = String::new();
+    // A reasoning model streams its thinking before the answer: kept apart, never
+    // parsed as the answer (the translator would otherwise see the thinking as text).
+    let mut reasoning = String::new();
     let mut finish_reason = None;
     let mut usage = None;
 
@@ -83,6 +86,7 @@ pub async fn run_chat_call(deps: &PipelineDeps, call: &ChatCall<'_>) -> Result<S
                 break;
             }
             content.push_str(&delta.content);
+            reasoning.push_str(&delta.reasoning);
             if delta.finish_reason.is_some() {
                 finish_reason = delta.finish_reason;
             }
@@ -113,6 +117,8 @@ pub async fn run_chat_call(deps: &PipelineDeps, call: &ChatCall<'_>) -> Result<S
                 .as_ref()
                 .and_then(|value| value.completion_tokens)
                 .unwrap_or(0),
+            answer_chars = content.chars().count(),
+            reasoning_chars = reasoning.chars().count(),
             "llm call completed"
         ),
         Err(error) => tracing::warn!(
@@ -121,6 +127,8 @@ pub async fn run_chat_call(deps: &PipelineDeps, call: &ChatCall<'_>) -> Result<S
             endpoint_id = call.endpoint_id,
             chunk_id = call.chunk_id.unwrap_or(""),
             latency_ms,
+            answer_chars = content.chars().count(),
+            reasoning_chars = reasoning.chars().count(),
             %error,
             "llm call failed"
         ),
@@ -140,6 +148,7 @@ pub async fn run_chat_call(deps: &PipelineDeps, call: &ChatCall<'_>) -> Result<S
                 call.prompt_hash,
                 Some(call.user),
                 Some(&content),
+                (!reasoning.is_empty()).then_some(reasoning.as_str()),
                 finish_reason.as_deref(),
                 usage
                     .as_ref()
@@ -169,6 +178,7 @@ pub async fn run_chat_call(deps: &PipelineDeps, call: &ChatCall<'_>) -> Result<S
                 call.prompt_hash,
                 Some(call.user),
                 None,
+                (!reasoning.is_empty()).then_some(reasoning.as_str()),
                 None,
                 None,
                 None,

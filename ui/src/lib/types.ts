@@ -583,6 +583,8 @@ export interface LlmCall {
   prompt_text: string | null;
   prompt_compressed: boolean | null;
   response_text: string | null;
+  /** Thinking of a reasoning model, streamed separately from the answer. */
+  reasoning_text: string | null;
   finish_reason: string | null;
   prompt_tokens: number | null;
   completion_tokens: number | null;

@@ -1145,6 +1145,7 @@ pub async fn insert_llm_call(
     prompt_hash: &str,
     prompt_text: Option<&str>,
     response_text: Option<&str>,
+    reasoning_text: Option<&str>,
     finish_reason: Option<&str>,
     prompt_tokens: Option<i64>,
     completion_tokens: Option<i64>,
@@ -1155,9 +1156,9 @@ pub async fn insert_llm_call(
     let id = new_id();
     sqlx::query(
         "INSERT INTO llm_call (id, job_id, chunk_id, role, endpoint_id, model, params_json, seed, \
-         prompt_hash, prompt_text, prompt_compressed, response_text, finish_reason, prompt_tokens, \
-         completion_tokens, latency_ms, attempt, error, created_at) \
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,0,?11,?12,?13,?14,?15,?16,?17,?18)",
+         prompt_hash, prompt_text, prompt_compressed, response_text, reasoning_text, finish_reason, \
+         prompt_tokens, completion_tokens, latency_ms, attempt, error, created_at) \
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,0,?11,?12,?13,?14,?15,?16,?17,?18,?19)",
     )
     .bind(id.as_str())
     .bind(job_id)
@@ -1170,6 +1171,7 @@ pub async fn insert_llm_call(
     .bind(prompt_hash)
     .bind(prompt_text)
     .bind(response_text)
+    .bind(reasoning_text)
     .bind(finish_reason)
     .bind(prompt_tokens)
     .bind(completion_tokens)
