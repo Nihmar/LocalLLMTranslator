@@ -821,6 +821,24 @@ pub async fn set_chunk_status(pool: &SqlitePool, chunk_id: &str, status: &str) -
     Ok(())
 }
 
+/// Return one chunk left `running` to `pending`, after the job that was working on it was
+/// interrupted.
+///
+/// Only a `running` chunk is touched: a chunk whose job had already written its translation keeps
+/// its outcome, and a chunk that never started stays `pending`. Without this, an interrupted
+/// chunk stayed `running` forever and `translation_start` — which only enqueues `pending`,
+/// `failed` and `needs_review` — would never pick it up again.
+pub async fn reset_chunk_to_pending(pool: &SqlitePool, chunk_id: &str) -> Result<u64> {
+    let res = sqlx::query(
+        "UPDATE chunk SET status='pending', updated_at=?2 WHERE id=?1 AND status='running'",
+    )
+    .bind(chunk_id)
+    .bind(now())
+    .execute(pool)
+    .await?;
+    Ok(res.rows_affected())
+}
+
 /// Return chunks left `running` to `pending`, optionally scoped to one project.
 ///
 /// A chunk is `running` only while its `translate_chunk` job executes, so a
@@ -1328,6 +1346,44 @@ mod tests {
         .execute(pool)
         .await
         .expect("chunk");
+    }
+
+    #[tokio::test]
+    async fn reset_chunk_to_pending_only_touches_a_running_chunk() {
+        let pool = connect_memory().await.expect("pool");
+        seed(&pool).await;
+
+        assert_eq!(reset_chunk_to_pending(&pool, "c1").await.expect("reset"), 1);
+        assert_eq!(
+            get_chunk(&pool, "c1")
+                .await
+                .expect("get")
+                .expect("some")
+                .status,
+            "pending"
+        );
+        // Idempotent: a chunk already returned to the queue is left alone.
+        assert_eq!(reset_chunk_to_pending(&pool, "c1").await.expect("reset"), 0);
+
+        // A chunk whose job wrote its translation keeps it.
+        sqlx::query(
+            "INSERT INTO chunk (id, document_id, order_index, block_ids_json, source_md, \
+             token_estimate, context_json, flags_json, status, created_at, updated_at) \
+             VALUES ('c2','d',1,'[]','a',1,'{}','[]','done',?1,?1)",
+        )
+        .bind(now())
+        .execute(&pool)
+        .await
+        .expect("chunk 2");
+        assert_eq!(reset_chunk_to_pending(&pool, "c2").await.expect("reset"), 0);
+        assert_eq!(
+            get_chunk(&pool, "c2")
+                .await
+                .expect("get")
+                .expect("some")
+                .status,
+            "done"
+        );
     }
 
     #[tokio::test]

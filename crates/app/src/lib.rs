@@ -226,6 +226,7 @@ pub fn run() {
             commands::review::qa_report,
             commands::review::qa_finding_set_status,
             commands::jobs::job_list,
+            commands::jobs::job_cancel,
             commands::chunks::chunk_list,
             commands::chunks::chunk_get,
             commands::metrics::metrics_get,
