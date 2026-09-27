@@ -874,7 +874,9 @@ source path), so the current book is unambiguous on every page.
    composed client-side from the chunk rows already loaded — translated chunks show their target,
    the rest their source in grey — so a run can be followed chapter by chapter without waiting
    for the export. The status filter applies to the table only: counters, outline and preview
-   always describe the whole project.
+   always describe the whole project. Next to the resource gauge, an in-flight list names every
+   claimed job — kind, chunk, chapter, elapsed time and attempt — read from the same `job_list`
+   rows: the counters say how many jobs are running, that list says which.
 4. **Review** — 3-column side-by-side editor (original / translated / corrected) with block-level
    and character-level diff, navigation by suggestion, accept/reject per individual
    change, and a filterable QA report. The diff is a read-only CodeMirror 6 merge view
