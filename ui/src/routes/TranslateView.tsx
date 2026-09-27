@@ -148,6 +148,9 @@ export function TranslateView({ project, onNavigate }: TranslateViewProps) {
 
   const projectId = project?.id ?? null;
 
+  // Always read the whole project: `chunk_list` has no limit and the status filter is applied
+  // in the view, so the counters, the chapter outline and the table all describe the same
+  // snapshot instead of drifting with the selected filter.
   const loadChunks = useCallback(async () => {
     if (projectId === null) {
       return;
@@ -155,10 +158,7 @@ export function TranslateView({ project, onNavigate }: TranslateViewProps) {
     setLoading(true);
     setError(null);
     try {
-      const rows = await chunkList({
-        project_id: projectId,
-        status: statusFilter === "all" ? null : statusFilter,
-      });
+      const rows = await chunkList({ project_id: projectId, status: null });
       setChunks(rows);
     } catch (loadError) {
       setError(toErrorMessage(loadError));
@@ -166,7 +166,7 @@ export function TranslateView({ project, onNavigate }: TranslateViewProps) {
     } finally {
       setLoading(false);
     }
-  }, [projectId, statusFilter]);
+  }, [projectId]);
 
   const loadContext = useCallback(async () => {
     if (projectId === null) {
@@ -258,9 +258,17 @@ export function TranslateView({ project, onNavigate }: TranslateViewProps) {
     return map;
   }, [jobs]);
 
+  const visibleChunks = useMemo(
+    () =>
+      statusFilter === "all"
+        ? chunks
+        : chunks.filter((chunk) => chunk.status === statusFilter),
+    [chunks, statusFilter],
+  );
+
   const rows: ChunkRow[] = useMemo(
     () =>
-      chunks.map((chunk) => ({
+      visibleChunks.slice(0, limit).map((chunk) => ({
         id: chunk.id,
         chapter_title:
           chunk.chapter_id === null ? null : (chapterTitle.get(chunk.chapter_id) ?? null),
@@ -273,7 +281,7 @@ export function TranslateView({ project, onNavigate }: TranslateViewProps) {
         attempts: attemptsByChunk.get(chunk.id) ?? 0,
         error: chunk.error,
       })),
-    [chunks, chapterTitle, attemptsByChunk],
+    [visibleChunks, limit, chapterTitle, attemptsByChunk],
   );
 
   const counts = useMemo(() => countStatuses(chunks), [chunks]);
@@ -381,7 +389,7 @@ export function TranslateView({ project, onNavigate }: TranslateViewProps) {
   }
 
   const busy = control !== "idle";
-  const hasChunks = chunks.length > 0;
+  const hasChunks = visibleChunks.length > 0;
 
   return (
     <div className="section-stack">
@@ -390,8 +398,11 @@ export function TranslateView({ project, onNavigate }: TranslateViewProps) {
           <h2 className="text-lg font-semibold text-ink">Traduzione</h2>
           <p className="mt-0.5 text-xs text-muted">
             Progetto <span className="font-semibold text-ink-soft">{project.name}</span> —{" "}
-            {countLabel(chunks.length, "chunk caricato", "chunk caricati")}
-            {chunks.length >= limit ? ` (limite di pagina ${formatNumber(limit)})` : ""}.
+            {countLabel(chunks.length, "chunk nel progetto", "chunk nel progetto")}
+            {visibleChunks.length !== chunks.length
+              ? ` · ${formatNumber(visibleChunks.length)} con lo stato scelto`
+              : ""}
+            {visibleChunks.length > limit ? ` · mostrati ${formatNumber(limit)}` : ""}.
           </p>
         </div>
 
@@ -522,8 +533,12 @@ export function TranslateView({ project, onNavigate }: TranslateViewProps) {
             <div className="panel-head">
               <span className="panel-title">Chunk</span>
               <span className="flex items-center gap-2">
-                <span className="mono-chip">{formatNumber(chunks.length)} righe</span>
-                {chunks.length >= limit ? (
+                <span className="mono-chip">
+                  {visibleChunks.length > limit
+                    ? `${formatNumber(limit)} di ${formatNumber(visibleChunks.length)} righe`
+                    : `${formatNumber(visibleChunks.length)} righe`}
+                </span>
+                {visibleChunks.length > limit ? (
                   <button
                     type="button"
                     className="btn btn-sm"
