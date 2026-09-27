@@ -50,7 +50,7 @@ export function ResourceGauge({ metrics, loading = false, compact = false }: Res
     <div className="panel">
       <div className="panel-head">
         <span className="panel-title">Risorse</span>
-        <span className="flex items-center gap-2">
+        <span className="flex flex-wrap items-center justify-end gap-2">
           <StatusBadge status={degraded ? "degraded" : "parallel"} />
           {metrics.worker_paused ? <span className="badge badge-warning">In pausa</span> : null}
           <span className="mono-chip">{parallelLabel}</span>
