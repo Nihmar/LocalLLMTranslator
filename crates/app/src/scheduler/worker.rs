@@ -1,6 +1,7 @@
 //! Worker pool: claims jobs, bounds concurrency with a semaphore, heartbeats the
 //! lease, and can be started / paused / cancelled from the Tauri commands.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -24,6 +25,56 @@ pub trait JobDispatcher: Send + Sync + 'static {
     async fn dispatch(&self, job: &Job) -> Result<()>;
 }
 
+/// How a job execution ended.
+enum Dispatch {
+    /// The dispatcher returned (successfully or not).
+    Finished(Result<()>),
+    /// The pool was asked to interrupt this job and the in-flight call was abandoned.
+    Interrupted,
+}
+
+/// Cancellation flag of one job this process is running.
+#[derive(Default)]
+struct CancelSlot {
+    cancelled: AtomicBool,
+}
+
+impl CancelSlot {
+    fn request(&self) {
+        self.cancelled.store(true, Ordering::SeqCst);
+    }
+
+    fn is_requested(&self) -> bool {
+        self.cancelled.load(Ordering::SeqCst)
+    }
+}
+
+/// How often [`wait_for_cancel`] re-reads the flag.
+///
+/// Polling instead of a wake-up primitive keeps the cancellation to a single piece of shared
+/// state with no missed-wake-up window, and one tick is imperceptible for a user-triggered
+/// interrupt.
+const CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(100);
+
+/// Resolves once the pool has been asked to interrupt this job.
+async fn wait_for_cancel(slot: &Arc<CancelSlot>) {
+    while !slot.is_requested() {
+        tokio::time::sleep(CANCEL_POLL_INTERVAL).await;
+    }
+}
+
+/// Removes the job from the cancellation registry when its execution ends, however it ends.
+struct CancelGuard {
+    id: String,
+    inner: Arc<Inner>,
+}
+
+impl Drop for CancelGuard {
+    fn drop(&mut self) {
+        self.inner.cancels.lock().remove(&self.id);
+    }
+}
+
 /// Bound on the number of concurrent job executions for an endpoint. The permit
 /// count comes from the resource governor (`resources`/`props`).
 pub struct WorkerPool {
@@ -45,6 +96,9 @@ struct Inner {
     cancelled: AtomicBool,
     running: AtomicBool,
     workers: parking_lot::Mutex<Vec<tokio::task::JoinHandle<()>>>,
+    /// Cancellation flags of the jobs this process is executing, keyed by job id. A job the pool
+    /// never started is cancelled in the database only; the command covers both paths.
+    cancels: parking_lot::Mutex<HashMap<String, Arc<CancelSlot>>>,
 }
 
 impl WorkerPool {
@@ -92,6 +146,7 @@ impl WorkerPool {
                 cancelled: AtomicBool::new(false),
                 running: AtomicBool::new(false),
                 workers: parking_lot::Mutex::new(Vec::new()),
+                cancels: parking_lot::Mutex::new(HashMap::new()),
             }),
         }
     }
@@ -166,6 +221,21 @@ impl WorkerPool {
         self.inner.paused.store(true, Ordering::SeqCst);
     }
 
+    /// Ask the worker executing `id` to abandon its in-flight call. Returns whether the pool is
+    /// running that job: `false` means it is queued (or owned by another process), and cancelling
+    /// the row is then the caller's whole job. The pool keeps claiming: unlike [`WorkerPool::cancel`]
+    /// this stops one job, not the queue.
+    pub fn cancel_job(&self, id: &str) -> bool {
+        let cancels = self.inner.cancels.lock();
+        match cancels.get(id) {
+            Some(slot) => {
+                slot.request();
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Resume claiming.
     pub fn resume(&self) {
         self.inner.paused.store(false, Ordering::SeqCst);
@@ -187,6 +257,17 @@ impl WorkerPool {
 impl Drop for WorkerPool {
     fn drop(&mut self) {
         self.cancel();
+    }
+}
+
+impl Inner {
+    /// Add the cancellation flag of a job this worker is about to run.
+    fn register_cancel(&self, id: &str) -> Arc<CancelSlot> {
+        let slot = Arc::new(CancelSlot::default());
+        self.cancels
+            .lock()
+            .insert(id.to_string(), Arc::clone(&slot));
+        slot
     }
 }
 
@@ -275,6 +356,15 @@ async fn run_job(inner: &Arc<Inner>, job: Job) {
     // `job` is the row returned by `claim`, i.e. the `leased` transition.
     emit_job(&*inner.emitter, &job);
 
+    // Registered before the job is marked running: a cancellation that lands while it is being
+    // started is then recorded on the slot instead of falling between the state write and the
+    // dispatch, where neither the flag nor the row would stop the call.
+    let slot = inner.register_cancel(&job.id);
+    let _cancel_guard = CancelGuard {
+        id: job.id.clone(),
+        inner: Arc::clone(inner),
+    };
+
     match queue::mark_running(&inner.pool, &job.id).await {
         Ok(true) => {}
         Ok(false) => {
@@ -310,6 +400,22 @@ async fn run_job(inner: &Arc<Inner>, job: Job) {
             return;
         }
     }
+    if slot.is_requested() {
+        // Interrupted between the claim and now. The row is already `cancelled`, and nothing was
+        // dispatched, so there is no call to abandon and no outcome to write.
+        emit_current_job(inner, &job.id).await;
+        emit_log(
+            &*inner.emitter,
+            "info",
+            "worker",
+            format!(
+                "job {} ({}) was interrupted before it started",
+                job.id, job.kind
+            ),
+        );
+        tracing::info!(job_id = %job.id, kind = %job.kind, "job interrupted before start");
+        return;
+    }
     emit_current_job(inner, &job.id).await;
     // Announce the start on `log://line` too: the live log pane is the only
     // progress the user sees while a long job runs, and the control plane emits
@@ -335,11 +441,54 @@ async fn run_job(inner: &Arc<Inner>, job: Job) {
         lease::HEARTBEAT_INTERVAL,
     );
 
-    let outcome = inner.dispatcher.dispatch(&job).await;
+    let outcome = tokio::select! {
+        result = inner.dispatcher.dispatch(&job) => Dispatch::Finished(result),
+        () = wait_for_cancel(&slot) => Dispatch::Interrupted,
+    };
     heartbeat.stop();
     let duration_ms = started.elapsed().as_millis() as i64;
 
-    match outcome {
+    // A row the user cancelled is not the worker's to overwrite: the command already marked it
+    // `cancelled`, and writing an outcome here would revive it. The database is re-read because
+    // `select!` cannot tell whether the dispatch had already finished when the cancellation
+    // arrived, so the flag alone would leave that race open.
+    let cancelled_row = queue::get_job(&inner.pool, &job.id)
+        .await
+        .ok()
+        .flatten()
+        .is_some_and(|row| row.state == "cancelled");
+
+    let result = match (outcome, cancelled_row) {
+        (Dispatch::Interrupted, _) | (Dispatch::Finished(_), true) => {
+            // Write the interruption here too: the row must be definite even if the caller that
+            // requested it never got to record it, and cancelling an already-cancelled row is a
+            // no-op. The chunk lifecycle stays with the pipeline, which is what `job_cancel`
+            // resets.
+            if let Err(error) = queue::cancel(&inner.pool, &job.id).await {
+                tracing::warn!(job_id = %job.id, %error, "could not record the interruption");
+            }
+            emit_current_job(inner, &job.id).await;
+            emit_log(
+                &*inner.emitter,
+                "info",
+                "worker",
+                format!(
+                    "job {} ({}) interrupted after {duration_ms} ms",
+                    job.id, job.kind
+                ),
+            );
+            tracing::info!(
+                job_id = %job.id,
+                kind = %job.kind,
+                duration_ms,
+                "job interrupted"
+            );
+            return;
+        }
+        (Dispatch::Finished(result), false) => result,
+    };
+
+    match result {
         Ok(()) => {
             if let Err(error) = queue::complete(&inner.pool, &job.id).await {
                 tracing::warn!(job_id = %job.id, %error, "could not complete job");
@@ -425,6 +574,119 @@ mod tests {
             }
             Ok(())
         }
+    }
+
+    /// Blocks on its first call, then succeeds immediately: the job queued behind an interrupted
+    /// one must still run.
+    struct BlockingDispatcher {
+        calls: Arc<AtomicU32>,
+    }
+
+    #[async_trait]
+    impl JobDispatcher for BlockingDispatcher {
+        async fn dispatch(&self, _job: &Job) -> Result<()> {
+            if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                tokio::time::sleep(Duration::from_secs(30)).await;
+            }
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn cancelling_one_job_abandons_its_call_and_leaves_the_pool_running() {
+        let (pool, _dir) = connect_temp_file().await.expect("pool");
+        seed_project(&pool).await;
+        let slow = queue::enqueue(
+            &pool,
+            &queue::NewJob::new("p", "translate_chunk", serde_json::Value::Null),
+        )
+        .await
+        .expect("enqueue");
+        queue::enqueue(
+            &pool,
+            &queue::NewJob::new("p", "translate_chunk", serde_json::Value::Null),
+        )
+        .await
+        .expect("enqueue");
+
+        let worker = WorkerPool::new(
+            pool.clone(),
+            Arc::new(BlockingDispatcher {
+                calls: Arc::new(AtomicU32::new(0)),
+            }),
+            Arc::new(crate::events::NullEmitter),
+            1,
+            1,
+        );
+        worker.start();
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let job = queue::get_job(&pool, &slow)
+                .await
+                .expect("get")
+                .expect("some");
+            if job.state == "running" {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "the first job never started"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+
+        assert!(
+            worker.cancel_job(&slow),
+            "the pool must know the job it is executing"
+        );
+
+        // The queue must move on: the abandoned job stays cancelled instead of being retried or
+        // completed later, and the job behind it still finishes.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        let interrupted = loop {
+            let job = queue::get_job(&pool, &slow)
+                .await
+                .expect("get")
+                .expect("some");
+            if job.state == "cancelled" {
+                break job;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "the interrupt was never recorded"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        };
+        assert!(interrupted.finished_at.is_some());
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let done = queue::count_by_state(&pool)
+                .await
+                .expect("count")
+                .iter()
+                .find(|(state, _)| state == "done")
+                .map(|(_, n)| *n)
+                .unwrap_or(0);
+            if done == 1 {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "the pool did not continue after the interrupt"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let interrupted = queue::get_job(&pool, &slow)
+            .await
+            .expect("get")
+            .expect("some");
+        assert_eq!(interrupted.state, "cancelled", "no outcome may revive it");
+        assert_eq!(interrupted.attempts, 0, "an interruption is not a retry");
+        worker.cancel();
     }
 
     async fn seed_project(pool: &SqlitePool) {
