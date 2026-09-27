@@ -16,7 +16,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use sqlx::SqlitePool;
 
-use super::chat_call::{run_chat_call, ChatCall};
+use super::chat_call::{run_chat_call, run_structured_call, ChatCall};
 use super::PipelineDeps;
 use crate::db::models::{Block, BlockTranslation, Chunk, QaFinding, Suggestion};
 use crate::db::{new_id, now, repo};
@@ -378,7 +378,7 @@ pub async fn run_edit_chunk(
     )?;
     let prompt_hash = sha256_hex_str(&format!("{system}\n\u{0}\n{user}"));
 
-    let response = run_chat_call(
+    let (_, issues) = run_structured_call(
         deps,
         &ChatCall {
             job_id,
@@ -395,9 +395,9 @@ pub async fn run_edit_chunk(
             seed: crate::pipeline::translate::derive_seed(&chunk.id, EDIT_ROLE),
             default_max_tokens: Some(EDIT_MAX_TOKENS),
         },
+        parse_editor_answer,
     )
     .await?;
-    let issues = parse_editor_answer(&response)?;
 
     repo::supersede_suggestions(pool, chunk_id, EDIT_ROLE).await?;
     let mut created = 0;

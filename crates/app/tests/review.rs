@@ -8,7 +8,7 @@ mod common;
 
 use anyhow::Result;
 use serde_json::Value;
-use wiremock::matchers::{method, path};
+use wiremock::matchers::{body_string_contains, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use app_lib::db::repo;
@@ -19,23 +19,38 @@ use common::{add_chunk_with_blocks, bind_role, deps_for, seed_project, set_block
 const EDITOR_ANSWER: &str = r#"{"verdict":"needs_fix","issues":[{"block_index":0,"severity":"major","kind":"meaning","quote":"vecchio","suggested":"nuovo","reason":"the adjective is wrong"}]}"#;
 
 fn sse_body(content: &str) -> String {
+    sse_body_with(content, "stop")
+}
+
+fn sse_body_with(content: &str, finish_reason: &str) -> String {
     let chunk = serde_json::json!({ "choices": [{ "delta": { "content": content } }] });
     let finish = serde_json::json!({
-        "choices": [{ "delta": {}, "finish_reason": "stop" }],
+        "choices": [{ "delta": {}, "finish_reason": finish_reason }],
         "usage": { "prompt_tokens": 5, "completion_tokens": 5 },
     });
     format!("data: {chunk}\n\ndata: {finish}\n\ndata: [DONE]\n\n")
+}
+
+fn sse_response(body: String) -> ResponseTemplate {
+    ResponseTemplate::new(200)
+        .insert_header("content-type", "text/event-stream")
+        .set_body_string(body)
+}
+
+/// A reasoning model that spends its whole budget thinking: the stream carries
+/// `reasoning_content`, stops on `length` and never emits an answer.
+fn sse_reasoning_only(reasoning: &str) -> String {
+    let thinking =
+        serde_json::json!({ "choices": [{ "delta": { "reasoning_content": reasoning } }] });
+    let finish = serde_json::json!({ "choices": [{ "delta": {}, "finish_reason": "length" }] });
+    format!("data: {thinking}\n\ndata: {finish}\n\ndata: [DONE]\n\n")
 }
 
 async fn mock_answer(content: &str) -> MockServer {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/v1/chat/completions"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .insert_header("content-type", "text/event-stream")
-                .set_body_string(sse_body(content)),
-        )
+        .respond_with(sse_response(sse_body(content)))
         .mount(&server)
         .await;
     server
@@ -200,6 +215,86 @@ async fn review_start_enqueues_each_pass_once() -> Result<()> {
     assert_eq!(counts.get(review::EDIT_JOB), Some(&1));
     assert_eq!(counts.get(review::PROOFREAD_JOB), Some(&1));
     assert_eq!(counts.get(qa::JOB_KIND), Some(&1));
+    Ok(())
+}
+
+/// A reasoning model that thought its way through the whole budget answers no JSON:
+/// the pass retries once, and the retry asks for a larger budget than the default.
+#[tokio::test]
+async fn editor_retries_an_answer_without_json_and_asks_for_more_room() -> Result<()> {
+    let server = MockServer::start().await;
+    // First attempt: the 1500 token default, spent on the thinking.
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .and(body_string_contains("\"max_tokens\":1500"))
+        .respond_with(sse_response(sse_reasoning_only("weighing the passage")))
+        .mount(&server)
+        .await;
+    // The retry carries the instruction, so the two mocks never overlap.
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .and(body_string_contains("contained no JSON object"))
+        .respond_with(sse_response(sse_body_with(EDITOR_ANSWER, "stop")))
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir()?;
+    let (pool, deps) = deps_for(dir.path()).await?;
+    let fixture = seed_reviewable(&pool, &server.uri()).await?;
+    bind_role(&pool, "review", "editor", &server.uri()).await?;
+
+    let created = review::run_edit_chunk(&deps, None, &fixture.chunk_id).await?;
+    assert_eq!(created, 1, "the retried answer is used");
+
+    let requests = server.received_requests().await.expect("requests");
+    assert_eq!(requests.len(), 2);
+    let retry: Value = serde_json::from_slice(&requests[1].body)?;
+    assert_eq!(retry["max_tokens"], 3000);
+    let user = retry["messages"][1]["content"].as_str().unwrap_or_default();
+    assert!(user.contains("contained no JSON object"));
+
+    // Both calls stay in the audit trail, the thinking included.
+    let calls: Vec<(Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT reasoning_text, response_text FROM llm_call WHERE chunk_id = ?1 \
+         ORDER BY created_at",
+    )
+    .bind(&fixture.chunk_id)
+    .fetch_all(&pool)
+    .await?;
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].0.as_deref(), Some("weighing the passage"));
+    assert_eq!(calls[0].1.as_deref(), Some(""));
+    Ok(())
+}
+
+/// When even the retry comes back without an answer, the error says why: the stop
+/// reason, the sizes and the budget, so the cause is visible without the text.
+#[tokio::test]
+async fn editor_reports_why_the_answer_was_empty() -> Result<()> {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(sse_response(sse_reasoning_only("weighing the passage")))
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir()?;
+    let (pool, deps) = deps_for(dir.path()).await?;
+    let fixture = seed_reviewable(&pool, &server.uri()).await?;
+    bind_role(&pool, "review", "editor", &server.uri()).await?;
+
+    let error = review::run_edit_chunk(&deps, None, &fixture.chunk_id)
+        .await
+        .expect_err("an answer with no JSON object fails the pass");
+    let message = error.to_string();
+    assert!(
+        message.contains("the editor answer contains no JSON object"),
+        "{message}"
+    );
+    assert!(message.contains("finish_reason=length"), "{message}");
+    assert!(message.contains("reasoning=20 chars"), "{message}");
+    assert!(message.contains("max_tokens=3000"), "{message}");
+    assert!(message.contains("retried once"), "{message}");
     Ok(())
 }
 

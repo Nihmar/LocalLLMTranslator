@@ -13,7 +13,7 @@ use serde_json::Value;
 
 use super::PipelineDeps;
 use crate::db::repo;
-use crate::error::Result;
+use crate::error::{AppError, Result};
 use crate::llm::{ChatMessage, ChatRequest, LlamaClient, ResponseFormat};
 use crate::util::sha256_hex_str;
 
@@ -108,7 +108,7 @@ pub async fn run_structured_call<T>(
 ) -> Result<(ChatAnswer, T)> {
     let answer = run_chat_call_full(deps, call).await?;
     if contains_json_object(&answer.content) {
-        let value = parse(&answer.content)?;
+        let value = parse(&answer.content).map_err(|error| with_outcome(error, &answer, false))?;
         return Ok((answer, value));
     }
 
@@ -121,8 +121,21 @@ pub async fn run_structured_call<T>(
         ..call.clone()
     };
     let retried = run_chat_call_full(deps, &retry).await?;
-    let value = parse(&retried.content)?;
+    let value = parse(&retried.content).map_err(|error| with_outcome(error, &retried, true))?;
     Ok((retried, value))
+}
+
+/// A rejected answer keeps its message and gains the outcome of the call: the stop
+/// reason and the sizes say whether the model refused, ran out of budget or spent it
+/// thinking, and none of that quotes the text.
+fn with_outcome(error: AppError, answer: &ChatAnswer, after_retry: bool) -> AppError {
+    match error {
+        AppError::Invalid(message) => {
+            let retried = if after_retry { ", retried once" } else { "" };
+            AppError::Invalid(format!("{message} ({}{retried})", answer.describe()))
+        }
+        other => other,
+    }
 }
 
 /// The budget of a retry: only a call that ran out of tokens gets a larger one, and
