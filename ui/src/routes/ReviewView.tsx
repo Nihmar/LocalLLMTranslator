@@ -14,6 +14,7 @@ import {
   suggestionReject,
   toErrorMessage,
 } from "../lib/ipc";
+import { severityClass, suggestionSnippet } from "../lib/review";
 import type {
   BlockTranslation,
   Chapter,
@@ -124,19 +125,6 @@ function applyProposal(current: string, suggestion: Suggestion): string {
     return current.replace(quote, proposed);
   }
   return proposed.trim().length > 0 ? proposed : current;
-}
-
-function severityClass(severity: string | null): string {
-  switch (severity) {
-    case "critical":
-      return "badge badge-danger";
-    case "major":
-      return "badge badge-warning";
-    case "minor":
-      return "badge badge-info";
-    default:
-      return "badge badge-neutral";
-  }
 }
 
 function findingSeverityClass(severity: string): string {
@@ -650,15 +638,9 @@ export function ReviewView({ project, onNavigate }: ReviewViewProps) {
                             <span className="badge badge-neutral">{suggestion.pass}</span>
                             <span className="badge badge-neutral">{suggestion.status}</span>
                           </span>
-                          {suggestion.quote !== null && suggestion.quote.length > 0 ? (
-                            <p className="mt-1 text-xs text-ink-soft">
-                              «{suggestion.quote}» → «{suggestion.proposed}»
-                            </p>
-                          ) : (
-                            <p className="mt-1 text-xs text-ink-soft">
-                              blocco riscritto dal proofreader
-                            </p>
-                          )}
+                          <p className="mt-1 text-xs text-ink-soft">
+                            {suggestionSnippet(suggestion)}
+                          </p>
                           {suggestion.reason !== null ? (
                             <p className="field-hint">{suggestion.reason}</p>
                           ) : null}

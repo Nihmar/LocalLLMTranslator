@@ -7,6 +7,7 @@ import { projectGet, sidecarStatus, toErrorMessage } from "./lib/ipc";
 import type { JobCount, Project, SidecarStatus } from "./lib/types";
 import { ExportView } from "./routes/ExportView";
 import { GlossaryView } from "./routes/GlossaryView";
+import { HistoryView } from "./routes/HistoryView";
 import { IngestView } from "./routes/IngestView";
 import { JobsView } from "./routes/JobsView";
 import { ModelsView } from "./routes/ModelsView";
@@ -42,6 +43,7 @@ export type ViewId =
   | "translate"
   | "review"
   | "glossary"
+  | "history"
   | "export"
   | "jobs"
   | "series";
@@ -69,6 +71,7 @@ const PROJECT_NAV: readonly NavEntry[] = [
  */
 const PROJECT_EXTRA_NAV: readonly NavEntry[] = [
   { id: "glossary", step: "•", label: "Glossario", hint: "Termini, candidati, conflitti" },
+  { id: "history", step: "•", label: "Storico", hint: "Correzioni accettate e rifiutate" },
 ];
 
 /** Application-wide destinations, independent of any project. */
@@ -450,6 +453,8 @@ export default function App() {
             <ReviewView project={project} onNavigate={setView} />
           ) : view === "glossary" ? (
             <GlossaryView project={project} onNavigate={setView} />
+          ) : view === "history" ? (
+            <HistoryView project={project} onNavigate={setView} />
           ) : view === "export" ? (
             <ExportView project={project} onNavigate={setView} />
           ) : (

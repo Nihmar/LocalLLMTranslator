@@ -78,6 +78,7 @@ import type {
   RoleBindingSet,
   SidecarStatus,
   Suggestion,
+  SuggestionHistoryRequest,
   SuggestionListRequest,
   TranslationStartRequest,
   TranslationStartResult,
@@ -128,6 +129,7 @@ const COMMANDS = {
   seriesReconConfirm: "series_recon_confirm",
   reviewStart: "review_start",
   suggestionList: "suggestion_list",
+  suggestionHistory: "suggestion_history",
   suggestionAccept: "suggestion_accept",
   suggestionReject: "suggestion_reject",
   qaReport: "qa_report",
@@ -465,6 +467,11 @@ export function reviewStart(request: ReviewStartRequest): Promise<ReviewStartRes
 /** `suggestion` rows of a project, candidates included unless filtered. */
 export function suggestionList(request: SuggestionListRequest): Promise<Suggestion[]> {
   return call<Suggestion[]>(COMMANDS.suggestionList, { req: request });
+}
+
+/** The project's decided proposals, newest decision first: its correction history. */
+export function suggestionHistory(request: SuggestionHistoryRequest): Promise<Suggestion[]> {
+  return call<Suggestion[]>(COMMANDS.suggestionHistory, { req: request });
 }
 
 /** Accept a proposal: the block translation is rewritten and the chunk recomposed. */

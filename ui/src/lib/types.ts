@@ -422,6 +422,8 @@ export interface Suggestion {
   /** `pending` | `accepted` | `rejected` | `superseded`. */
   status: string;
   created_at: string;
+  /** When the user accepted or rejected it; `null` while the proposal is pending. */
+  decided_at: string | null;
 }
 
 /** Row of `qa_finding` (`db::models::QaFinding`); `details_json` is the raw column. */
@@ -460,6 +462,17 @@ export interface SuggestionListRequest {
   chunk_id?: string | null;
   pass?: string | null;
   status?: string | null;
+}
+
+/** Request body of `suggestion_history` (`commands::review::SuggestionHistoryRequest`). */
+export interface SuggestionHistoryRequest {
+  project_id: string;
+  chunk_id?: string | null;
+  pass?: string | null;
+  /** `accepted` | `rejected`; omitted returns both. */
+  status?: string | null;
+  /** Newest decisions first; the backend defaults to 1000. */
+  limit?: number | null;
 }
 
 /** Request body of `qa_report` (`commands::review::QaReportRequest`). */

@@ -902,7 +902,8 @@ destinations** — Projects, Models, Series and the Job dashboard — are always
 independent of the open project; they come first in the sidebar, so opening or closing a book
 never moves the entries above. A project also reaches, beside its four steps, the **Glossario**:
 the terms the translator prompt reads, reviewed as a destination of its own instead of inside a
-collapsed panel. The open project is pinned in the header (name, language pair, source path), so
+collapsed panel, and the **Storico**: the per-project correction history of §11.4. The open
+project is pinned in the header (name, language pair, source path), so
 the current book is unambiguous on every page.
 
 1. **Ingestion** — drag&drop, format detection, chapter and block preview, PDF backend
