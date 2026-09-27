@@ -25,8 +25,8 @@ import type { ViewId } from "../App";
 /**
  * Project list / create / open / delete (`PLAN.md` §11, "Progetti").
  *
- * `AGENTS.md` freezes no command for the `.llmtz` export/import described in `PLAN.md` §6, so
- * this page deliberately does not offer it — see the note rendered at the bottom of the list.
+ * The `.llmtz` export/import of `PLAN.md` §6 is offered here through `project_export` and
+ * `project_import`; the note at the bottom of the list spells out what the bundle contains.
  */
 
 export interface ProjectsViewProps {
