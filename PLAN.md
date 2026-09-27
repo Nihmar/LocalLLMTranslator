@@ -857,7 +857,8 @@ destinations by **scope**. The **project steps** — Ingestion, Translation, Rev
 are the translation pipeline; the sidebar shows them only while a project is open, in reading
 order, and each one is a freely visitable route (not a constraint). The **application
 destinations** — Projects, Models, Series and the Job dashboard — are always reachable,
-independent of the open project. The open project is pinned in the header (name, language pair,
+independent of the open project; they come first in the sidebar, so opening or closing a book
+never moves the entries above. The open project is pinned in the header (name, language pair,
 source path), so the current book is unambiguous on every page.
 
 1. **Ingestion** — drag&drop, format detection, chapter and block preview, PDF backend
