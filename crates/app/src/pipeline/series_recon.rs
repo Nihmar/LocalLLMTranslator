@@ -12,7 +12,7 @@ use minijinja::{context, Environment};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::chat_call::{run_chat_call, ChatCall};
+use super::chat_call::{run_structured_call, ChatCall};
 use super::PipelineDeps;
 use crate::db::models::Project;
 use crate::db::repo;
@@ -461,7 +461,23 @@ pub async fn run_series_recon(
     )?;
     let prompt_hash = sha256_hex_str(&format!("{system}\n\u{0}\n{user}"));
 
-    let response = run_chat_call(
+    let fresh_books = sources
+        .iter()
+        .filter(|source| {
+            previous_hashes
+                .get(source.project_id.as_str())
+                .is_none_or(|known| *known != source.hash.as_str())
+        })
+        .count();
+    let provenance = SeriesProfileProvenance {
+        generated_at: now(),
+        model: binding.model.clone(),
+        prompt_hash: prompt_hash.clone(),
+        books: book_names,
+        sources,
+        glossary_hash,
+    };
+    let (_, profile) = run_structured_call(
         deps,
         &ChatCall {
             job_id,
@@ -478,28 +494,9 @@ pub async fn run_series_recon(
             seed: crate::pipeline::translate::derive_seed(series_id, ROLE),
             default_max_tokens: Some(DEFAULT_MAX_TOKENS),
         },
+        |text| parse_profile(text, provenance.clone()),
     )
     .await?;
-
-    let fresh_books = sources
-        .iter()
-        .filter(|source| {
-            previous_hashes
-                .get(source.project_id.as_str())
-                .is_none_or(|known| *known != source.hash.as_str())
-        })
-        .count();
-    let profile = parse_profile(
-        &response,
-        SeriesProfileProvenance {
-            generated_at: now(),
-            model: binding.model.clone(),
-            prompt_hash,
-            books: book_names,
-            sources,
-            glossary_hash,
-        },
-    )?;
     // A source the user rejected earlier is never proposed again, and the rejection is
     // carried into the new candidate.
     let rejected = previous_rejections(pool, series_id).await?;

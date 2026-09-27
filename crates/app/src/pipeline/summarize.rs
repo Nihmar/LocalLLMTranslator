@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::SqlitePool;
 
-use super::chat_call::{run_chat_call, ChatCall};
+use super::chat_call::{run_structured_call, ChatCall};
 use super::PipelineDeps;
 use crate::db::models::{Chunk, Project};
 use crate::db::repo;
@@ -394,7 +394,7 @@ pub async fn run_summarize(
     )?;
     let prompt_hash = sha256_hex_str(&format!("{system}\n\u{0}\n{user}"));
 
-    let response = run_chat_call(
+    let (_, summary) = run_structured_call(
         deps,
         &ChatCall {
             job_id,
@@ -414,9 +414,9 @@ pub async fn run_summarize(
             ),
             default_max_tokens: Some(DEFAULT_MAX_TOKENS),
         },
+        parse_summary,
     )
     .await?;
-    let summary = parse_summary(&response)?;
 
     if payload.final_run {
         repo::update_chapter_summary(

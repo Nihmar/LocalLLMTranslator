@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::SqlitePool;
 
-use super::chat_call::{run_chat_call, ChatCall};
+use super::chat_call::{run_structured_call, ChatCall};
 use super::PipelineDeps;
 use crate::db::models::{Block, Chapter, GlossaryTerm};
 use crate::db::{new_id, now, repo};
@@ -562,7 +562,15 @@ pub async fn run_recon(
     )?;
     let prompt_hash = sha256_hex_str(&format!("{system}\n\u{0}\n{user}"));
 
-    let response = run_chat_call(
+    let provenance = ProfileProvenance {
+        generated_at: now(),
+        model: binding.model.clone(),
+        prompt_hash: prompt_hash.clone(),
+        excerpt_blocks: evidence.blocks,
+        metadata: !evidence.metadata.is_empty(),
+        pasted_chars: pasted.chars().count(),
+    };
+    let (_, profile) = run_structured_call(
         deps,
         &ChatCall {
             job_id,
@@ -579,18 +587,9 @@ pub async fn run_recon(
             seed: crate::pipeline::translate::derive_seed(&project.id, ROLE),
             default_max_tokens: Some(DEFAULT_MAX_TOKENS),
         },
+        |text| parse_profile(text, provenance.clone()),
     )
     .await?;
-
-    let provenance = ProfileProvenance {
-        generated_at: now(),
-        model: binding.model.clone(),
-        prompt_hash,
-        excerpt_blocks: evidence.blocks,
-        metadata: !evidence.metadata.is_empty(),
-        pasted_chars: pasted.chars().count(),
-    };
-    let profile = parse_profile(&response, provenance)?;
     repo::set_memory(
         pool,
         project_id,
