@@ -155,6 +155,61 @@ thinking and the JSON room to coexist. A structured pass already retries once an
 app's own budget when the first attempt ran out, but a `max_tokens` you set yourself is
 respected, never overridden.
 
+### Worked example: one 16 GB card, a fast small model and a slower big one
+
+Two models resident on the same card: a 4B-class one that is quick, and a 12B-class one that is
+better but slower. The assignment below follows from where each pass spends its compute, not from
+which model is "best":
+
+| Role | Model | Why |
+|---|---|---|
+| `translator` | small (4B) | it is the pass that **decodes** the most (its answer is as long as the chunk), so its speed is felt on every chunk of the book |
+| `editor` | big (12B) | its prompt is the source **and** the translation of the chunk — almost all prefill, a short answer — and it is where judgement matters: a noisy editor is time spent reviewing |
+| `proofreader` | small (4B) | monolingual polish; every change is a suggestion you accept or reject |
+| `orchestrator` | big (12B) | it runs rarely (reconnaissance once, summaries every few chunks) and its output — style guide, synopsis, glossary candidates — is read by the translator on **every** chunk |
+
+```sh
+# Small model: translator + proofreader
+llama-server -m models/small-4b.gguf --host 127.0.0.1 --port 8080 \
+  -c 16384 --parallel 1 --cont-batching --cache-reuse 256 --jinja \
+  --n-gpu-layers 999 --flash-attn --cache-type-k q8_0 --cache-type-v q8_0
+
+# Big model: editor + orchestrator
+llama-server -m models/mid-12b.gguf --host 127.0.0.1 --port 8081 \
+  -c 32768 --parallel 1 --cont-batching --cache-reuse 256 --jinja \
+  --n-gpu-layers 999 --flash-attn --cache-type-k q8_0 --cache-type-v q8_0
+```
+
+The context sizes are not free choices:
+
+- The **translator's** `n_ctx` decides the chunk size, because `ingest` may use 60% of it: 16384
+  gives ~9.8k tokens of budget, so chunks of roughly 7-9k tokens once the rules, glossary and
+  summaries have taken their share.
+- The **editor's** `n_ctx` must hold that chunk **twice** plus the schema, and nothing in the app
+  checks it against the endpoint: with ~9k-token chunks, 16384 would be truncated silently, so
+  give it 32768.
+- The **proofreader** refuses more than 24 000 characters of translated text per call (~7k
+  tokens), which the translator's 16384 covers.
+- Weights plus KV cache have to fit: about 7-7.5 GB for a 12B at Q4_K_M, 4-5 GB for a 4B, and
+  1.5-2.5 GB of quantised KV for these contexts. Keep ~1.5 GB for the compositor and the app
+  window itself; if VRAM runs short, lower the editor to 24576 before lowering the model
+  precision.
+
+Three traps worth knowing:
+
+1. **A `llama-server` router does not report `n_ctx`** to the app (`/props` has no top-level
+   `n_ctx`), so the chunk budget silently falls back to the documented 6000 tokens whatever
+   `--ctx-size` the models were given: bind the *translator* to a direct `llama-server` if you
+   want bigger chunks.
+2. **`--parallel N` divides the context**: with `--parallel 4 -c 32768` every request sees 8192
+   tokens however the app is configured. On one card, with both models resident, prefer
+   `--parallel 1` on each server and let the two endpoints carry the concurrency — a translator
+   call on one and an editor call on the other run at the same time, each with its whole context.
+3. **A thinking model in a JSON role** spends the answer budget before the JSON starts; see the
+   previous section. Check `reasoning_chars` in the `llm call completed` log line (or
+   `llm_call.reasoning_text`) after a chapter: high values on `editor` or `orchestrator` mean the
+   `chat_template_kwargs` are missing.
+
 ---
 
 ## Development
