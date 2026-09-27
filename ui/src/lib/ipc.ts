@@ -60,6 +60,7 @@ import type {
   IngestStartRequest,
   ImportBundleRequest,
   Job,
+  JobCancelResult,
   JobListRequest,
   JobStarted,
   Metrics,
@@ -131,6 +132,7 @@ const COMMANDS = {
   qaReport: "qa_report",
   qaFindingSetStatus: "qa_finding_set_status",
   jobList: "job_list",
+  jobCancel: "job_cancel",
   chunkList: "chunk_list",
   chunkGet: "chunk_get",
   metricsGet: "metrics_get",
@@ -479,6 +481,17 @@ export function qaFindingSetStatus(id: string, status: string): Promise<Ack> {
 
 export function jobList(request: JobListRequest = {}): Promise<Job[]> {
   return call<Job[]>(COMMANDS.jobList, { req: request });
+}
+
+/**
+ * Interrupt jobs without stopping the queue.
+ *
+ * One id interrupts a single job, several interrupt a selection, and every id the monitor can see
+ * interrupts all of them. The result names which ids moved and which had already finished, so a
+ * race with a job that completed on its own is reported instead of silently swallowed.
+ */
+export function jobCancel(jobIds: readonly string[]): Promise<JobCancelResult> {
+  return call<JobCancelResult>(COMMANDS.jobCancel, { req: { job_ids: [...jobIds] } });
 }
 
 export function chunkList(request: ChunkListRequest): Promise<Chunk[]> {

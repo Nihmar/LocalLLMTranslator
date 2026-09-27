@@ -500,6 +500,19 @@ export interface JobListRequest {
   limit?: number | null;
 }
 
+/** Request body of `job_cancel` (`commands::jobs::JobCancelRequest`). */
+export interface JobCancelRequest {
+  job_ids: string[];
+}
+
+/** Result of `job_cancel` (`commands::jobs::JobCancelResult`). */
+export interface JobCancelResult {
+  /** Ids that were unfinished and are now `cancelled`. */
+  cancelled: string[];
+  /** Ids that had already finished (or never existed). */
+  skipped: string[];
+}
+
 // --- chunks and blocks ---------------------------------------------------------------------
 
 /** Row of `chunk` (`db::models::Chunk`); the `*_json` columns are raw strings. */
