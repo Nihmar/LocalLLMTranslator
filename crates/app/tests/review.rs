@@ -11,7 +11,8 @@ use serde_json::Value;
 use wiremock::matchers::{body_string_contains, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use app_lib::db::repo;
+use app_lib::db::models::Suggestion;
+use app_lib::db::{new_id, now, repo};
 use app_lib::pipeline::{qa, review};
 
 use common::{add_chunk_with_blocks, bind_role, deps_for, seed_project, set_block_translation};
@@ -79,6 +80,31 @@ async fn seed_reviewable(pool: &sqlx::SqlitePool, base_url: &str) -> Result<Fixt
         project_id: seeded.project_id,
         chunk_id,
     })
+}
+
+/// A proposal waiting for a decision, built by hand so a test can decide it.
+fn pending_suggestion(
+    chunk_id: &str,
+    block_id: &str,
+    pass: &str,
+    quote: Option<&str>,
+    proposed: &str,
+) -> Suggestion {
+    Suggestion {
+        id: new_id(),
+        chunk_id: chunk_id.to_string(),
+        pass: pass.to_string(),
+        block_id: Some(block_id.to_string()),
+        field: Some("text".to_string()),
+        original: Some("Il vecchio porto".to_string()),
+        proposed: Some(proposed.to_string()),
+        reason: Some("the adjective is wrong".to_string()),
+        severity: Some("major".to_string()),
+        quote: quote.map(str::to_string),
+        status: "pending".to_string(),
+        created_at: now(),
+        decided_at: None,
+    }
 }
 
 #[tokio::test]
@@ -189,6 +215,80 @@ async fn reject_marks_the_suggestion_without_touching_the_text() -> Result<()> {
     // Rejecting twice is idempotent.
     let again = review::reject_suggestion(&pool, &suggestion.id).await?;
     assert_eq!(again.status, "rejected");
+    Ok(())
+}
+
+/// The decisions of a project read back as its correction history: accepted and
+/// rejected proposals, newest decision first, with the explanation still attached.
+#[tokio::test]
+async fn decided_suggestions_read_back_as_the_project_history() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let (pool, deps) = deps_for(dir.path()).await?;
+    let fixture = seed_reviewable(&pool, "http://127.0.0.1:1").await?;
+
+    let accepted = pending_suggestion(
+        &fixture.chunk_id,
+        "b000001",
+        "editor",
+        Some("vecchio"),
+        "nuovo",
+    );
+    let rejected = pending_suggestion(
+        &fixture.chunk_id,
+        "b000002",
+        "editor",
+        Some("nave"),
+        "barca",
+    );
+    let pending = pending_suggestion(
+        &fixture.chunk_id,
+        "b000001",
+        "proofreader",
+        None,
+        "Il vecchio porto.",
+    );
+    for suggestion in [&accepted, &rejected, &pending] {
+        repo::insert_suggestion(&pool, suggestion).await?;
+    }
+
+    review::accept_suggestion(&deps, &accepted.id).await?;
+    review::reject_suggestion(&pool, &rejected.id).await?;
+
+    // Both decisions land in the same millisecond, so pin the times the order reads.
+    for (id, decided_at) in [
+        (&accepted.id, "2026-01-01T10:00:00.000Z"),
+        (&rejected.id, "2026-01-02T10:00:00.000Z"),
+    ] {
+        sqlx::query("UPDATE suggestion SET decided_at = ?2 WHERE id = ?1")
+            .bind(id)
+            .bind(decided_at)
+            .execute(&pool)
+            .await?;
+    }
+
+    let history =
+        repo::list_decided_suggestions(&pool, &fixture.project_id, None, None, None, 100).await?;
+    assert_eq!(history.len(), 2, "an undecided proposal is not history");
+    assert_eq!(history[0].id, rejected.id, "newest decision first");
+    assert_eq!(history[1].id, accepted.id);
+    assert_eq!(history[1].reason.as_deref(), Some("the adjective is wrong"));
+
+    let accepted_only = repo::list_decided_suggestions(
+        &pool,
+        &fixture.project_id,
+        None,
+        None,
+        Some("accepted"),
+        100,
+    )
+    .await?;
+    assert_eq!(accepted_only.len(), 1);
+    assert_eq!(accepted_only[0].id, accepted.id);
+
+    let newest =
+        repo::list_decided_suggestions(&pool, &fixture.project_id, None, None, None, 1).await?;
+    assert_eq!(newest.len(), 1, "the limit keeps the newest decisions");
+    assert_eq!(newest[0].id, rejected.id);
     Ok(())
 }
 

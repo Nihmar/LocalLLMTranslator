@@ -934,7 +934,9 @@ the current book is unambiguous on every page.
    Passes run as `edit_chunk` / `proofread_chunk` jobs; the QA heuristics run inline on every
    validated translation and can be re-run per chunk with `qa_scan` (for example after a glossary
    change). Accepting a suggestion rewrites the block with the pass as its origin and recomposes
-   the chunk's `target_md`, so the exporter sees the reviewed text.
+   the chunk's `target_md`, so the exporter sees the reviewed text. The decision stamps
+   `suggestion.decided_at`, so the accepted and rejected proposals read back as a per-project
+   history of the corrections made (`suggestion_history`).
 5. **Export** — per-chapter unit, `metadata.yaml`, template/CSS/LaTeX choice, preview,
    selective rebuild of only the modified chapter, build history.
    Mechanics: the composed units are hashed (content, metadata and the template/CSS/filters in
@@ -998,7 +1000,8 @@ what makes it safe to restart it and re-send the in-flight requests.
   `series_glossary_list`, `series_glossary_upsert`, `series_glossary_delete`,
   `series_variant_upsert`, `series_variant_delete`, `series_promote_term`,
   `series_export`, `series_import`, `series_qa_scan`, `series_recon_start`, `series_recon_confirm`,
-  `job_list`, `job_cancel`, `chunk_get`, `review_start`, `suggestion_list/accept/reject`, `qa_report`,
+  `job_list`, `job_cancel`, `chunk_get`, `review_start`, `suggestion_list/accept/reject`,
+  `suggestion_history`, `qa_report`,
   `qa_finding_set_status`, `log_frontend_error`, `diagnostics_paths`, `diagnostics_export`,
   `export_build`, `export_preview`, `export_history`, `metrics_get`.
 - Events: `job://progress`, `log://line`, `metrics://tick`, `sidecar://status`,

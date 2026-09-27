@@ -1,5 +1,5 @@
-//! `review_start`, `suggestion_list`, `suggestion_accept`, `suggestion_reject`
-//! and `qa_report` (PLAN.md §11.4).
+//! `review_start`, `suggestion_list`, `suggestion_history`, `suggestion_accept`,
+//! `suggestion_reject` and `qa_report` (PLAN.md §11.4).
 
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -91,6 +91,48 @@ pub async fn suggestion_list(
         req.chunk_id.as_deref(),
         req.pass.as_deref(),
         req.status.as_deref(),
+    )
+    .await
+}
+
+/// How many decisions `suggestion_history` returns when the caller sets no limit.
+const DEFAULT_HISTORY_LIMIT: u32 = 1000;
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SuggestionHistoryRequest {
+    pub project_id: String,
+    #[serde(default)]
+    pub chunk_id: Option<String>,
+    #[serde(default)]
+    pub pass: Option<String>,
+    /// `accepted` | `rejected`; omitted returns both.
+    #[serde(default)]
+    pub status: Option<String>,
+    /// Newest decisions first; defaults to 1000.
+    #[serde(default)]
+    pub limit: Option<u32>,
+}
+
+/// The project's correction history: the decided suggestions, newest first.
+#[tauri::command]
+pub async fn suggestion_history(
+    state: State<'_, AppState>,
+    req: SuggestionHistoryRequest,
+) -> Result<Vec<Suggestion>> {
+    if let Some(status) = req.status.as_deref() {
+        if !matches!(status, "accepted" | "rejected") {
+            return Err(AppError::Invalid(format!(
+                "unknown suggestion status '{status}'"
+            )));
+        }
+    }
+    repo::list_decided_suggestions(
+        &state.pool,
+        &req.project_id,
+        req.chunk_id.as_deref(),
+        req.pass.as_deref(),
+        req.status.as_deref(),
+        i64::from(req.limit.unwrap_or(DEFAULT_HISTORY_LIMIT)),
     )
     .await
 }

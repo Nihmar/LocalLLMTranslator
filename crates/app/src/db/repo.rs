@@ -982,6 +982,38 @@ pub async fn list_suggestions(
     Ok(rows)
 }
 
+/// The project's decisions, newest first: only rows that carry a `decided_at`.
+/// Pending and superseded proposals were never decided, so they are not history.
+pub async fn list_decided_suggestions(
+    pool: &SqlitePool,
+    project_id: &str,
+    chunk_id: Option<&str>,
+    pass: Option<&str>,
+    status: Option<&str>,
+    limit: i64,
+) -> Result<Vec<Suggestion>> {
+    let rows = sqlx::query_as::<_, Suggestion>(
+        "SELECT s.* FROM suggestion s \
+         JOIN chunk c ON c.id = s.chunk_id \
+         JOIN document d ON d.id = c.document_id \
+         WHERE d.project_id = ?1 \
+         AND (?2 IS NULL OR s.chunk_id = ?2) \
+         AND (?3 IS NULL OR s.pass = ?3) \
+         AND (?4 IS NULL OR s.status = ?4) \
+         AND s.decided_at IS NOT NULL \
+         ORDER BY s.decided_at DESC, s.id \
+         LIMIT ?5",
+    )
+    .bind(project_id)
+    .bind(chunk_id)
+    .bind(pass)
+    .bind(status)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
 pub async fn get_suggestion(pool: &SqlitePool, id: &str) -> Result<Option<Suggestion>> {
     let row = sqlx::query_as::<_, Suggestion>("SELECT * FROM suggestion WHERE id = ?1")
         .bind(id)

@@ -222,6 +222,7 @@ pub fn run() {
             commands::series::series_recon_confirm,
             commands::review::review_start,
             commands::review::suggestion_list,
+            commands::review::suggestion_history,
             commands::review::suggestion_accept,
             commands::review::suggestion_reject,
             commands::review::qa_report,

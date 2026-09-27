@@ -145,7 +145,8 @@ Commands: `project_list`, `project_create`, `project_get`, `project_delete`,
 `series_variant_upsert`, `series_variant_delete`, `series_promote_term`,
 `series_export`, `series_import`, `series_qa_scan`, `series_recon_start`,
 `series_recon_confirm`,
-`review_start`, `suggestion_list`, `suggestion_accept`, `suggestion_reject`, `qa_report`,
+`review_start`, `suggestion_list`, `suggestion_history`, `suggestion_accept`, `suggestion_reject`,
+`qa_report`,
 `qa_finding_set_status`,
 `job_list`, `job_cancel`, `chunk_list`, `chunk_get`, `metrics_get`, `sidecar_status`,
 `log_frontend_error`, `diagnostics_paths`, `diagnostics_export`,
@@ -210,7 +211,11 @@ is `editor` (default `both`, also `proofreader`), and enqueues the matching `edi
 `suggestion_list` takes `{project_id, chunk_id?, pass?, status?}` and returns `suggestion` rows;
 `suggestion_accept` and `suggestion_reject` take the suggestion id. Accepting applies the proposed
 correction to the block translation (origin `editor` or `proofreader`) and recomposes the chunk's
-`target_md`, so an export right after a review sees the accepted text. `qa_report` takes
+`target_md`, so an export right after a review sees the accepted text. `suggestion_history` takes
+`{req: {project_id, chunk_id?, pass?, status?, limit?}}`, where `status` is `accepted`/`rejected`
+(omitted returns both) and `limit` defaults to 1000: it returns the decided rows newest-first —
+the project's correction history, each row carrying the `decided_at` the decision stamped, and
+never an undecided (pending or superseded) proposal. `qa_report` takes
 `{project_id, kind?, severity?, chunk_id?}` and returns the `qa_finding` rows.
 
 `recon_start` runs the `book_recon` job (candidate book profile, PLAN.md §9.4); `recon_get`
