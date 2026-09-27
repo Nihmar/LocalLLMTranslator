@@ -335,7 +335,9 @@ export function reconStart(request: ReconStartRequest): Promise<JobStarted> {
 
 /** Candidate profile, already-confirmed values and glossary of a project. */
 export function reconGet(projectId: string): Promise<ReconSnapshot> {
-  return call<ReconSnapshot>(COMMANDS.reconGet, { project_id: projectId });
+  // Flat arguments take Tauri's camelCase key, like `chunkGet` above: sending the Rust
+  // snake_case spelling fails validation before the command runs.
+  return call<ReconSnapshot>(COMMANDS.reconGet, { projectId });
 }
 
 /** Writes the fields the user confirmed into project memory and the glossary. */
@@ -347,7 +349,7 @@ export function reconConfirm(request: ReconConfirmRequest): Promise<ReconSnapsho
 
 /** Every term of a project, candidates included. */
 export function glossaryList(projectId: string): Promise<GlossaryTerm[]> {
-  return call<GlossaryTerm[]>(COMMANDS.glossaryList, { project_id: projectId });
+  return call<GlossaryTerm[]>(COMMANDS.glossaryList, { projectId });
 }
 
 /** Create or update a term; the returned row is the persisted one. */
@@ -393,7 +395,8 @@ export function projectSetSeries(request: ProjectSetSeriesRequest): Promise<Proj
 
 /** The series glossary; the translator prompt sees it merged with the book's own. */
 export function seriesGlossaryList(seriesId: string): Promise<SeriesGlossaryTerm[]> {
-  return call<SeriesGlossaryTerm[]>(COMMANDS.seriesGlossaryList, { series_id: seriesId });
+  // CamelCase, like every flat argument: see `reconGet`.
+  return call<SeriesGlossaryTerm[]>(COMMANDS.seriesGlossaryList, { seriesId });
 }
 
 /** Create or update a series term; a change flags every book rendering it differently. */
@@ -435,7 +438,8 @@ export function seriesImport(request: SeriesImportRequest): Promise<SeriesImport
 
 /** Re-runs the QA scan on every translated chunk of the member books. */
 export function seriesQaScan(seriesId: string): Promise<SeriesQaScanResult> {
-  return call<SeriesQaScanResult>(COMMANDS.seriesQaScan, { series_id: seriesId });
+  // CamelCase, like every flat argument: see `reconGet`.
+  return call<SeriesQaScanResult>(COMMANDS.seriesQaScan, { seriesId });
 }
 
 /** Enqueues the `series_recon` job: a candidate series profile from the confirmed books. */
@@ -533,7 +537,7 @@ export function exportPreview(request: ExportPreviewRequest): Promise<ExportPrev
 
 /** The recent build records, newest first. */
 export function exportHistory(projectId: string): Promise<ExportBuildRecord[]> {
-  return call<ExportBuildRecord[]>(COMMANDS.exportHistory, { project_id: projectId });
+  return call<ExportBuildRecord[]>(COMMANDS.exportHistory, { projectId });
 }
 
 /** Opens a file or directory with the OS handler; the only filesystem command the UI needs. */
