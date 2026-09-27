@@ -874,9 +874,8 @@ source path), so the current book is unambiguous on every page.
    composed client-side from the chunk rows already loaded — translated chunks show their target,
    the rest their source in grey — so a run can be followed chapter by chapter without waiting
    for the export. The status filter applies to the table only: counters, outline and preview
-   always describe the whole project. Next to the resource gauge, an in-flight list names every
-   claimed job — kind, chunk, chapter, elapsed time and attempt — read from the same `job_list`
-   rows: the counters say how many jobs are running, that list says which.
+   always describe the whole project. The translation page also summarises what is running and
+   opens the **job monitor** described below.
 4. **Review** — 3-column side-by-side editor (original / translated / corrected) with block-level
    and character-level diff, navigation by suggestion, accept/reject per individual
    change, and a filterable QA report. The diff is a read-only CodeMirror 6 merge view
@@ -901,6 +900,13 @@ source path), so the current book is unambiguous on every page.
 
 Plus: **Job dashboard** (per-chunk progress, ETA computed from the real throughput, log, resources)
 and **Projects** (multiple, resume, export/import `.llmtz`).
+
+The **job monitor** is a dialog, reachable from the header of every page and from the translation
+page: it lists the jobs of the open project (or of every project, when the scope is widened), names
+the chunk, its chapter, the elapsed time and the attempts behind each row, filters by state and
+kind, and lets the user interrupt one job, a selection, or every unfinished one. Interrupting is
+`job_cancel` (§12.2) and does **not** stop the queue; the dialog is deliberately not a page section
+because the same question — what is running, and can I stop it — is asked from several views.
 
 ---
 
