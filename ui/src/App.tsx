@@ -227,6 +227,10 @@ export default function App() {
           </span>
         </div>
 
+        <nav aria-label="Sezioni dell'applicazione">
+          <NavGroup title="Applicazione" entries={APP_NAV} current={view} onSelect={setView} />
+        </nav>
+
         {project === null ? (
           <div className="flex flex-col gap-1">
             <div className="nav-group-label">Progetto</div>
@@ -255,10 +259,6 @@ export default function App() {
             />
           </nav>
         )}
-
-        <nav aria-label="Sezioni dell'applicazione">
-          <NavGroup title="Applicazione" entries={APP_NAV} current={view} onSelect={setView} />
-        </nav>
 
         <p
           className="mt-auto px-1 text-[0.62rem] leading-relaxed text-faint"
