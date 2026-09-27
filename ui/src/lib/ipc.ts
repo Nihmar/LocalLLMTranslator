@@ -486,7 +486,9 @@ export function chunkList(request: ChunkListRequest): Promise<Chunk[]> {
 }
 
 export function chunkGet(chunkId: string): Promise<ChunkDetail> {
-  return call<ChunkDetail>(COMMANDS.chunkGet, { chunk_id: chunkId });
+  // Tauri maps the Rust `chunk_id` parameter to the camelCase `chunkId` key: passing the
+  // snake_case spelling makes the command fail argument validation before it ever runs.
+  return call<ChunkDetail>(COMMANDS.chunkGet, { chunkId });
 }
 
 // --- metrics and sidecar -------------------------------------------------------------------
