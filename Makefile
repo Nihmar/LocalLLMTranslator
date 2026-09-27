@@ -45,7 +45,7 @@ build-ui: ## Build the frontend (required before cargo build)
 # `ui/dist` while the crate is built, so clippy and test fail on a clean tree if the
 # UI has not been built yet. build-ui must therefore come first, and a stale `dist`
 # left over from an earlier run must not be what makes this target pass.
-check: build-ui lint typecheck test ## Full gate: ui build + lint + type + test
+check: build-ui lint typecheck test test-ui ## Full gate: ui build + lint + type + tests (py, rust, ui)
 	cd $(RUST) && cargo check
 
 dev: ## Run the desktop app in dev mode (requires llama-server running)

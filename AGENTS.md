@@ -295,7 +295,7 @@ A unit of work is finished when **all** of these pass:
 ```sh
 make lint      # ruff check + pyright + cargo clippy
 make test      # pytest + cargo test
-make check     # lint + test + build UI + cargo check
+make check     # lint + typecheck + test (python, rust, ui) + build UI + cargo check
 ```
 
 No exceptions. Do not leave failing tests, do not leave type errors, do not commit with
