@@ -65,6 +65,12 @@ async fn translate_chunk_inner(
     let chunk = repo::get_chunk(pool, chunk_id)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("chunk {chunk_id}")))?;
+    // The translation already on record, when there is one: a refused attempt must
+    // not erase it (see the outcome at the end of this function).
+    let previous_target = chunk
+        .target_md
+        .clone()
+        .filter(|text| !text.trim().is_empty());
 
     let (project_id,): (String,) = sqlx::query_as("SELECT project_id FROM document WHERE id = ?1")
         .bind(&chunk.document_id)
@@ -377,7 +383,7 @@ async fn translate_chunk_inner(
     // Persist the validated, placeholder-free markdown, never the raw model
     // response: the raw text (still holding ⟦n⟧ tokens) is preserved in
     // `llm_call.response_text` for audit. When the block alignment is not
-    // trustworthy `target_md` stays NULL, so the chunk is `needs_review` and
+    // trustworthy the new answer is dropped, so the chunk is `needs_review` and
     // export falls back to its source instead of emitting unvalidated text —
     // a LaTeX build must never see a placeholder token.
     let translations: Vec<Option<&str>> = chunk_blocks
@@ -391,7 +397,13 @@ async fn translate_chunk_inner(
             }
         })
         .collect();
-    let target_md = aligned_target_md(block_count_ok, &chunk_blocks, &translations);
+    let attempted = aligned_target_md(block_count_ok, &chunk_blocks, &translations);
+    // A refused attempt never erases a translation that was already validated: the
+    // chunk is flagged for review with the reason, but the text the user had stays,
+    // so a re-run (a leftover duplicate, a retry) cannot take a good chunk back to
+    // "untranslated". The rejected answer is still in `llm_call.response_text`.
+    let kept_previous = attempted.is_none() && previous_target.is_some();
+    let target_md = attempted.or_else(|| previous_target.clone());
 
     // Quality scan (M4): advisory findings on the validated markdown, so a
     // re-scan and the inline run agree. A QA failure must never fail a chunk.
@@ -403,10 +415,16 @@ async fn translate_chunk_inner(
         }
     }
 
+    // The chunk holds a validated translation either way; what changes is whether the
+    // attempt that just ran is the one on record.
     let status = if needs_review_reason.is_some() {
         "needs_review"
     } else {
         "done"
+    };
+    let error = match (needs_review_reason.as_deref(), kept_previous) {
+        (Some(reason), true) => Some(format!("{reason}; the previous translation was kept")),
+        (reason, _) => reason.map(str::to_string),
     };
     repo::finish_chunk(
         pool,
@@ -418,7 +436,7 @@ async fn translate_chunk_inner(
             params_json: Some(binding.params_json.clone()),
             context_manifest_json: Some(manifest_json),
             target_md,
-            error: needs_review_reason.clone(),
+            error,
         },
     )
     .await?;
@@ -426,6 +444,7 @@ async fn translate_chunk_inner(
         chunk_id = %chunk.id,
         status,
         from_cache,
+        kept_previous,
         needs_review = needs_review_reason.as_deref().unwrap_or(""),
         "chunk settled"
     );

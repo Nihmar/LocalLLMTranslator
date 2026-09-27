@@ -450,6 +450,16 @@ repeated paragraphs, title pages) without even calling the model.
   `pending` with `attempts+1`.
 - **Idempotency**: every result write is an upsert keyed on the work identity
   (`chunk_id` + `prompt_hash`). Re-running an already completed job has no effect.
+- **A refused attempt never destroys an accepted one**: when the answer cannot be aligned with
+  the source the *new* answer is dropped, the chunk is flagged `needs_review` with the reason,
+  but a translation already validated for that chunk stays in `target_md` (the column is only
+  left empty when there was nothing to keep). The rejected answer is preserved in
+  `llm_call.response_text`, so the review shows both what failed and what is on record.
+- **No duplicate work**: `translation_start` skips the chunks that already carry an unfinished
+  `translate_chunk` job, so "Avvia / Riprendi" resumes a queue instead of queueing the same chunk
+  a second time (a duplicate would translate a chunk that is `done` by then). `job_cancel` is the
+  narrow counterpart: a queued job's chunk is left alone, only the `running` one goes back to
+  `pending`.
 - **Crash recovery**: on startup the reaper frees the expired leases; ingestion and export write
   to temporary files and do an atomic `rename`; the sidecar is restarted and the in-flight
   requests (pure) are re-sent.
@@ -987,7 +997,8 @@ views treat it as an invalidation trigger and refetch through commands. `job_can
 in-flight call abandoned (the worker polls a per-job cancellation flag and re-reads the row before
 writing an outcome, so a cancelled row is never revived by `complete` or `retry_or_fail`), a queued
 one is cancelled in the database, and an interrupted `translate_chunk` returns its chunk to
-`pending` so a later `translation_start` picks it up again. The result reports `cancelled[]` and
+`pending` — only when that chunk is `running`, so a merely queued job never touches the chunk it
+pointed at — so a later `translation_start` picks it up again. The result reports `cancelled[]` and
 `skipped[]` (ids that had already finished). This is deliberately narrower than
 `translation_cancel`, which pauses the pool and aborts every worker. `sidecar://progress`
 forwards the sidecar's out-of-band `progress` notifications unchanged, and `log://line`

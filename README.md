@@ -149,11 +149,14 @@ kept in `llm_call.reasoning_text` for the same diagnosis. Two ways out, both per
 { "temperature": 0.2, "top_p": 0.95, "max_tokens": 8192 }
 ```
 
-The first turns the thinking off for that role (the key is forwarded to `llama-server` verbatim;
-`reasoning_effort` works there too when the chat template accepts it), the second gives the
-thinking and the JSON room to coexist. A structured pass already retries once and doubles the
-app's own budget when the first attempt ran out, but a `max_tokens` you set yourself is
-respected, never overridden.
+The first turns the thinking off for that role: the object is forwarded to `llama-server` verbatim
+as the request's `chat_template_kwargs`. Verified on the Gemma-4 aliases, `enable_thinking: false`
+is the key that switches it off; a per-request `reasoning_effort` does **not** override the
+server's `--chat-template-kwargs`, so such a role keeps thinking at the server's effort whatever
+the binding says. The second form gives the thinking and the JSON room to coexist.
+
+A structured pass already retries once and doubles the app's own budget when the first attempt
+ran out, but a `max_tokens` you set yourself is respected, never overridden.
 
 ### Worked example: one 16 GB card, a fast small model and a slower big one
 

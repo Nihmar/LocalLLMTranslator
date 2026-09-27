@@ -704,6 +704,119 @@ async fn echoed_preface_marks_the_chunk_needs_review() -> Result<()> {
     Ok(())
 }
 
+/// A refused attempt must not take a translation away from the user: a chunk that
+/// already carries a validated translation keeps it when a later run is refused
+/// (PLAN.md section 15). The chunk is still flagged for review, with the reason.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_refused_attempt_keeps_the_stored_translation() -> Result<()> {
+    let root = repo_root()?;
+    let venv_python = root.join("sidecar/.venv/bin/python");
+    if !venv_python.is_file() {
+        eprintln!(
+            "[walking_skeleton] SKIP: {} is missing; the sidecar interpreter is not installed.",
+            venv_python.display()
+        );
+        return Ok(());
+    }
+    if !Path::new("/bin/sh").exists() {
+        eprintln!("[walking_skeleton] SKIP: /bin/sh is missing; cannot launch the sidecar.");
+        return Ok(());
+    }
+
+    let fixture_dir = tempfile::tempdir().context("fixture temp dir")?;
+    let epub = build_fixture(
+        &venv_python,
+        &root.join("tools/make_fixtures.py"),
+        fixture_dir.path(),
+    )
+    .await?;
+
+    // The same fault as above: the answer cannot be aligned with the source.
+    let (fake_url, _fake_guard, _fake_log) = start_fake_server(
+        &venv_python,
+        &root.join("tools/fake_llama_server.py"),
+        &["--echo-prompt-prefix"],
+    )?;
+    wait_for_health(&fake_url, SERVER_READY).await?;
+
+    let supervisor = start_sidecar(&root.join("sidecar"), &venv_python)?;
+    let _supervisor_guard = SupervisorGuard {
+        supervisor: supervisor.clone(),
+    };
+    let client = SidecarClient::new(supervisor.clone());
+
+    let data_dir = tempfile::tempdir().context("kept translation data dir")?;
+    let pool = db::connect(&data_dir.path().join("app.sqlite")).await?;
+    let project_id = seed_environment(&pool, "kept", &epub, &fake_url).await?;
+    let deps = PipelineDeps::new(
+        pool.clone(),
+        client.clone(),
+        ResourceGovernor::default(),
+        data_dir.path().to_path_buf(),
+    );
+
+    let ingest = with_timeout(
+        run_ingest(&deps, &project_id, &epub.to_string_lossy(), None, None),
+        "kept ingest",
+    )
+    .await??;
+    let chunks = repo::list_chunks(&pool, &ingest.document_id).await?;
+    let chunk = chunks
+        .first()
+        .ok_or_else(|| anyhow!("the run produced no chunks"))?;
+
+    // The translation the user already has, as a completed chunk.
+    let previous = "Il porto era quieto quella mattina.";
+    sqlx::query("UPDATE chunk SET status='done', target_md=?2, error=NULL WHERE id=?1")
+        .bind(chunk.id.as_str())
+        .bind(previous)
+        .execute(&pool)
+        .await?;
+
+    let outcome = with_timeout(
+        run_translate_chunk(&deps, None, &chunk.id),
+        "kept translate",
+    )
+    .await??;
+    ensure!(
+        outcome.status == "needs_review",
+        "a refused attempt must still flag the chunk, got status {}",
+        outcome.status
+    );
+
+    let stored = repo::get_chunk(&pool, &chunk.id)
+        .await?
+        .ok_or_else(|| anyhow!("chunk {} disappeared", chunk.id))?;
+    ensure!(
+        stored.target_md.as_deref() == Some(previous),
+        "the stored translation was replaced by {:?}",
+        stored.target_md
+    );
+    ensure!(
+        stored
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("the previous translation was kept")),
+        "the chunk does not say the previous translation was kept: {:?}",
+        stored.error
+    );
+
+    // The rejected answer is still audited, so the two never get confused.
+    let preserved: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM llm_call WHERE role = 'translator' \
+         AND response_text IS NOT NULL AND response_text <> ''",
+    )
+    .fetch_one(&pool)
+    .await?;
+    ensure!(
+        preserved >= 1,
+        "the raw rejected response was not preserved in llm_call"
+    );
+
+    eprintln!("[walking_skeleton] a refused attempt kept the stored translation");
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Environment helpers
 // ---------------------------------------------------------------------------
