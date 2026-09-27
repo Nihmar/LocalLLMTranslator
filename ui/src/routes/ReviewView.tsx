@@ -554,6 +554,24 @@ export function ReviewView({ project, onNavigate }: ReviewViewProps) {
                     <MergeDiff before={currentText} after={proposedText} />
                   </div>
                 </div>
+
+                {proposalActive && selected !== null ? (
+                  <div className="rounded border border-line p-2">
+                    <div className="flex flex-wrap items-center gap-1">
+                      <span className="field-label">Perché questa modifica</span>
+                      <span className={severityClass(selected.severity)}>
+                        {selected.severity ?? "nota"}
+                      </span>
+                      <span className="badge badge-neutral">{selected.pass}</span>
+                    </div>
+                    <p className="field-hint">
+                      {selected.reason ??
+                        (selected.pass === "proofreader"
+                          ? "Il proofreader riscrive il blocco: nessuna spiegazione allegata."
+                          : "Nessuna spiegazione per questa proposta.")}
+                    </p>
+                  </div>
+                ) : null}
               </div>
             )}
           </div>

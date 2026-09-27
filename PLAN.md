@@ -929,7 +929,9 @@ the current book is unambiguous on every page.
    change, and a filterable QA report. The diff is a read-only CodeMirror 6 merge view
    (`@codemirror/merge`) with a dark theme built from the design tokens: the source block is a
    read-only markdown editor, the current translation and the selected proposal are the two
-   sides of the merge view. Accept/reject is a control-plane operation that rewrites a block
+   sides of the merge view. The explanation of the selected proposal is shown next to the diff as
+   well as in the suggestion card, so the reason is readable while the two texts are compared.
+   Accept/reject is a control-plane operation that rewrites a block
    translation and recomposes the chunk, so the editor never mutates the text locally.
    Passes run as `edit_chunk` / `proofread_chunk` jobs; the QA heuristics run inline on every
    validated translation and can be re-run per chunk with `qa_scan` (for example after a glossary
