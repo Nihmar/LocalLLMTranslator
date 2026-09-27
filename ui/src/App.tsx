@@ -6,6 +6,7 @@ import { formatNumber } from "./lib/format";
 import { projectGet, sidecarStatus, toErrorMessage } from "./lib/ipc";
 import type { JobCount, Project, SidecarStatus } from "./lib/types";
 import { ExportView } from "./routes/ExportView";
+import { GlossaryView } from "./routes/GlossaryView";
 import { IngestView } from "./routes/IngestView";
 import { JobsView } from "./routes/JobsView";
 import { ModelsView } from "./routes/ModelsView";
@@ -40,6 +41,7 @@ export type ViewId =
   | "models"
   | "translate"
   | "review"
+  | "glossary"
   | "export"
   | "jobs"
   | "series";
@@ -60,6 +62,15 @@ const PROJECT_NAV: readonly NavEntry[] = [
   { id: "export", step: "4", label: "Export", hint: "PDF, EPUB, DOCX" },
 ];
 
+/**
+ * Project destinations that are not pipeline steps: the glossary is the canon the translator
+ * prompt reads, reviewed while translating, so its index stays a bullet and it sits after the
+ * step that produces the candidates (the translation page runs the reconnaissance).
+ */
+const PROJECT_EXTRA_NAV: readonly NavEntry[] = [
+  { id: "glossary", step: "•", label: "Glossario", hint: "Termini, candidati, conflitti" },
+];
+
 /** Application-wide destinations, independent of any project. */
 const APP_NAV: readonly NavEntry[] = [
   { id: "projects", step: "•", label: "Progetti", hint: "Elenco, creazione, apertura" },
@@ -68,7 +79,9 @@ const APP_NAV: readonly NavEntry[] = [
   { id: "jobs", step: "•", label: "Job", hint: "Coda, ETA, log live" },
 ];
 
-const PROJECT_VIEWS: ReadonlySet<ViewId> = new Set(PROJECT_NAV.map((entry) => entry.id));
+const PROJECT_VIEWS: ReadonlySet<ViewId> = new Set(
+  [...PROJECT_NAV, ...PROJECT_EXTRA_NAV].map((entry) => entry.id),
+);
 
 const STORAGE_KEY = "llmtranslator.current_project_id";
 
@@ -102,14 +115,17 @@ function NavGroup({
   current,
   onSelect,
 }: {
-  title: string;
+  /** Omitted for a group that continues the one above it, like the project extras. */
+  title?: string | undefined;
   entries: readonly NavEntry[];
   current: ViewId;
   onSelect: (view: ViewId) => void;
 }) {
   return (
     <div className="flex flex-col gap-1">
-      <div className="nav-group-label">{title}</div>
+      {title === undefined || title === "" ? null : (
+        <div className="nav-group-label">{title}</div>
+      )}
       {entries.map((entry) => (
         <button
           key={entry.id}
@@ -270,12 +286,20 @@ export default function App() {
           </div>
         ) : (
           <nav aria-label="Sezioni del progetto aperto">
-            <NavGroup
-              title="Progetto"
-              entries={PROJECT_NAV}
-              current={view}
-              onSelect={setView}
-            />
+            <div className="flex flex-col gap-1">
+              <NavGroup
+                title="Progetto"
+                entries={PROJECT_NAV}
+                current={view}
+                onSelect={setView}
+              />
+              <NavGroup
+                title=""
+                entries={PROJECT_EXTRA_NAV}
+                current={view}
+                onSelect={setView}
+              />
+            </div>
           </nav>
         )}
 
@@ -424,6 +448,8 @@ export default function App() {
             />
           ) : view === "review" ? (
             <ReviewView project={project} onNavigate={setView} />
+          ) : view === "glossary" ? (
+            <GlossaryView project={project} onNavigate={setView} />
           ) : view === "export" ? (
             <ExportView project={project} onNavigate={setView} />
           ) : (
