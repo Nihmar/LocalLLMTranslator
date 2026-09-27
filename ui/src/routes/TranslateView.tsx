@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ActiveJobs } from "../components/ActiveJobs";
 import { BookProfilePanel } from "../components/BookProfilePanel";
 import { ChapterList } from "../components/ChapterList";
 import { ChunkTable } from "../components/ChunkTable";
@@ -42,8 +41,8 @@ import type { ViewId } from "../App";
  * opens a live preview composed from the chunks already in memory, so it follows a running
  * translation without another command or a second data source (`PLAN.md` §11.3).
  *
- * The same job rows also feed the in-flight list under the resource gauge, which names the chunk
- * every worker holds: the counters say how many jobs are running, that list says which.
+ * The job rows are fetched here too, both for the attempt counts of the table and for the
+ * in-flight summary that opens the shared job monitor.
  */
 
 export interface TranslateViewProps {
@@ -881,8 +880,6 @@ export function TranslateView({ project, onNavigate }: TranslateViewProps) {
 
         <div className="section-stack">
           <ResourceGauge metrics={metrics} loading={metricsLoading} compact />
-
-          <ActiveJobs jobs={jobs} chunks={chunks} chapterTitles={chapterTitle} loading={loading} />
 
           <div className="panel panel-pad">
             <div className="panel-title mb-2">Come si comporta la coda</div>
