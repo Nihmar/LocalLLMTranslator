@@ -17,7 +17,7 @@ import type {
 } from "../lib/types";
 
 /**
- * Book profile panel (PLAN.md §9.4, step 3 of the wizard).
+ * Book profile panel (PLAN.md §9.4, shown on the translation page).
  *
  * The profile is a **candidate** until the user confirms field by field; only then
  * `recon_confirm` writes `style_guide`/`synopsis` where the context builder reads them and the

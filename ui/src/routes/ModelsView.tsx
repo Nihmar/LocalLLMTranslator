@@ -28,8 +28,8 @@ import type {
 } from "../lib/types";
 
 /**
- * Step 2 of the wizard: endpoint CRUD, health test, model list and role assignment
- * (`PLAN.md` §11.2), plus the VRAM/queue indicator.
+ * Models page (`PLAN.md` §11.2): endpoint CRUD, health test, model list and role assignment,
+ * plus the VRAM/queue indicator.
  *
  * The secret never reaches this page: `api_key_ref` is the *name* of the entry in the OS keyring
  * (`PLAN.md` §5, "Nessun segreto nel database").

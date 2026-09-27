@@ -20,9 +20,9 @@ import { TranslateView } from "./routes/TranslateView";
  * "Job" are application-wide destinations that are always reachable. The open project itself
  * lives in the header, so it stays visible on every page (`PLAN.md` §11).
  *
- * There is deliberately no routing library: the wizard has fixed destinations, a
+ * There is deliberately no routing library: the shell has fixed destinations, a
  * `useState<ViewId>` is smaller, fully typed and needs no dependency. `PLAN.md` §11 calls each
- * step "a route you can visit freely" — which is exactly what this switcher provides.
+ * project step "a route you can visit freely" — which is exactly what this switcher provides.
  *
  * `ViewId` is exported so views can type their `onNavigate` prop; views import it with
  * `import type`, which `verbatimModuleSyntax` erases, so there is no runtime import cycle.

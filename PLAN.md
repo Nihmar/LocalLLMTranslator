@@ -852,7 +852,13 @@ and is attached to the first member book — the queue is project-scoped — wit
 
 ## 11. User interface
 
-A 5-step wizard, but each step is a freely visitable route (not a constraint):
+The numbered subsections below are stable anchors, not the on-screen order: the shell groups
+destinations by **scope**. The **project steps** — Ingestion, Translation, Review and Export —
+are the translation pipeline; the sidebar shows them only while a project is open, in reading
+order, and each one is a freely visitable route (not a constraint). The **application
+destinations** — Projects, Models, Series and the Job dashboard — are always reachable,
+independent of the open project. The open project is pinned in the header (name, language pair,
+source path), so the current book is unambiguous on every page.
 
 1. **Ingestion** — drag&drop, format detection, chapter and block preview, PDF backend
    choice, extraction result with warnings.

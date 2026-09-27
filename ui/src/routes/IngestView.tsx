@@ -11,8 +11,8 @@ import type { Chapter, Job, PdfBackend, Project, ProjectDetail, SourceFormat } f
 import type { ViewId } from "../App";
 
 /**
- * Step 1 of the wizard: drop or pick a file, see what was recognised, run the ingestion, inspect
- * the chapters that were produced (`PLAN.md` §11.1).
+ * Ingestion page (`PLAN.md` §11.1): drop or pick a file, see what was recognised, run the
+ * ingestion, inspect the chapters that were produced.
  *
  * `ingest_start` only enqueues the `ingest` job and returns its id: format detection, extraction
  * and chunk building run on the worker pool. This page therefore follows the job through

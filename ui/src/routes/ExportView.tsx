@@ -24,8 +24,8 @@ import type {
 import type { ViewId } from "../App";
 
 /**
- * Step 5 of the wizard: format, template and CSS selection, build, preview and build history
- * (`PLAN.md` §11.5).
+ * Export page (`PLAN.md` §11.5): format, template and CSS selection, build, preview and build
+ * history.
  *
  * `export_build` takes only a project and the rendering options: the backend splits the document
  * into per-chapter units itself, resolves the default template/CSS/Lua filters from the `pandoc/`

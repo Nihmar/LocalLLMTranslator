@@ -26,8 +26,7 @@ import type { Chunk, ChunkDetail, Chapter, Job, Metrics, Project } from "../lib/
 import type { ViewId } from "../App";
 
 /**
- * Step 3 of the wizard: the chunk table, the run controls and the resource gauge
- * (`PLAN.md` §11.3).
+ * Translation page (`PLAN.md` §11.3): the chunk table, the run controls and the resource gauge.
  *
  * The translation commands are **project-scoped**: `translation_start` takes a project and an
  * `only_retry` flag and `translation_cancel` takes the project id, while `translation_pause` takes

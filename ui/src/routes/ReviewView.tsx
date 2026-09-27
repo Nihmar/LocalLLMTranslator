@@ -26,7 +26,7 @@ import type {
 import type { ViewId } from "../App";
 
 /**
- * Step 4 of the wizard (`PLAN.md` §11.4): the bilingual editor.
+ * Review page (`PLAN.md` §11.4): the bilingual editor.
  *
  * Three columns per block — original, translated, corrected — with a diff rendered by the
  * CodeMirror 6 merge view (`components/CodeEditor.tsx`). Suggestions come from the editor
