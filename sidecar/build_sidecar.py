@@ -46,6 +46,13 @@ EXCLUDES = (
     "pyright",
 )
 
+#: Package data PyInstaller does not infer from the import graph. ``pymupdf4llm`` picks its
+#: markdown engine by *importing* ``pymupdf.layout``: once that import works the layout engine
+#: runs and reads its ONNX weights from ``pymupdf/layout/resources``. Collecting the module but
+#: not its data leaves a bundle whose PDF ingestion fails at run time with a missing
+#: ``layout_*.yaml`` — the weights travel inside the wheel, so nothing is downloaded.
+COLLECT_DATA = ("pymupdf.layout",)
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Build the PyInstaller onedir sidecar")
@@ -88,6 +95,8 @@ def main() -> int:
     ]
     for module in EXCLUDES:
         command += ["--exclude-module", module]
+    for package in COLLECT_DATA:
+        command += ["--collect-data", package]
     command.append(str(REPO / "pyinstaller_entry.py"))
 
     print("+ " + " ".join(command), flush=True)
