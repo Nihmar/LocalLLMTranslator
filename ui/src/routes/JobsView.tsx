@@ -5,6 +5,7 @@ import { ProgressBar } from "../components/ProgressBar";
 import { ResourceGauge } from "../components/ResourceGauge";
 import { StatusBadge } from "../components/StatusBadge";
 import { onJobProgress, onMetricsTick } from "../lib/events";
+import { useTicker } from "../lib/hooks";
 import {
   countLabel,
   estimateRemainingMs,
@@ -83,25 +84,6 @@ const KIND_FILTERS: ReadonlyArray<{ value: string; label: string }> = [
 
 function kindLabel(kind: string): string {
   return KIND_LABELS[kind] ?? kind;
-}
-
-/** Re-renders on an interval while `active`, so elapsed time and ETA keep moving. */
-function useTicker(active: boolean, intervalMs = 1000): number {
-  const [now, setNow] = useState<number>(() => Date.now());
-
-  useEffect(() => {
-    if (!active) {
-      return;
-    }
-    const timer = window.setInterval(() => {
-      setNow(Date.now());
-    }, intervalMs);
-    return () => {
-      window.clearInterval(timer);
-    };
-  }, [active, intervalMs]);
-
-  return now;
 }
 
 interface EtaView {
