@@ -133,6 +133,29 @@ def _escape_destination(url: str) -> str:
     return url.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
 
 
+#: Block markers Markdown would read at the start of a line instead of the paragraph the
+#: source had. An ordered item escapes its delimiter, the others escape the marker itself.
+_ORDERED_MARKER_RE = re.compile(r"^ {0,3}\d{1,9}([.)])(?:\s|$)")
+_BULLET_MARKER_RE = re.compile(r"^ {0,3}([-+*#>|])(?:\s|$)")
+
+
+def _escape_leading_marker(text: str) -> str:
+    """Backslash-escape a leading marker so the text stays the paragraph the EPUB had.
+
+    Publishers set dialogue as ``<p><span>-</span> <span>…</span></p>``: a paragraph whose
+    text begins with a dash. Written as ``- Bonjour`` Markdown reads a *list*, and the chunk
+    then declares list blocks the translator is asked to reproduce — a translation that
+    renders the same dialogue as prose changes the block count and is refused. ``\\-`` keeps
+    the dash, keeps the paragraph, and renders as the dash the book printed.
+    """
+    for pattern in (_ORDERED_MARKER_RE, _BULLET_MARKER_RE):
+        match = pattern.match(text)
+        if match is not None:
+            start = match.start(1)
+            return f"{text[:start]}\\{text[start:]}"
+    return text
+
+
 def _alignment(cell: Tag) -> str:
     classes = _classes(cell)
     if "right" in classes:
@@ -268,7 +291,7 @@ class _ChapterRenderer:
                 text = _collapse(str(child)).strip()
                 if text:
                     self._warn(self._FLATTEN_WARNING)
-                    blocks.append(text)
+                    blocks.append(_escape_leading_marker(text))
                 continue
             if isinstance(child, Tag) and child.name.lower() not in _IGNORED:
                 blocks.append(self._block(child))
@@ -284,7 +307,7 @@ class _ChapterRenderer:
         return f"{'#' * level} {self._inline_children(tag).strip()}"
 
     def _paragraph(self, tag: Tag) -> str:
-        return self._inline_children(tag).strip()
+        return _escape_leading_marker(self._inline_children(tag).strip())
 
     def _horizontal_rule(self, _tag: Tag) -> str:
         return "---"

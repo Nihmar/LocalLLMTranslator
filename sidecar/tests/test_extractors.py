@@ -331,6 +331,59 @@ def test_epub_escapes_markdown_breakers_in_images_and_links(tmp_path: Path) -> N
     assert serialize(split_blocks(markdown)) == markdown
 
 
+# -- Dialogue dashes stay paragraphs instead of turning into list blocks -----------------
+
+
+def test_epub_keeps_a_leading_dash_a_paragraph(tmp_path: Path) -> None:
+    # Publishers mark dialogue as <p><span>-</span> <span>…</span></p>. Emitted as
+    # "- Bonjour" Markdown reads a list, the chunk then declares list blocks, and a
+    # translation that renders the same dialogue as prose no longer matches its block count.
+    body = (
+        "<p><span>-</span> <span>Voilà, dit-il.</span></p>"
+        "<p><span>-</span> <span>Allons-y !</span></p>"
+        "<p>A plain paragraph.</p>"
+        "<ul><li>a real item</li></ul>"
+    )
+    source = tmp_path / "dialogue.epub"
+    _write_epub(source, body)
+
+    markdown = produced(extract(str(source), str(tmp_path / "work")))
+
+    assert "\\- Voilà, dit-il." in markdown
+    kinds = [block.kind for block in split_blocks(markdown)]
+    assert kinds.count("para") == 3, kinds
+    assert kinds.count("list") == 1, kinds
+    assert serialize(split_blocks(markdown)) == markdown
+
+
+def test_epub_escapes_every_marker_that_would_change_the_block(tmp_path: Path) -> None:
+    body = (
+        "<p># not a heading</p>"
+        "<p>1. not an ordered item</p>"
+        "<p>&gt; not a quote</p>"
+        "<p>| not a table row</p>"
+        "<p>* not a bullet</p>"
+        # A marker inside the text, and one without the space that makes it a block, stay put.
+        "<p>a dash - inside</p>"
+        "<p>#not-a-heading</p>"
+    )
+    source = tmp_path / "markers.epub"
+    _write_epub(source, body)
+
+    markdown = produced(extract(str(source), str(tmp_path / "work")))
+
+    assert "\\# not a heading" in markdown
+    assert "1\\. not an ordered item" in markdown
+    assert "\\> not a quote" in markdown
+    assert "\\| not a table row" in markdown
+    assert "\\* not a bullet" in markdown
+    assert "a dash - inside" in markdown
+    assert "#not-a-heading" in markdown
+    kinds = [block.kind for block in split_blocks(markdown)]
+    assert kinds.count("para") == 7, kinds
+    assert serialize(split_blocks(markdown)) == markdown
+
+
 # -- M3: the NDJSON transport requires that extract never writes to fd 1 ----------------
 
 

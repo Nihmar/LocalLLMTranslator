@@ -203,6 +203,15 @@ Granularity choices for the MVP, with rationale:
 - **Heading**: the `#` are removed from the text sent and rebuilt from `attrs.text_prefix`,
   so the model cannot change the heading level.
 
+**An extractor must not hand the IR a paragraph that reads as another block.** Publishers mark
+dialogue with a leading dash inside a paragraph (`<p><span>-</span> <span>…</span></p>`), which
+becomes `- Bonjour` in Markdown — and this parser, correctly, reads that as a *list*. The chunk
+then declares list blocks, and a translation that renders the same dialogue as prose comes back
+with a different block count and is refused for ever. The converters escape the marker
+(`\- Bonjour`), the standard Markdown escape, so the paragraph stays a paragraph while the dash
+still renders as the dash the book printed. The same rule covers a leading `+`, `*`, `#`, `>`,
+`|` and an ordered item, whose delimiter is what gets escaped (`1\.`).
+
 Two distinct functions:
 
 - `serialize(blocks) -> str` — **identical** reconstruction of the source (invariant + documents
