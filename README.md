@@ -227,7 +227,10 @@ make build    # sidecar onedir (PyInstaller) + Tauri bundle
 
 `make build` runs `uv run --extra package python -m build_sidecar`, which produces
 `sidecar/packaging/llmtranslator_sidecar/` (onedir: faster start-up and fewer antivirus false
-positives than `onefile`), then `cargo tauri build`. The directory is tracked through a
+positives than `onefile`), then `cargo tauri build`. `make build BUNDLES=appimage` limits the
+bundle to one target (deb/rpm need `dpkg-deb`/`rpmbuild` on the machine, and the AppImage
+bundler's own `strip` is older than recent glibc libraries, so the target sets `NO_STRIP=1`;
+stripping is optional there). The directory is tracked through a
 `.gitkeep`, so `cargo check` works before the sidecar was ever built. The Tauri resources declared
 in `crates/app/tauri.conf.json` ship that directory, `prompts/` and the `pandoc/` template/
 filter/style directories, so a packaged app finds the sidecar, the prompt defaults and the
