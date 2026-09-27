@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
+import { JobMonitor } from "./components/JobMonitor";
 import { StatusBadge } from "./components/StatusBadge";
-import { onSidecarStatus } from "./lib/events";
+import { onMetricsTick, onSidecarStatus } from "./lib/events";
+import { formatNumber } from "./lib/format";
 import { projectGet, sidecarStatus, toErrorMessage } from "./lib/ipc";
-import type { Project, SidecarStatus } from "./lib/types";
+import type { JobCount, Project, SidecarStatus } from "./lib/types";
 import { ExportView } from "./routes/ExportView";
 import { IngestView } from "./routes/IngestView";
 import { JobsView } from "./routes/JobsView";
@@ -26,6 +28,10 @@ import { TranslateView } from "./routes/TranslateView";
  *
  * `ViewId` is exported so views can type their `onNavigate` prop; views import it with
  * `import type`, which `verbatimModuleSyntax` erases, so there is no runtime import cycle.
+ *
+ * The header carries the job monitor's trigger: "what is running, and can I stop it?" is asked
+ * from every page, so the dialog is mounted once here and the queue count comes from the same
+ * `metrics://tick` snapshot the resource gauges read.
  */
 
 export type ViewId =
@@ -131,6 +137,8 @@ export default function App() {
   const [restoring, setRestoring] = useState(true);
   const [sidecar, setSidecar] = useState<SidecarStatus | null>(null);
   const [sidecarError, setSidecarError] = useState<string | null>(null);
+  const [jobsOpen, setJobsOpen] = useState(false);
+  const [queue, setQueue] = useState<readonly JobCount[]>([]);
 
   const refreshSidecar = useCallback(async () => {
     try {
@@ -190,6 +198,10 @@ export default function App() {
     setSidecarError(null);
   }), []);
 
+  useEffect(() => onMetricsTick((tick) => {
+    setQueue(tick.jobs);
+  }), []);
+
   const handleOpenProject = useCallback((opened: Project) => {
     setProject(opened);
   }, []);
@@ -209,9 +221,16 @@ export default function App() {
 
   const sidecarReady = sidecar !== null && sidecar.state === "running";
 
+  // Queue depth from the last metrics tick: the trigger has to say something even before the
+  // monitor is opened, and a subscription is cheaper than polling `job_list` here.
+  const queueCount = (state: string): number =>
+    queue.find((entry) => entry.state === state)?.count ?? 0;
+  const runningJobs = queueCount("running") + queueCount("leased");
+  const pendingJobs = queueCount("pending");
+
   return (
     <div className="app-canvas">
-      {/* Sidebar: project steps first, application destinations below. */}
+      {/* Sidebar: application destinations first, project steps below. */}
       <aside className="flex w-60 shrink-0 flex-col gap-4 border-r border-line bg-surface/60 p-3">
         <div className="flex items-center gap-2 px-1 py-1">
           <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-accent font-mono text-sm font-bold text-canvas">
@@ -304,6 +323,26 @@ export default function App() {
           <div className="flex shrink-0 items-center gap-2">
             <button
               type="button"
+              className="btn btn-sm"
+              onClick={() => {
+                setJobsOpen(true);
+              }}
+              title={
+                runningJobs === 0 && pendingJobs === 0
+                  ? "Nessun lavoro in coda: apri il monitor"
+                  : `${String(runningJobs)} in esecuzione, ${String(pendingJobs)} in attesa: apri il monitor`
+              }
+            >
+              Lavori
+              {runningJobs > 0 ? (
+                <span className="mono-chip">{formatNumber(runningJobs)}</span>
+              ) : pendingJobs > 0 ? (
+                <span className="mono-chip">{formatNumber(pendingJobs)} in coda</span>
+              ) : null}
+            </button>
+
+            <button
+              type="button"
               className="btn btn-sm btn-ghost"
               disabled={sidecar === null && sidecarError === null}
               title={
@@ -376,7 +415,13 @@ export default function App() {
           ) : view === "models" ? (
             <ModelsView />
           ) : view === "translate" ? (
-            <TranslateView project={project} onNavigate={setView} />
+            <TranslateView
+              project={project}
+              onNavigate={setView}
+              onOpenJobs={() => {
+                setJobsOpen(true);
+              }}
+            />
           ) : view === "review" ? (
             <ReviewView project={project} onNavigate={setView} />
           ) : view === "export" ? (
@@ -386,6 +431,15 @@ export default function App() {
           )}
         </main>
       </div>
+
+      {jobsOpen ? (
+        <JobMonitor
+          projectId={project?.id ?? null}
+          onClose={() => {
+            setJobsOpen(false);
+          }}
+        />
+      ) : null}
     </div>
   );
 }

@@ -11,6 +11,7 @@ import { StatusBadge } from "../components/StatusBadge";
 import { chapterProgress, composePreview } from "../lib/chapters";
 import { onJobProgress, onMetricsTick } from "../lib/events";
 import { countLabel, formatNumber, formatTokens } from "../lib/format";
+import { isActiveJobState } from "../lib/jobs";
 import {
   chunkGet,
   chunkList,
@@ -48,6 +49,8 @@ import type { ViewId } from "../App";
 export interface TranslateViewProps {
   project: Project | null;
   onNavigate: (view: ViewId) => void;
+  /** Opens the shared job monitor, scoped to the open project. */
+  onOpenJobs: () => void;
 }
 
 const STATUS_FILTERS: ReadonlyArray<{ value: string; label: string }> = [
@@ -129,7 +132,7 @@ function blockOriginLabel(origin: string): string {
   }
 }
 
-export function TranslateView({ project, onNavigate }: TranslateViewProps) {
+export function TranslateView({ project, onNavigate, onOpenJobs }: TranslateViewProps) {
   const [chunks, setChunks] = useState<Chunk[]>([]);
   const [chapters, setChapters] = useState<Chapter[]>([]);
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -300,6 +303,14 @@ export function TranslateView({ project, onNavigate }: TranslateViewProps) {
   );
 
   const counts = useMemo(() => countStatuses(chunks), [chunks]);
+  const activeJobs = useMemo(
+    () => jobs.filter((job) => isActiveJobState(job.state)).length,
+    [jobs],
+  );
+  const pendingJobs = useMemo(
+    () => jobs.filter((job) => job.state === "pending").length,
+    [jobs],
+  );
   const totalTokens = useMemo(
     () => chunks.reduce((sum, chunk) => sum + chunk.token_estimate, 0),
     [chunks],
@@ -880,6 +891,32 @@ export function TranslateView({ project, onNavigate }: TranslateViewProps) {
 
         <div className="section-stack">
           <ResourceGauge metrics={metrics} loading={metricsLoading} compact />
+
+          <div className="panel panel-pad">
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <div className="min-w-0">
+                <div className="panel-title">Lavori in corso</div>
+                <p className="mt-1 text-xs text-muted">
+                  {countLabel(activeJobs, "job in esecuzione", "job in esecuzione")}
+                  {pendingJobs > 0
+                    ? ` · ${countLabel(pendingJobs, "job in attesa", "job in attesa")}`
+                    : ""}
+                </p>
+              </div>
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={onOpenJobs}
+                title="Elenco dei lavori di questo e degli altri progetti, con la possibilità di interromperne uno"
+              >
+                Apri elenco
+              </button>
+            </div>
+            <p className="field-hint">
+              Il monitor dice quale chunk sta traducendo ogni worker e permette di interrompere un
+              lavoro senza fermare la coda.
+            </p>
+          </div>
 
           <div className="panel panel-pad">
             <div className="panel-title mb-2">Come si comporta la coda</div>
