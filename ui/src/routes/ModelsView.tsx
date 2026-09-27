@@ -14,6 +14,7 @@ import {
   metricsGet,
   roleBindingList,
   roleBindingSet,
+  roleBindingDelete,
   toErrorMessage,
 } from "../lib/ipc";
 import type {
@@ -163,6 +164,9 @@ export function ModelsView() {
   });
   const [bindingError, setBindingError] = useState<string | null>(null);
   const [savingBinding, setSavingBinding] = useState(false);
+  // Two-step removal, like the endpoint table: losing an assignment by mistake means re-picking
+  // endpoint and model, so the row asks once.
+  const [confirmRemoveBindingId, setConfirmRemoveBindingId] = useState<string | null>(null);
 
   const [metrics, setMetrics] = useState<Metrics | null>(null);
   const [metricsLoading, setMetricsLoading] = useState(true);
@@ -361,6 +365,17 @@ export function ModelsView() {
       }
     } catch (deleteError) {
       setError(toErrorMessage(deleteError));
+    }
+  }
+
+  async function handleRemoveBinding(bindingId: string) {
+    setBindingsError(null);
+    try {
+      await roleBindingDelete(bindingId);
+      setBindings((current) => current.filter((binding) => binding.id !== bindingId));
+      setConfirmRemoveBindingId(null);
+    } catch (removeError) {
+      setBindingsError(toErrorMessage(removeError));
     }
   }
 
@@ -894,6 +909,7 @@ export function ModelsView() {
                         <th style={{ width: "5rem" }} className="num">
                           Priorità
                         </th>
+                        <th style={{ width: "8rem" }} />
                       </tr>
                     </thead>
                     <tbody>
@@ -911,6 +927,41 @@ export function ModelsView() {
                               {endpoint === undefined ? binding.endpoint_id : endpoint.name}
                             </td>
                             <td className="num">{formatNumber(binding.priority)}</td>
+                            <td className="text-right">
+                              {confirmRemoveBindingId === binding.id ? (
+                                <span className="flex flex-wrap justify-end gap-1">
+                                  <button
+                                    type="button"
+                                    className="btn btn-sm btn-danger"
+                                    onClick={() => {
+                                      void handleRemoveBinding(binding.id);
+                                    }}
+                                  >
+                                    Conferma
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="btn btn-sm btn-ghost"
+                                    onClick={() => {
+                                      setConfirmRemoveBindingId(null);
+                                    }}
+                                  >
+                                    No
+                                  </button>
+                                </span>
+                              ) : (
+                                <button
+                                  type="button"
+                                  className="btn btn-sm btn-ghost"
+                                  title="Toglie questo ruolo dal modello scelto"
+                                  onClick={() => {
+                                    setConfirmRemoveBindingId(binding.id);
+                                  }}
+                                >
+                                  Rimuovi
+                                </button>
+                              )}
+                            </td>
                           </tr>
                         );
                       })}
@@ -1055,6 +1106,10 @@ export function ModelsView() {
               <li>
                 Il limite di concorrenza per endpoint è{" "}
                 <span className="mono-chip">min(concorrenza, slot totali)</span>.
+              </li>
+              <li>
+                «Rimuovi» toglie un&apos;assegnazione: il ruolo resta non assegnato finché non ne
+                scegli un&apos;altra, e l&apos;endpoint torna libero per altri ruoli.
               </li>
               <li>
                 Il budget di contesto viene letto da <span className="mono-chip">/props</span>, non

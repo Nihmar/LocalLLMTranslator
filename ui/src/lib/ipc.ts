@@ -98,6 +98,7 @@ const COMMANDS = {
   endpointModels: "endpoint_models",
   roleBindingList: "role_binding_list",
   roleBindingSet: "role_binding_set",
+  roleBindingDelete: "role_binding_delete",
   ingestStart: "ingest_start",
   translationStart: "translation_start",
   translationPause: "translation_pause",
@@ -281,6 +282,11 @@ export function roleBindingList(): Promise<RoleBinding[]> {
 
 export function roleBindingSet(request: RoleBindingSet): Promise<RoleBinding> {
   return call<RoleBinding>(COMMANDS.roleBindingSet, { req: request });
+}
+
+/** Remove one role assignment, so a role can be unassigned from a model. */
+export function roleBindingDelete(id: string): Promise<Ack> {
+  return call<Ack>(COMMANDS.roleBindingDelete, { id });
 }
 
 // --- ingestion -----------------------------------------------------------------------------
