@@ -279,7 +279,12 @@ fn resolve_data_dir(app: &tauri::AppHandle) -> Result<PathBuf> {
         .map_err(|error| AppError::Other(anyhow::anyhow!("no app data dir: {error}")))
 }
 
-async fn build_state(
+/// Build the control plane from a data dir and a resource dir.
+///
+/// The Tauri shell and the headless server (`llmtz serve`) share it: it opens the
+/// database, recovers interrupted work, starts the sidecar supervisor, the resource
+/// budget, the worker pool and the periodic event emitters.
+pub async fn build_state(
     data_dir: PathBuf,
     resource_dir: Option<PathBuf>,
     emitter: Arc<dyn EventEmitter>,
@@ -408,7 +413,7 @@ async fn build_state(
 /// Forward sidecar status changes to the `sidecar://status` event.
 fn spawn_status_forwarder(emitter: Arc<dyn EventEmitter>, supervisor: Arc<Supervisor>) {
     let mut receiver = supervisor.subscribe_status();
-    tauri::async_runtime::spawn(async move {
+    tokio::spawn(async move {
         loop {
             match receiver.recv().await {
                 Ok(status) => emit_event(&*emitter, EVENT_SIDECAR_STATUS, status),
@@ -427,7 +432,7 @@ fn spawn_metrics_ticker(
     worker: Arc<WorkerPool>,
     supervisor: Arc<Supervisor>,
 ) {
-    tauri::async_runtime::spawn(async move {
+    tokio::spawn(async move {
         let mut ticker = tokio::time::interval(std::time::Duration::from_secs(3));
         loop {
             ticker.tick().await;
