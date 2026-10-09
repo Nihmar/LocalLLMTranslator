@@ -152,7 +152,12 @@ pub async fn effective_terms(pool: &SqlitePool, project_id: &str) -> Result<Vec<
         if key.is_empty() {
             continue;
         }
-        overridden.insert(key);
+        // Case-variant duplicates are possible (the unique key is case-sensitive). Only
+        // the first one reaches the prompt, so the effective glossary is deterministic
+        // and the translator never sees two renderings of the same term.
+        if !overridden.insert(key) {
+            continue;
+        }
         terms.push(ResolvedTerm {
             source: term.source,
             target: term.target,
@@ -736,6 +741,21 @@ mod tests {
             .collect();
         seen.sort_unstable();
         assert_eq!(seen, [("Spires", "Spires"), ("ship", "nave")]);
+    }
+
+    #[tokio::test]
+    async fn case_variant_project_terms_collapse_to_one_entry() {
+        let (pool, _dir) = crate::db::connect_temp_file().await.expect("pool");
+        let project = seed(&pool, Some("en")).await;
+        // The unique key is case-sensitive, so both rows can exist.
+        add_project_term(&pool, &project.id, "Keeper", "custode", "approved").await;
+        add_project_term(&pool, &project.id, "keeper", "guardiano", "approved").await;
+
+        let terms = effective_terms(&pool, &project.id).await.expect("terms");
+        assert_eq!(terms.len(), 1, "one entry per case-folded source");
+        // `list_glossary_terms` orders by source, so the first (`Keeper`) wins.
+        assert_eq!(terms[0].source, "Keeper");
+        assert_eq!(terms[0].target, "custode");
     }
 
     #[tokio::test]
