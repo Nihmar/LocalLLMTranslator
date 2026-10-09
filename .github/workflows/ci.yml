@@ -118,5 +118,13 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
       - name: Test
         run: cargo test
+      # `cargo test` regenerates the ts-rs bindings; a diff means they were not committed.
+      - name: TypeScript bindings are current
+        run: |
+          if [ -n "$(git status --porcelain -- ui/src/lib/generated)" ]; then
+            echo "TypeScript bindings are stale: run 'make bindings' and commit ui/src/lib/generated"
+            git status --short -- ui/src/lib/generated
+            exit 1
+          fi
       - name: Check
         run: cargo check

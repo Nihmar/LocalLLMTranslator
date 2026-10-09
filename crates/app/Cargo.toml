@@ -38,6 +38,7 @@ regex.workspace = true
 async-trait.workspace = true
 bytes.workspace = true
 zip.workspace = true
+ts-rs.workspace = true
 
 [dev-dependencies]
 wiremock.workspace = true

@@ -60,6 +60,7 @@ regex = "1"
 async-trait = "0.1"
 bytes = "1"
 zip = { version = "2", default-features = false, features = ["deflate"] }
+ts-rs = { version = "12", features = ["serde-json-impl"] }
 
 # Test-only helpers.
 wiremock = "0.6"

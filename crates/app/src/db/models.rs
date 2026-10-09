@@ -7,7 +7,8 @@ use serde::{Deserialize, Serialize};
 // Database rows
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, ts_rs::TS)]
+#[ts(export)]
 pub struct Project {
     pub id: String,
     pub name: String,
@@ -28,7 +29,8 @@ pub struct Project {
     pub updated_at: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, ts_rs::TS)]
+#[ts(export)]
 pub struct Document {
     pub id: String,
     pub project_id: String,
@@ -39,7 +41,8 @@ pub struct Document {
     pub created_at: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, ts_rs::TS)]
+#[ts(export)]
 pub struct Chapter {
     pub id: String,
     pub document_id: String,
@@ -54,7 +57,8 @@ pub struct Chapter {
     pub status: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, ts_rs::TS)]
+#[ts(export)]
 pub struct Block {
     pub id: String,
     pub document_id: String,
@@ -69,7 +73,8 @@ pub struct Block {
     pub content_hash: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, ts_rs::TS)]
+#[ts(export)]
 pub struct Chunk {
     pub id: String,
     pub document_id: String,
@@ -91,7 +96,8 @@ pub struct Chunk {
     pub updated_at: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, ts_rs::TS)]
+#[ts(export)]
 pub struct BlockTranslation {
     pub block_id: String,
     pub chunk_id: String,
@@ -102,7 +108,8 @@ pub struct BlockTranslation {
     pub updated_at: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, ts_rs::TS)]
+#[ts(export)]
 pub struct Suggestion {
     pub id: String,
     pub chunk_id: String,
@@ -119,7 +126,8 @@ pub struct Suggestion {
     pub decided_at: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, ts_rs::TS)]
+#[ts(export)]
 pub struct QaFinding {
     pub id: String,
     pub project_id: String,
@@ -132,7 +140,8 @@ pub struct QaFinding {
     pub created_at: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, ts_rs::TS)]
+#[ts(export)]
 pub struct GlossaryTerm {
     pub id: String,
     pub project_id: String,
@@ -147,7 +156,8 @@ pub struct GlossaryTerm {
     pub status: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, ts_rs::TS)]
+#[ts(export)]
 pub struct ProjectMemory {
     pub project_id: String,
     pub key: String,
@@ -157,7 +167,8 @@ pub struct ProjectMemory {
 }
 
 /// A book series: the shared canon a project inherits (PLAN.md §9.5).
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, ts_rs::TS)]
+#[ts(export)]
 pub struct Series {
     pub id: String,
     pub name: String,
@@ -170,7 +181,8 @@ pub struct Series {
 }
 
 /// A series glossary term. Same shape as [`GlossaryTerm`], scoped to a series.
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, ts_rs::TS)]
+#[ts(export)]
 pub struct SeriesGlossaryTerm {
     pub id: String,
     pub series_id: String,
@@ -186,14 +198,16 @@ pub struct SeriesGlossaryTerm {
 }
 
 /// A surface form of a series term (`the Keeper`, `Keeper's`).
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, ts_rs::TS)]
+#[ts(export)]
 pub struct SeriesGlossaryVariant {
     pub id: String,
     pub term_id: String,
     pub text: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, ts_rs::TS)]
+#[ts(export)]
 pub struct SeriesMemory {
     pub series_id: String,
     pub key: String,
@@ -202,7 +216,8 @@ pub struct SeriesMemory {
     pub updated_at: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, ts_rs::TS)]
+#[ts(export)]
 pub struct LlmEndpoint {
     pub id: String,
     pub name: String,
@@ -215,7 +230,8 @@ pub struct LlmEndpoint {
     pub props_json: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, ts_rs::TS)]
+#[ts(export)]
 pub struct RoleBinding {
     pub id: String,
     pub endpoint_id: String,
@@ -225,7 +241,8 @@ pub struct RoleBinding {
     pub priority: i64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, ts_rs::TS)]
+#[ts(export)]
 pub struct Job {
     pub id: String,
     pub project_id: String,
@@ -244,7 +261,8 @@ pub struct Job {
     pub finished_at: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, ts_rs::TS)]
+#[ts(export)]
 pub struct LlmCall {
     pub id: String,
     pub job_id: Option<String>,
@@ -270,7 +288,8 @@ pub struct LlmCall {
     pub created_at: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, ts_rs::TS)]
+#[ts(export)]
 pub struct TranslationCacheRow {
     pub prompt_hash: String,
     pub model: String,
@@ -280,7 +299,8 @@ pub struct TranslationCacheRow {
     pub created_at: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, ts_rs::TS)]
+#[ts(export)]
 pub struct TranslationMemoryRow {
     pub content_hash: String,
     pub model: String,
@@ -305,7 +325,8 @@ fn default_order() -> i64 {
 }
 
 /// `Block` as produced by the sidecar (`order` + `attrs`, not the DB columns).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
 pub struct BlockIr {
     pub id: String,
     #[serde(default)]
@@ -328,7 +349,8 @@ pub struct BlockIr {
 }
 
 /// `Chapter` as produced by the sidecar.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
 pub struct ChapterIr {
     pub id: String,
     #[serde(default = "default_order")]
@@ -344,7 +366,8 @@ pub struct ChapterIr {
 }
 
 /// `Chunk` as produced by the sidecar.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
 pub struct ChunkIr {
     pub id: String,
     #[serde(default)]
