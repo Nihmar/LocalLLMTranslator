@@ -20,6 +20,7 @@
  */
 
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { postCommand } from "./http.ts";
 import type {
   Ack,
   Chunk,
@@ -208,11 +209,15 @@ export function toErrorMessage(error: unknown): string {
 
 async function call<TResult>(command: string, args?: Record<string, unknown>): Promise<TResult> {
   try {
-    return await invoke<TResult>(command, args);
+    if (isTauriRuntime()) {
+      return await invoke<TResult>(command, args);
+    }
+    // No Tauri shell: the page is served by the headless server (`PLAN.md` §12.3).
+    return (await postCommand(command, args)) as TResult;
   } catch (error) {
     const message = toErrorMessage(error);
     // Every failure the user sees is recorded in the diagnostics log with the command
-    // name. The report call uses `invoke` directly so it can never recurse.
+    // name. The report call bypasses `call()` so it can never recurse.
     void reportFrontendError(command, message);
     throw new Error(message);
   }
@@ -224,7 +229,11 @@ async function call<TResult>(command: string, args?: Record<string, unknown>): P
  */
 async function reportFrontendError(command: string, message: string): Promise<void> {
   try {
-    await invoke(COMMANDS.diagnosticLogFrontendError, { command, message });
+    if (isTauriRuntime()) {
+      await invoke(COMMANDS.diagnosticLogFrontendError, { command, message });
+    } else {
+      await postCommand(COMMANDS.diagnosticLogFrontendError, { command, message });
+    }
   } catch {
     // Nothing to do: the backend is unreachable, and the original error still reaches the UI.
   }

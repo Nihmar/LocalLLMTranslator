@@ -15,6 +15,8 @@
 
 import { listen } from "@tauri-apps/api/event";
 import type { UnlistenFn } from "@tauri-apps/api/event";
+import { apiHeaders, parseBody } from "./http.ts";
+import { isTauriRuntime } from "./ipc.ts";
 import type {
   ExportProgressEvent,
   JobProgressEvent,
@@ -48,6 +50,10 @@ export function subscribe<TPayload>(
   event: EventName,
   handler: (payload: TPayload) => void,
 ): Unsubscribe {
+  if (!isTauriRuntime()) {
+    // The headless server streams the same events over SSE (`PLAN.md` §12.3).
+    return subscribeStream(event, (payload) => handler(payload as TPayload));
+  }
   let unlisten: UnlistenFn | null = null;
   let disposed = false;
 
@@ -72,6 +78,103 @@ export function subscribe<TPayload>(
       unlisten = null;
     }
   };
+}
+
+// --- SSE transport (no Tauri shell) ---------------------------------------------------------
+
+/** How long to wait before reopening the event stream after a drop. */
+const SSE_RECONNECT_MS = 2000;
+
+type SseHandler = (payload: unknown) => void;
+
+/** All subscribers of the one event stream, by event name. */
+const sseHandlers = new Map<string, Set<SseHandler>>();
+let sseLoop: Promise<void> | null = null;
+
+/** Joins the shared event stream; the stream itself outlives individual subscribers. */
+function subscribeStream(event: string, handler: SseHandler): Unsubscribe {
+  let handlers = sseHandlers.get(event);
+  if (handlers === undefined) {
+    handlers = new Set();
+    sseHandlers.set(event, handlers);
+  }
+  handlers.add(handler);
+  ensureEventStream();
+  return () => {
+    const current = sseHandlers.get(event);
+    current?.delete(handler);
+    if (current !== undefined && current.size === 0) {
+      sseHandlers.delete(event);
+    }
+  };
+}
+
+/** Starts the reconnecting reader once; every subscriber shares it. */
+function ensureEventStream(): void {
+  if (sseLoop !== null) {
+    return;
+  }
+  sseLoop = (async () => {
+    for (;;) {
+      try {
+        await consumeEventStream();
+      } catch (error) {
+        console.error("[events] event stream interrupted, retrying", error);
+      }
+      await new Promise((resolve) => setTimeout(resolve, SSE_RECONNECT_MS));
+    }
+  })();
+}
+
+/** Reads `GET /api/events` and dispatches each frame to the subscribers of its event name. */
+async function consumeEventStream(): Promise<void> {
+  const response = await fetch("/api/events", { headers: apiHeaders() });
+  if (!response.ok || response.body === null) {
+    throw new Error(`the event stream answered HTTP ${response.status}`);
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) {
+      return;
+    }
+    buffer = (buffer + decoder.decode(value, { stream: true })).replace(/\r\n/g, "\n");
+    let boundary = buffer.indexOf("\n\n");
+    while (boundary >= 0) {
+      dispatchFrame(buffer.slice(0, boundary));
+      buffer = buffer.slice(boundary + 2);
+      boundary = buffer.indexOf("\n\n");
+    }
+  }
+}
+
+/** One Server-Sent Event frame (`event:` + `data:` lines). */
+function dispatchFrame(frame: string): void {
+  let name = "message";
+  const data: string[] = [];
+  for (const line of frame.split("\n")) {
+    if (line.startsWith(":")) {
+      continue; // a keep-alive comment
+    }
+    const colon = line.indexOf(":");
+    const field = colon >= 0 ? line.slice(0, colon) : line;
+    const value = colon >= 0 ? line.slice(colon + 1).replace(/^ /, "") : "";
+    if (field === "event") {
+      name = value;
+    } else if (field === "data") {
+      data.push(value);
+    }
+  }
+  const handlers = sseHandlers.get(name);
+  if (data.length === 0 || handlers === undefined || handlers.size === 0) {
+    return;
+  }
+  const payload = parseBody(data.join("\n"));
+  for (const handler of handlers) {
+    handler(payload);
+  }
 }
 
 /**
