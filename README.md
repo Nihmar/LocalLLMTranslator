@@ -149,8 +149,10 @@ kept in `llm_call.reasoning_text` for the same diagnosis. Two ways out, both per
 { "temperature": 0.2, "top_p": 0.95, "max_tokens": 8192 }
 ```
 
-The first turns the thinking off for that role: the object is forwarded to `llama-server` verbatim
-as the request's `chat_template_kwargs`. Verified on the Gemma-4 aliases, `enable_thinking: false`
+The JSON roles (editor, proofreader, orchestrator) already send `enable_thinking: false` when
+the binding does not mention it, so the first form matters for the translator, or to turn the
+thinking back **on** for a JSON role with `"enable_thinking": true` and a larger `max_tokens`.
+The object is forwarded to `llama-server` as the request's `chat_template_kwargs`. Verified on the Gemma-4 aliases, `enable_thinking: false`
 is the key that switches it off; a per-request `reasoning_effort` does **not** override the
 server's `--chat-template-kwargs`, so such a role keeps thinking at the server's effort whatever
 the binding says. The second form gives the thinking and the JSON room to coexist.

@@ -4,7 +4,7 @@
 //! the bilingual editor and the proofreader (§8): all of them stream from
 //! `llama-server` and must leave the same `llm_call` audit trail. The translation
 //! path uses it too. Only the `response_format` differs — a JSON schema for the
-//! structured passes, `None` for a plain text answer like the proofreader's.
+//! structured passes, `None` for the translator's plain text answer.
 
 use std::time::Instant;
 
@@ -152,6 +152,27 @@ fn retry_budget(call: &ChatCall<'_>, answer: &ChatAnswer) -> Option<u32> {
         .map(|cap| cap.saturating_mul(2).min(RETRY_MAX_TOKENS_CEILING))
 }
 
+/// The `chat_template_kwargs` to send. A structured pass turns a reasoning model's
+/// thinking off unless the binding says otherwise: the thinking spends the small
+/// JSON budget before any answer (every orchestrator call of the real project ended
+/// `finish_reason=length` until the binding set it by hand). A model without a
+/// thinking switch ignores the variable.
+fn template_kwargs(params: &Value, structured: bool) -> Option<Value> {
+    let configured = params.get("chat_template_kwargs").cloned();
+    if !structured {
+        return configured;
+    }
+    let mut kwargs = match configured {
+        Some(Value::Object(map)) => map,
+        Some(other) => return Some(other),
+        None => serde_json::Map::new(),
+    };
+    kwargs
+        .entry("enable_thinking")
+        .or_insert(Value::Bool(false));
+    Some(Value::Object(kwargs))
+}
+
 /// Run one call and return everything it produced. Success and failure are both
 /// recorded in `llm_call`, so a job can be audited after the fact.
 pub async fn run_chat_call_full(deps: &PipelineDeps, call: &ChatCall<'_>) -> Result<ChatAnswer> {
@@ -183,7 +204,7 @@ pub async fn run_chat_call_full(deps: &PipelineDeps, call: &ChatCall<'_>) -> Res
     if let Some(grammar) = params.get("grammar").and_then(Value::as_str) {
         request.grammar = Some(grammar.to_string());
     }
-    request.chat_template_kwargs = params.get("chat_template_kwargs").cloned();
+    request.chat_template_kwargs = template_kwargs(&params, call.response_format.is_some());
     let max_tokens = request.max_tokens;
 
     let started = Instant::now();
@@ -316,6 +337,31 @@ pub async fn run_chat_call_full(deps: &PipelineDeps, call: &ChatCall<'_>) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn structured_calls_turn_thinking_off_unless_the_binding_decides() {
+        let none = serde_json::json!({ "temperature": 0.2 });
+        assert_eq!(
+            template_kwargs(&none, true),
+            Some(serde_json::json!({ "enable_thinking": false }))
+        );
+        // A plain text call (the translator) is left as configured.
+        assert_eq!(template_kwargs(&none, false), None);
+
+        let chosen = serde_json::json!({
+            "chat_template_kwargs": { "enable_thinking": true, "other": 1 }
+        });
+        assert_eq!(
+            template_kwargs(&chosen, true),
+            Some(serde_json::json!({ "enable_thinking": true, "other": 1 }))
+        );
+
+        let other = serde_json::json!({ "chat_template_kwargs": { "other": 1 } });
+        assert_eq!(
+            template_kwargs(&other, true),
+            Some(serde_json::json!({ "other": 1, "enable_thinking": false }))
+        );
+    }
 
     fn call(params_json: &str, default_max_tokens: Option<u32>) -> ChatCall<'_> {
         ChatCall {

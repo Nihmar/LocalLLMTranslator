@@ -513,7 +513,9 @@ and stored in `llm_call.reasoning_text`, which is what makes an empty answer exp
 `chat_call` is the single entry point for a role call. It forwards the sampling parameters of the
 binding plus `chat_template_kwargs` verbatim, the per-request channel for chat-template variables:
 that is how a role turns the thinking off (`{"enable_thinking": false}`) without touching the
-server. A **structured** pass (`response_format: json_schema`) goes through `run_structured_call`,
+server. A structured pass sends `enable_thinking: false` by default — the thinking otherwise
+spends the small JSON budget before any answer — unless the binding sets the key itself. A
+**structured** pass (`response_format: json_schema`) goes through `run_structured_call`,
 which retries once, with an explicit instruction, when the answer carries no JSON object at all —
 and doubles the app's own token default for that retry when the first attempt ran out of budget,
 never overriding a `max_tokens` the binding set. A reply that was merely truncated (a `{` without
