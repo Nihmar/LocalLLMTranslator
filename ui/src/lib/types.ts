@@ -218,6 +218,8 @@ export type { Suggestion };
 /** Row of `qa_finding` (`db::models::QaFinding`); `details_json` is the raw column. */
 import type { QaFinding } from "./generated/QaFinding.ts";
 export type { QaFinding };
+import type { QaFindingView } from "./generated/QaFindingView.ts";
+export type { QaFindingView };
 
 /** Request body of `review_start` (`commands::review::ReviewStartRequest`). */
 import type { ReviewStartRequest } from "./generated/ReviewStartRequest.ts";
@@ -239,6 +241,8 @@ export type { QaReportRequest };
 /** Row of `job` (`db::models::Job`); `payload_json` is the raw column. */
 import type { Job } from "./generated/Job.ts";
 export type { Job };
+import type { JobView } from "./generated/JobView.ts";
+export type { JobView };
 
 /** Request body of `job_list` (`commands::jobs::JobListRequest`). */
 import type { JobListRequest } from "./generated/JobListRequest.ts";
@@ -254,6 +258,8 @@ export type { JobCancelResult };
 /** Row of `chunk` (`db::models::Chunk`); the `*_json` columns are raw strings. */
 import type { Chunk } from "./generated/Chunk.ts";
 export type { Chunk };
+import type { ChunkView } from "./generated/ChunkView.ts";
+export type { ChunkView };
 
 /** Request body of `chunk_list` (`commands::chunks::ChunkListRequest`). */
 import type { ChunkListRequest } from "./generated/ChunkListRequest.ts";
@@ -329,7 +335,7 @@ export type { ExportPreview };
  * `failed` or `cancelled`. Views still treat it as an **invalidation trigger** and refetch
  * through commands, because a job event says nothing about the other rows.
  */
-export type JobProgressEvent = Job;
+export type JobProgressEvent = JobView;
 
 /**
  * Payload of `metrics://tick` (`crates/app/src/lib.rs::spawn_metrics_ticker`). It is close to,

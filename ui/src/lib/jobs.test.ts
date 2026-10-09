@@ -10,7 +10,7 @@ import {
   payloadChunkId,
   sortForMonitor,
 } from "./jobs.ts";
-import type { Chunk, Job } from "./types.ts";
+import type { Chunk, JobView } from "./types.ts";
 
 test("known job kinds are labelled in Italian", () => {
   assert.equal(jobKindLabel("translate_chunk"), "Traduzione chunk");
@@ -37,12 +37,12 @@ test("a job can be interrupted while it is queued or running", () => {
   assert.equal(isCancellableJobState("cancelled"), false);
 });
 
-test("the chunk id is read from the payload", () => {
-  assert.equal(payloadChunkId('{"chunk_id":"c1"}'), "c1");
-  assert.equal(payloadChunkId('{"other":1}'), null);
-  assert.equal(payloadChunkId("not json"), null);
-  assert.equal(payloadChunkId("null"), null);
-  assert.equal(payloadChunkId('{"chunk_id":7}'), null);
+test("the chunk id is read from the decoded payload", () => {
+  assert.equal(payloadChunkId({ chunk_id: "c1" }), "c1");
+  assert.equal(payloadChunkId({ other: 1 }), null);
+  assert.equal(payloadChunkId(null), null);
+  assert.equal(payloadChunkId([1, 2]), null);
+  assert.equal(payloadChunkId({ chunk_id: 7 }), null);
 });
 
 test("elapsedSince needs a readable claim and never goes negative", () => {
@@ -59,13 +59,14 @@ function job(
   state: string,
   started_at: string | null,
   finished_at: string | null,
-  payload_json = "{}",
-): Job {
+  payload: JobView["payload"] = {},
+): JobView {
   return {
     id,
     project_id: "p1",
     kind,
-    payload_json,
+    payload_json: JSON.stringify(payload),
+    payload,
     priority: 0,
     state,
     attempts: 1,
@@ -113,7 +114,7 @@ test("jobRows names the chunk and chapter and marks what can be interrupted", ()
         "running",
         "2026-01-01T00:09:00Z",
         null,
-        '{"chunk_id":"c1"}',
+        { chunk_id: "c1" },
       ),
       job(
         "j2",
@@ -121,7 +122,7 @@ test("jobRows names the chunk and chapter and marks what can be interrupted", ()
         "running",
         "2026-01-01T00:09:30Z",
         null,
-        '{"chunk_id":"c9"}',
+        { chunk_id: "c9" },
       ),
       job("j3", "summarize", "done", "2026-01-01T00:00:00Z", "2026-01-01T00:02:00Z"),
     ],

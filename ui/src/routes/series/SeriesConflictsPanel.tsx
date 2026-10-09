@@ -1,6 +1,6 @@
 import { StatusBadge } from "../../components/StatusBadge";
 import { qaFindingSetStatus, seriesGlossaryUpsert } from "../../lib/ipc";
-import type { Project, QaFinding, SeriesDetail } from "../../lib/types";
+import type { Project, QaFindingView, SeriesDetail } from "../../lib/types";
 import { parseConflictDetails, type ConflictDetails, type SeriesPanelProps } from "./shared";
 
 /**
@@ -17,12 +17,12 @@ export function SeriesConflictsPanel({
   onChanged,
 }: SeriesPanelProps & {
   detail: SeriesDetail;
-  conflicts: ReadonlyArray<{ project: Project; finding: QaFinding }>;
+  conflicts: ReadonlyArray<{ project: Project; finding: QaFindingView }>;
   showClosed: boolean;
   onShowClosed: (show: boolean) => void;
   onChanged: () => Promise<void>;
 }) {
-  async function handleSetStatus(finding: QaFinding, status: string): Promise<void> {
+  async function handleSetStatus(finding: QaFindingView, status: string): Promise<void> {
     await run(`conflict:${finding.id}`, async () => {
       await qaFindingSetStatus(finding.id, status);
       await onChanged();
@@ -35,7 +35,7 @@ export function SeriesConflictsPanel({
   }
 
   /** Adopt the book's rendering into the canon, then close the finding. */
-  async function handleAdopt(finding: QaFinding, details: ConflictDetails): Promise<void> {
+  async function handleAdopt(finding: QaFindingView, details: ConflictDetails): Promise<void> {
     if (details.source === null || details.projectTarget === null) {
       return;
     }
@@ -87,7 +87,7 @@ export function SeriesConflictsPanel({
         ) : (
           <ul className="section-stack">
             {conflicts.map(({ project, finding }) => {
-              const details = parseConflictDetails(finding.details_json);
+              const details = parseConflictDetails(finding.details);
               const closed = finding.status !== "open";
               const adoptable =
                 details.projectTarget !== null &&
@@ -112,7 +112,7 @@ export function SeriesConflictsPanel({
                     </p>
                   ) : (
                     <p className="mt-1 font-mono text-[0.65rem] break-all text-muted">
-                      {finding.details_json}
+                      {JSON.stringify(finding.details)}
                     </p>
                   )}
                   <div className="mt-1 flex flex-wrap items-center gap-1">

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { EmptyState } from "../components/EmptyState";
 import { onJobProgress } from "../lib/events";
 import { projectList, qaReport, seriesGet, seriesList, toErrorMessage } from "../lib/ipc";
-import type { Project, QaFinding, Series, SeriesDetail } from "../lib/types";
+import type { Project, QaFindingView, Series, SeriesDetail } from "../lib/types";
 import { SeriesBooksPanel } from "./series/SeriesBooksPanel";
 import { SeriesCanonPanel } from "./series/SeriesCanonPanel";
 import { SeriesConflictsPanel } from "./series/SeriesConflictsPanel";
@@ -26,7 +26,7 @@ export function SeriesView() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<SeriesDetail | null>(null);
-  const [conflicts, setConflicts] = useState<ReadonlyArray<{ project: Project; finding: QaFinding }>>(
+  const [conflicts, setConflicts] = useState<ReadonlyArray<{ project: Project; finding: QaFindingView }>>(
     [],
   );
   // Conflicts panel: closed findings stay hidden unless asked for.

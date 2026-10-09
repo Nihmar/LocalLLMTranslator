@@ -7,7 +7,7 @@
  * so naming what runs costs no extra command.
  */
 
-import type { Chunk, Job } from "./types";
+import type { Chunk, JobView, JsonValue } from "./types";
 
 /** Italian label per job kind. Unknown kinds are shown verbatim, never hidden. */
 export const KIND_LABELS: Readonly<Record<string, string>> = {
@@ -39,16 +39,11 @@ export function isCancellableJobState(state: string): boolean {
   return CANCELLABLE_STATES.has(state);
 }
 
-/** The chunk a job belongs to lives in its payload, not on the job row. */
-export function payloadChunkId(payloadJson: string): string | null {
-  try {
-    const parsed: unknown = JSON.parse(payloadJson);
-    if (typeof parsed === "object" && parsed !== null) {
-      const value = (parsed as { chunk_id?: unknown }).chunk_id;
-      return typeof value === "string" ? value : null;
-    }
-  } catch {
-    // A malformed payload must not break the progress trigger.
+/** The chunk a job belongs to lives in its decoded payload, not on the job row. */
+export function payloadChunkId(payload: JsonValue): string | null {
+  if (typeof payload === "object" && payload !== null && !Array.isArray(payload)) {
+    const value = payload["chunk_id"];
+    return typeof value === "string" ? value : null;
   }
   return null;
 }
@@ -67,7 +62,7 @@ export function elapsedSince(startedAt: string | null, now: number): number | nu
 
 /** One job as the monitor shows it, with its chunk and chapter resolved for display. */
 export interface JobRow {
-  job: Job;
+  job: JobView;
   /** Italian label of `job.kind`. */
   kind_label: string;
   chunk_id: string | null;
@@ -77,7 +72,6 @@ export interface JobRow {
   /** How long the job ran, or has been running; `null` when it never started. */
   elapsed_ms: number | null;
 }
-
 /**
  * Project every job against the chunks and chapters of the open project.
  *
@@ -86,7 +80,7 @@ export interface JobRow {
  * elapsed time of the jobs that are still running.
  */
 export function jobRows(
-  jobs: readonly Job[],
+  jobs: readonly JobView[],
   chunks: readonly Chunk[],
   chapterTitles: ReadonlyMap<string, string>,
   now: number,
@@ -99,7 +93,7 @@ export function jobRows(
   }
 
   return jobs.map((job) => {
-    const chunkId = payloadChunkId(job.payload_json);
+    const chunkId = payloadChunkId(job.payload);
     const chapterId = chunkId === null ? null : (chapterByChunk.get(chunkId) ?? null);
     const finished = job.finished_at === null ? null : Date.parse(job.finished_at);
     const until = finished === null || Number.isNaN(finished) ? now : finished;

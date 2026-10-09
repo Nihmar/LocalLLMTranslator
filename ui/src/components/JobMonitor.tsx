@@ -11,7 +11,7 @@ import { onJobProgress } from "../lib/events";
 import { countLabel, formatDuration, formatNumber, shortId, truncate } from "../lib/format";
 import { useTicker } from "../lib/hooks";
 import { isCancellableJobState, jobKindLabel, jobRows, sortForMonitor } from "../lib/jobs";
-import type { Chapter, Chunk, Job } from "../lib/types";
+import type { Chapter, Chunk, JobView } from "../lib/types";
 import { Dialog } from "./Dialog";
 import { EmptyState } from "./EmptyState";
 import { StatusBadge } from "./StatusBadge";
@@ -61,7 +61,7 @@ function matchesStateFilter(state: string, filter: string): boolean {
 }
 
 export function JobMonitor({ projectId, onClose }: JobMonitorProps) {
-  const [jobs, setJobs] = useState<Job[]>([]);
+  const [jobs, setJobs] = useState<JobView[]>([]);
   const [chunks, setChunks] = useState<Chunk[]>([]);
   const [chapters, setChapters] = useState<Chapter[]>([]);
   const [projectNames, setProjectNames] = useState<ReadonlyMap<string, string>>(new Map());

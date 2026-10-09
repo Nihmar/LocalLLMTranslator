@@ -5,7 +5,7 @@ import { EmptyState } from "../components/EmptyState";
 import { chapterProgress, chunkTranslated } from "../lib/chapters";
 import { onJobProgress, onMetricsTick } from "../lib/events";
 import { countLabel } from "../lib/format";
-import { isActiveJobState } from "../lib/jobs";
+import { isActiveJobState, payloadChunkId } from "../lib/jobs";
 import {
   chunkGet,
   chunkList,
@@ -17,19 +17,14 @@ import {
   translationPause,
   translationStart,
 } from "../lib/ipc";
-import type { Chunk, ChunkDetail, Chapter, Job, Metrics, Project } from "../lib/types";
+import type { ChunkDetail, ChunkView, Chapter, JobView, Metrics, Project } from "../lib/types";
 import type { ViewId } from "../App";
 import { ChunkBrowser } from "./translate/ChunkBrowser";
 import { ChunkDetailPanel } from "./translate/ChunkDetailPanel";
 import { TranslateControls } from "./translate/TranslateControls";
 import { TranslateProgressPanel } from "./translate/TranslateProgressPanel";
 import { TranslateSidebar } from "./translate/TranslateSidebar";
-import {
-  countStatuses,
-  PAGE_SIZE,
-  parseChunkId,
-  parseStringArray,
-} from "./translate/shared";
+import { countStatuses, PAGE_SIZE } from "./translate/shared";
 
 /**
  * Translation page (`PLAN.md` §11.3): the chunk table, the run controls and the resource gauge.
@@ -59,9 +54,9 @@ export interface TranslateViewProps {
 }
 
 export function TranslateView({ project, onNavigate, onOpenJobs }: TranslateViewProps) {
-  const [chunks, setChunks] = useState<Chunk[]>([]);
+  const [chunks, setChunks] = useState<ChunkView[]>([]);
   const [chapters, setChapters] = useState<Chapter[]>([]);
-  const [jobs, setJobs] = useState<Job[]>([]);
+  const [jobs, setJobs] = useState<JobView[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState("all");
@@ -181,7 +176,7 @@ export function TranslateView({ project, onNavigate, onOpenJobs }: TranslateView
       if (job.kind !== "translate_chunk") {
         continue;
       }
-      const chunkId = parseChunkId(job.payload_json);
+      const chunkId = payloadChunkId(job.payload);
       if (chunkId === null) {
         continue;
       }
@@ -202,8 +197,8 @@ export function TranslateView({ project, onNavigate, onOpenJobs }: TranslateView
         chapter_title:
           chunk.chapter_id === null ? null : (chapterTitle.get(chunk.chapter_id) ?? null),
         order_index: chunk.order_index,
-        flags: parseStringArray(chunk.flags_json),
-        block_count: parseStringArray(chunk.block_ids_json).length,
+        flags: chunk.flags,
+        block_count: chunk.block_ids.length,
         token_estimate: chunk.token_estimate,
         status: chunk.status,
         model_id: chunk.model_id,
@@ -424,7 +419,7 @@ export function TranslateView({ project, onNavigate, onOpenJobs }: TranslateView
 }
 
 /** `job_list` for a project, tolerating a failure (the table can render without attempts). */
-async function jobListSafe(projectId: string): Promise<Job[]> {
+async function jobListSafe(projectId: string): Promise<JobView[]> {
   try {
     return await jobList({ project_id: projectId, limit: 1000 });
   } catch {

@@ -15,7 +15,7 @@ import {
   toErrorMessage,
 } from "../lib/ipc";
 import { inboxOrder, isImportant } from "../lib/review";
-import type { ChunkDetail, Project, QaFinding, Suggestion } from "../lib/types";
+import type { ChunkDetail, Project, QaFindingView, Suggestion } from "../lib/types";
 import type { ViewId } from "../App";
 import { QaList } from "./review/QaList";
 import { ReviewHeader } from "./review/ReviewHeader";
@@ -49,7 +49,7 @@ export function ReviewView({ project, onNavigate }: ReviewViewProps) {
   const [passFilter, setPassFilter] = useState<PassFilter>("all");
   const [pending, setPending] = useState<Suggestion[]>([]);
   const [decided, setDecided] = useState<Suggestion[]>([]);
-  const [findings, setFindings] = useState<QaFinding[]>([]);
+  const [findings, setFindings] = useState<QaFindingView[]>([]);
   const [chunkOrder, setChunkOrder] = useState<Map<string, number>>(new Map());
   const [chunkChapter, setChunkChapter] = useState<Map<string, string>>(new Map());
   const [details, setDetails] = useState<Map<string, ChunkDetail>>(new Map());

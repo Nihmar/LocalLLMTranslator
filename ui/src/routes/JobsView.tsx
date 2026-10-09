@@ -20,7 +20,7 @@ import {
   truncate,
 } from "../lib/format";
 import { diagnosticsExport, diagnosticsPaths, jobList, metricsGet, openPath, toErrorMessage } from "../lib/ipc";
-import type { DiagnosticsPaths, Job, Metrics, Project } from "../lib/types";
+import type { DiagnosticsPaths, JobView, Metrics, Project } from "../lib/types";
 import type { ViewId } from "../App";
 
 /**
@@ -65,7 +65,7 @@ interface EtaView {
 }
 
 export function JobsView({ project, onNavigate }: JobsViewProps) {
-  const [jobs, setJobs] = useState<Job[]>([]);
+  const [jobs, setJobs] = useState<JobView[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [stateFilter, setStateFilter] = useState("all");
@@ -158,7 +158,7 @@ export function JobsView({ project, onNavigate }: JobsViewProps) {
       onJobProgress((event) => {
         setSessionStartedAt((current) => current ?? Date.now());
 
-        const chunkId = payloadChunkId(event.payload_json);
+        const chunkId = payloadChunkId(event.payload);
         if (
           event.kind === "translate_chunk" &&
           chunkId !== null &&

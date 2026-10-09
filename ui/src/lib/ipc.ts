@@ -23,8 +23,8 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { postCommand } from "./http.ts";
 import type {
   Ack,
-  Chunk,
   ChunkDetail,
+  ChunkView,
   ChunkListRequest,
   CreateProjectRequest,
   DiagnosticsOutcome,
@@ -63,8 +63,8 @@ import type {
   SeriesVariantUpsertRequest,
   IngestStartRequest,
   ImportBundleRequest,
-  Job,
   JobCancelResult,
+  JobView,
   JobListRequest,
   JobStarted,
   Metrics,
@@ -75,7 +75,7 @@ import type {
   ReconConfirmRequest,
   ReconSnapshot,
   ReconStartRequest,
-  QaFinding,
+  QaFindingView,
   QaReportRequest,
   ReviewStartRequest,
   ReviewStartResult,
@@ -506,8 +506,8 @@ export function suggestionReject(id: string): Promise<Suggestion> {
 }
 
 /** `qa_finding` rows of a project, filterable by kind, severity, chunk and status. */
-export function qaReport(request: QaReportRequest): Promise<QaFinding[]> {
-  return call<QaFinding[]>(COMMANDS.qaReport, { req: request });
+export function qaReport(request: QaReportRequest): Promise<QaFindingView[]> {
+  return call<QaFindingView[]>(COMMANDS.qaReport, { req: request });
 }
 
 /** Close or reopen a QA finding (`open` | `resolved` | `ignored`). */
@@ -517,8 +517,8 @@ export function qaFindingSetStatus(id: string, status: string): Promise<Ack> {
 
 // --- jobs and chunks -----------------------------------------------------------------------
 
-export function jobList(request: JobListRequest = {}): Promise<Job[]> {
-  return call<Job[]>(COMMANDS.jobList, { req: request });
+export function jobList(request: JobListRequest = {}): Promise<JobView[]> {
+  return call<JobView[]>(COMMANDS.jobList, { req: request });
 }
 
 /**
@@ -532,8 +532,8 @@ export function jobCancel(jobIds: readonly string[]): Promise<JobCancelResult> {
   return call<JobCancelResult>(COMMANDS.jobCancel, { req: { job_ids: [...jobIds] } });
 }
 
-export function chunkList(request: ChunkListRequest): Promise<Chunk[]> {
-  return call<Chunk[]>(COMMANDS.chunkList, { req: request });
+export function chunkList(request: ChunkListRequest): Promise<ChunkView[]> {
+  return call<ChunkView[]>(COMMANDS.chunkList, { req: request });
 }
 
 export function chunkGet(chunkId: string): Promise<ChunkDetail> {

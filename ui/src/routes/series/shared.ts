@@ -3,7 +3,7 @@
  * findings and the candidate profile carry, and the `run` contract every panel acts through.
  */
 
-import type { SeriesGlossaryTerm, SeriesProfile } from "../../lib/types";
+import type { JsonValue, SeriesGlossaryTerm, SeriesProfile } from "../../lib/types";
 
 /**
  * Runs one panel action: the parent marks it busy, clears the previous message and shows the
@@ -69,15 +69,10 @@ export interface ConflictDetails {
   projectTarget: string | null;
 }
 
-export function parseConflictDetails(json: string): ConflictDetails {
-  let record: Record<string, unknown> = {};
-  try {
-    const value: unknown = JSON.parse(json);
-    if (value !== null && typeof value === "object") {
-      record = value as Record<string, unknown>;
-    }
-  } catch {
-    record = {};
+export function parseConflictDetails(details: JsonValue | null | undefined): ConflictDetails {
+  let record: Record<string, JsonValue> = {};
+  if (details !== null && details !== undefined && typeof details === "object" && !Array.isArray(details)) {
+    record = details;
   }
   const text = (key: string): string | null => {
     const value = record[key];

@@ -5,10 +5,10 @@ import { StatusBadge } from "./StatusBadge";
 /**
  * Chunk table for the translation page.
  *
- * `chunk_list` returns raw `chunk` rows: `block_ids_json` / `flags_json` are strings and there is
- * no chapter title or attempt counter on the row. Those are derived one level up (in
- * `TranslateView`, from `project_get` chapters and `job_list`) and passed here as `ChunkRow`, so
- * the table keeps its original columns without a per-row backend call.
+ * `chunk_list` returns `ChunkView` rows: the JSON columns are already decoded on the Rust side
+ * (`block_ids`, `flags`) and there is no chapter title or attempt counter on the row. Those are
+ * derived one level up (in `TranslateView`, from `project_get` chapters and `job_list`) and passed
+ * here as `ChunkRow`, so the table keeps its original columns without a per-row backend call.
  */
 
 /** Presentation view of one chunk, assembled by `TranslateView` from `chunk_list`. */
