@@ -214,7 +214,12 @@ export function ReviewView({ project, onNavigate }: ReviewViewProps) {
         setSelectedId(following?.id ?? null);
         await load();
       } catch (decideError) {
-        setError(toErrorMessage(decideError));
+        const message = toErrorMessage(decideError);
+        setError(
+          message.includes("would alter the markup")
+            ? "Questa correzione toglierebbe un link, del codice o una nota dal paragrafo: non può essere applicata così. Rifiutala o correggi il testo a mano."
+            : message,
+        );
       } finally {
         setDeciding(false);
       }
