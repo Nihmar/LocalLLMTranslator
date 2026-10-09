@@ -16,13 +16,13 @@ setup: ## Install all dependencies
 format: ## Auto-format Python and Rust
 	cd $(SIDECAR) && $(PY) run ruff format .
 	cd $(SIDECAR) && $(PY) run ruff check --fix .
-	cd $(RUST) && cargo fmt
+	cargo fmt --all
 
 lint: ## Lint Python + Rust (no writes)
 	cd $(SIDECAR) && $(PY) run ruff format --check .
 	cd $(SIDECAR) && $(PY) run ruff check .
-	cd $(RUST) && cargo fmt --check
-	cd $(RUST) && cargo clippy --all-targets -- -D warnings
+	cargo fmt --all --check
+	cargo clippy --workspace --all-targets -- -D warnings
 
 typecheck: ## Type-check Python
 	cd $(SIDECAR) && $(PY) run pyright
@@ -33,7 +33,7 @@ test-py: ## Run sidecar tests
 	cd $(SIDECAR) && $(PY) run pytest
 
 test-rust: ## Run Rust tests
-	cd $(RUST) && cargo test
+	cargo test --workspace
 
 test-ui: ## Run the optional frontend unit tests
 	cd $(UI) && npm run test
@@ -46,7 +46,7 @@ build-ui: ## Build the frontend (required before cargo build)
 # UI has not been built yet. build-ui must therefore come first, and a stale `dist`
 # left over from an earlier run must not be what makes this target pass.
 check: build-ui lint typecheck test test-ui ## Full gate: ui build + lint + type + tests (py, rust, ui)
-	cd $(RUST) && cargo check
+	cargo check --workspace
 
 dev: ## Run the desktop app in dev mode (requires llama-server running)
 	cd $(RUST) && cargo tauri dev
