@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
 import { JobMonitor } from "./components/JobMonitor";
-import { StatusBadge } from "./components/StatusBadge";
 import { onMetricsTick, onSidecarStatus } from "./lib/events";
 import { formatNumber } from "./lib/format";
 import { projectGet, sidecarStatus, toErrorMessage } from "./lib/ipc";
@@ -17,23 +16,21 @@ import { SeriesView } from "./routes/SeriesView";
 import { TranslateView } from "./routes/TranslateView";
 
 /**
- * Application shell: a grouped sidebar plus a typed view switcher.
+ * Application shell: a header with the open book, the book's five steps and an activity bar.
  *
- * The navigation is split by **scope**, not by step number: the four project steps only make
- * sense while a project is open and only appear then, while "Progetti", "Modelli", "Serie" and
- * "Job" are application-wide destinations that are always reachable. The open project itself
- * lives in the header, so it stays visible on every page (`PLAN.md` §11).
+ * The book steps follow the order of the work — import, prepare, translate, review, export —
+ * and only appear while a book is open; "Libreria", "Serie" and "Modelli" are application-wide
+ * and always reachable from the header (issue #14, mockups linked there). "Prepara" is the
+ * glossary page, which also carries the book profile and the dialogue convention.
  *
  * There is deliberately no routing library: the shell has fixed destinations, a
- * `useState<ViewId>` is smaller, fully typed and needs no dependency. `PLAN.md` §11 calls each
- * project step "a route you can visit freely" — which is exactly what this switcher provides.
+ * `useState<ViewId>` is smaller, fully typed and needs no dependency.
  *
  * `ViewId` is exported so views can type their `onNavigate` prop; views import it with
  * `import type`, which `verbatimModuleSyntax` erases, so there is no runtime import cycle.
  *
- * The header carries the job monitor's trigger: "what is running, and can I stop it?" is asked
- * from every page, so the dialog is mounted once here and the queue count comes from the same
- * `metrics://tick` snapshot the resource gauges read.
+ * The activity bar answers "what is running, and can I stop it?" from every page: it reads the
+ * `metrics://tick` queue snapshot and opens the job monitor, mounted once here.
  */
 
 export type ViewId =
@@ -50,47 +47,37 @@ export type ViewId =
 
 interface NavEntry {
   id: ViewId;
-  /** Wizard step number for the project flow, or a bullet for the application destinations. */
-  step: string;
   label: string;
   hint: string;
 }
 
-/** Steps of the translation pipeline; scoped to the open project, in reading order. */
-const PROJECT_NAV: readonly NavEntry[] = [
-  { id: "ingest", step: "1", label: "Ingestione", hint: "File, formato, capitoli" },
-  { id: "translate", step: "2", label: "Traduzione", hint: "Capitoli, anteprima, chunk" },
-  { id: "review", step: "3", label: "Revisione", hint: "Diff bilingue, suggerimenti, QA" },
-  { id: "export", step: "4", label: "Export", hint: "PDF, EPUB, DOCX" },
+/** The book's steps, in the order of the work. */
+const BOOK_STEPS: readonly NavEntry[] = [
+  { id: "ingest", label: "Importa", hint: "File, formato, capitoli" },
+  { id: "glossary", label: "Prepara", hint: "Profilo, convenzioni, glossario" },
+  { id: "translate", label: "Traduci", hint: "Capitoli, anteprima, avanzamento" },
+  { id: "review", label: "Rivedi", hint: "Proposte di editor e proofreader, QA" },
+  { id: "export", label: "Esporta", hint: "EPUB, PDF, DOCX" },
 ];
 
-/**
- * Project destinations that are not pipeline steps: the glossary is the canon the translator
- * prompt reads, reviewed while translating, so its index stays a bullet and it sits after the
- * step that produces the candidates (the translation page runs the reconnaissance).
- */
-const PROJECT_EXTRA_NAV: readonly NavEntry[] = [
-  { id: "glossary", step: "•", label: "Glossario", hint: "Termini, candidati, conflitti" },
-  { id: "history", step: "•", label: "Storico", hint: "Correzioni accettate e rifiutate" },
+/** Book pages that are not steps: reachable from the step bar, after the steps. */
+const BOOK_EXTRA: readonly NavEntry[] = [
+  { id: "history", label: "Storico", hint: "Correzioni accettate e rifiutate" },
 ];
 
-/** Application-wide destinations, independent of any project. */
-const APP_NAV: readonly NavEntry[] = [
-  { id: "projects", step: "•", label: "Progetti", hint: "Elenco, creazione, apertura" },
-  { id: "models", step: "•", label: "Modelli", hint: "Endpoint, salute, ruoli" },
-  { id: "series", step: "•", label: "Serie", hint: "Canone condiviso tra i libri" },
-  { id: "jobs", step: "•", label: "Job", hint: "Coda, ETA, log live" },
+/** Application-wide destinations, independent of any book. */
+const APP_LINKS: readonly NavEntry[] = [
+  { id: "projects", label: "Libreria", hint: "I tuoi libri: apri, crea, importa" },
+  { id: "series", label: "Serie", hint: "Canone condiviso tra i libri" },
+  { id: "models", label: "Modelli", hint: "Endpoint, salute, ruoli" },
 ];
 
 const PROJECT_VIEWS: ReadonlySet<ViewId> = new Set(
-  [...PROJECT_NAV, ...PROJECT_EXTRA_NAV].map((entry) => entry.id),
+  [...BOOK_STEPS, ...BOOK_EXTRA].map((entry) => entry.id),
 );
 
 const STORAGE_KEY = "llmtranslator.current_project_id";
 
-const PRIVACY_NOTE =
-  "Nessuna telemetria, nessun font remoto, nessuna chiamata di rete oltre agli endpoint " +
-  "llama-server che configuri tu.";
 
 function readStoredProjectId(): string | null {
   try {
@@ -110,44 +97,6 @@ function writeStoredProjectId(projectId: string | null): void {
   } catch {
     // Storage unavailable: the selection simply does not survive a reload.
   }
-}
-
-function NavGroup({
-  title,
-  entries,
-  current,
-  onSelect,
-}: {
-  /** Omitted for a group that continues the one above it, like the project extras. */
-  title?: string | undefined;
-  entries: readonly NavEntry[];
-  current: ViewId;
-  onSelect: (view: ViewId) => void;
-}) {
-  return (
-    <div className="flex flex-col gap-1">
-      {title === undefined || title === "" ? null : (
-        <div className="nav-group-label">{title}</div>
-      )}
-      {entries.map((entry) => (
-        <button
-          key={entry.id}
-          type="button"
-          className="nav-item"
-          title={entry.hint}
-          aria-current={entry.id === current ? "page" : undefined}
-          onClick={() => {
-            onSelect(entry.id);
-          }}
-        >
-          <span className="nav-index" aria-hidden="true">
-            {entry.step}
-          </span>
-          <span className="truncate text-[0.82rem] font-medium">{entry.label}</span>
-        </button>
-      ))}
-    </div>
-  );
 }
 
 export default function App() {
@@ -248,186 +197,113 @@ export default function App() {
   const pendingJobs = queueCount("pending");
 
   return (
-    <div className="app-canvas">
-      {/* Sidebar: application destinations first, project steps below. */}
-      <aside className="flex w-60 shrink-0 flex-col gap-4 border-r border-line bg-surface/60 p-3">
-        <div className="flex items-center gap-2 px-1 py-1">
-          <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-accent font-mono text-sm font-bold text-canvas">
-            iL
+    <div className="app-canvas flex-col">
+      <header className="shrink-0 border-b border-line bg-surface">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 px-6 py-3">
+          <button
+            type="button"
+            className="font-serif text-lg font-semibold text-ink"
+            onClick={() => {
+              setView(project === null ? "projects" : "translate");
+            }}
+          >
+            LLM Translator
+          </button>
+          <span aria-hidden="true" className="text-faint">
+            /
           </span>
-          <span className="min-w-0">
-            <span className="block truncate text-sm font-semibold text-ink">
-              LocalLLMTranslator
+          {project === null ? (
+            <span className="text-sm text-muted">
+              {restoring ? "Ripristino dell'ultimo libro…" : "Nessun libro aperto"}
             </span>
-            <span className="block truncate text-[0.68rem] text-faint">
-              traduzione locale, offline
-            </span>
-          </span>
-        </div>
-
-        <nav aria-label="Sezioni dell'applicazione">
-          <NavGroup title="Applicazione" entries={APP_NAV} current={view} onSelect={setView} />
-        </nav>
-
-        {project === null ? (
-          <div className="flex flex-col gap-1">
-            <div className="nav-group-label">Progetto</div>
-            <div className="rounded-lg border border-dashed border-line-strong p-3 text-center">
-              <p className="text-xs text-muted">
-                {restoring ? "Ripristino dell'ultimo progetto…" : "Nessun progetto aperto."}
-              </p>
-              <button
-                type="button"
-                className="btn btn-primary btn-sm mt-2 w-full"
-                onClick={() => {
-                  setView("projects");
-                }}
-              >
-                Scegli un progetto
-              </button>
-            </div>
-          </div>
-        ) : (
-          <nav aria-label="Sezioni del progetto aperto">
-            <div className="flex flex-col gap-1">
-              <NavGroup
-                title="Progetto"
-                entries={PROJECT_NAV}
-                current={view}
-                onSelect={setView}
-              />
-              <NavGroup
-                title=""
-                entries={PROJECT_EXTRA_NAV}
-                current={view}
-                onSelect={setView}
-              />
-            </div>
-          </nav>
-        )}
-
-        <p
-          className="mt-auto px-1 text-[0.62rem] leading-relaxed text-faint"
-          title={PRIVACY_NOTE}
-        >
-          Offline. Nessuna telemetria, nessuna chiamata di rete verso l&apos;esterno.
-        </p>
-      </aside>
-
-      {/* Main column */}
-      <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-line bg-surface/60 px-5 py-3">
-          <div className="min-w-0 flex-1">
-            {project === null ? (
-              <>
-                <h1 className="truncate text-sm font-semibold text-ink">Nessun progetto aperto</h1>
-                <p className="truncate text-[0.7rem] text-faint">
-                  {restoring
-                    ? "Ripristino dell'ultimo progetto…"
-                    : "Apri o crea un progetto per iniziare la pipeline di traduzione."}
-                </p>
-              </>
-            ) : (
-              <>
-                <h1 className="flex min-w-0 items-center gap-2 text-base font-semibold text-ink">
-                  <span className="truncate" title={project.name}>
-                    {project.name}
-                  </span>
-                  <span className="mono-chip shrink-0">
-                    {project.source_lang ?? "?"} → {project.target_lang}
-                  </span>
-                </h1>
-                <p
-                  className="truncate font-mono text-[0.68rem] text-faint"
-                  title={project.source_path}
-                >
-                  {project.source_path}
-                </p>
-              </>
-            )}
-          </div>
-
-          <div className="flex shrink-0 items-center gap-2">
+          ) : (
             <button
               type="button"
-              className="btn btn-sm"
-              onClick={() => {
-                setJobsOpen(true);
-              }}
-              title={
-                runningJobs === 0 && pendingJobs === 0
-                  ? "Nessun lavoro in coda: apri il monitor"
-                  : `${String(runningJobs)} in esecuzione, ${String(pendingJobs)} in attesa: apri il monitor`
-              }
-            >
-              Lavori
-              {runningJobs > 0 ? (
-                <span className="mono-chip">{formatNumber(runningJobs)}</span>
-              ) : pendingJobs > 0 ? (
-                <span className="mono-chip">{formatNumber(pendingJobs)} in coda</span>
-              ) : null}
-            </button>
-
-            <button
-              type="button"
-              className="btn btn-sm btn-ghost"
-              disabled={sidecar === null && sidecarError === null}
-              title={
-                sidecar === null
-                  ? "Verifica lo stato del sidecar"
-                  : `Sidecar ${sidecar.state}${
-                      sidecar.pid === null ? "" : ` · pid ${String(sidecar.pid)}`
-                    }${sidecar.attempts > 0 ? ` · ${String(sidecar.attempts)} tentativi` : ""}`
-              }
-              onClick={() => {
-                void refreshSidecar();
-              }}
-            >
-              <StatusBadge
-                status={sidecarError === null ? (sidecar?.state ?? "starting") : "error"}
-                pulse={
-                  sidecar !== null &&
-                  (sidecar.state === "starting" || sidecar.state === "restarting")
-                }
-                label={
-                  sidecarError !== null
-                    ? "Stato non leggibile"
-                    : sidecar === null
-                      ? "Interrogazione…"
-                      : sidecar.state === "running"
-                        ? "Sidecar pronto"
-                        : undefined
-                }
-              />
-            </button>
-
-            <button
-              type="button"
-              className="btn btn-sm"
+              className="btn"
+              title={`${project.source_path} — cambia libro`}
               onClick={() => {
                 setView("projects");
               }}
             >
-              {project === null ? "Scegli progetto" : "Cambia progetto"}
-            </button>
-          </div>
-        </header>
-
-        {sidecarError !== null || (sidecar !== null && !sidecarReady) ? (
-          <div className="shrink-0 px-5 pt-3">
-            <div className="banner banner-warn" role="alert">
-              <span aria-hidden="true">⚠</span>
-              <span>
-                <strong className="font-semibold">Sidecar non pronto.</strong>{" "}
-                {sidecarError ?? sidecar?.message ?? "Il supervisore lo sta avviando o lo sta riavviando."}{" "}
-                L&apos;interfaccia resta navigabile, ma ingestione, chunking ed export richiedono il
-                sidecar attivo.
+              <span className="max-w-[18rem] truncate font-semibold">{project.name}</span>
+              <span className="text-xs font-normal text-muted">
+                {project.source_lang ?? "?"} → {project.target_lang}
               </span>
-            </div>
-          </div>
-        ) : null}
+            </button>
+          )}
+          <nav aria-label="Applicazione" className="ml-auto flex flex-wrap gap-1">
+            {APP_LINKS.map((entry) => (
+              <button
+                key={entry.id}
+                type="button"
+                className="app-link"
+                title={entry.hint}
+                aria-current={entry.id === view ? "page" : undefined}
+                onClick={() => {
+                  setView(entry.id);
+                }}
+              >
+                {entry.label}
+              </button>
+            ))}
+          </nav>
+        </div>
 
-        <main className="min-h-0 flex-1 overflow-y-auto p-5">
+        {project === null ? null : (
+          <nav aria-label="Passi del libro" className="flex flex-wrap items-end gap-x-2 px-6">
+            {BOOK_STEPS.map((entry, index) => (
+              <button
+                key={entry.id}
+                type="button"
+                className="step-tab"
+                title={entry.hint}
+                aria-current={entry.id === view ? "page" : undefined}
+                onClick={() => {
+                  setView(entry.id);
+                }}
+              >
+                <span className="step-number" aria-hidden="true">
+                  {index + 1}
+                </span>
+                {entry.label}
+              </button>
+            ))}
+            <span className="ml-auto flex gap-x-2">
+              {BOOK_EXTRA.map((entry) => (
+                <button
+                  key={entry.id}
+                  type="button"
+                  className="step-tab step-tab-extra"
+                  title={entry.hint}
+                  aria-current={entry.id === view ? "page" : undefined}
+                  onClick={() => {
+                    setView(entry.id);
+                  }}
+                >
+                  {entry.label}
+                </button>
+              ))}
+            </span>
+          </nav>
+        )}
+      </header>
+
+      {sidecarError !== null || (sidecar !== null && !sidecarReady) ? (
+        <div className="shrink-0 px-6 pt-3">
+          <div className="banner banner-warn" role="alert">
+            <span aria-hidden="true">⚠</span>
+            <span>
+              <strong className="font-semibold">Sidecar non pronto.</strong>{" "}
+              {sidecarError ?? sidecar?.message ?? "Il supervisore lo sta avviando o lo sta riavviando."}{" "}
+              L&apos;interfaccia resta navigabile, ma importazione, suddivisione ed export richiedono
+              il sidecar attivo.
+            </span>
+          </div>
+        </div>
+      ) : null}
+
+      <main className="min-h-0 flex-1 overflow-y-auto">
+        <div className="mx-auto w-full max-w-[1320px] p-6">
           {view === "projects" ? (
             <ProjectsView
               currentProjectId={project?.id ?? null}
@@ -460,8 +336,58 @@ export default function App() {
           ) : (
             <JobsView project={project} onNavigate={setView} />
           )}
-        </main>
-      </div>
+        </div>
+      </main>
+
+      <footer className="activity-bar" aria-label="Attività">
+        <button
+          type="button"
+          className="activity-item"
+          disabled={sidecar === null && sidecarError === null}
+          title="Verifica lo stato del sidecar"
+          onClick={() => {
+            void refreshSidecar();
+          }}
+        >
+          <span
+            className="activity-dot"
+            data-state={sidecarError !== null ? "error" : sidecarReady ? "ok" : "busy"}
+            aria-hidden="true"
+          />
+          {sidecarError !== null
+            ? "Sidecar non raggiungibile"
+            : sidecar === null
+              ? "Sidecar: verifica…"
+              : sidecarReady
+                ? "Sidecar pronto"
+                : `Sidecar: ${sidecar.state}`}
+        </button>
+        <span className="activity-item">
+          {runningJobs === 0 && pendingJobs === 0
+            ? "Nessun lavoro in corso"
+            : `${formatNumber(runningJobs)} in corso · ${formatNumber(pendingJobs)} in coda`}
+        </span>
+        <span className="ml-auto flex gap-2">
+          <button
+            type="button"
+            className="activity-button"
+            onClick={() => {
+              setView("jobs");
+            }}
+          >
+            Log e coda
+          </button>
+          <button
+            type="button"
+            className="activity-button"
+            onClick={() => {
+              setJobsOpen(true);
+            }}
+          >
+            Attività
+          </button>
+        </span>
+      </footer>
 
       {jobsOpen ? (
         <JobMonitor

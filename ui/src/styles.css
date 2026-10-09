@@ -290,6 +290,129 @@
     color: var(--color-faint);
   }
 
+  /* --- shell: header links, book steps, activity bar --- */
+  .app-link {
+    border-radius: 0.5rem;
+    padding: 0.4rem 0.7rem;
+    font-size: 0.875rem;
+    color: var(--color-ink-soft);
+    background: transparent;
+    border: 0;
+    cursor: pointer;
+  }
+
+  .app-link:hover {
+    background-color: var(--color-surface-3);
+  }
+
+  .app-link[aria-current="page"] {
+    color: var(--color-accent-strong);
+    background-color: var(--color-accent-soft);
+    font-weight: 600;
+  }
+
+  .step-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    min-height: 2.75rem;
+    padding: 0 0.6rem;
+    border: 0;
+    border-bottom: 2px solid transparent;
+    background: transparent;
+    color: var(--color-ink-soft);
+    font-size: 0.9rem;
+    cursor: pointer;
+  }
+
+  .step-tab:hover {
+    color: var(--color-ink);
+  }
+
+  .step-tab[aria-current="page"] {
+    border-bottom-color: var(--color-accent);
+    color: var(--color-ink);
+    font-weight: 600;
+  }
+
+  .step-tab-extra {
+    color: var(--color-muted);
+    font-size: 0.85rem;
+  }
+
+  .step-number {
+    display: inline-flex;
+    width: 1.4rem;
+    height: 1.4rem;
+    align-items: center;
+    justify-content: center;
+    border-radius: 999px;
+    background-color: var(--color-surface-3);
+    color: var(--color-ink-soft);
+    font-size: 0.75rem;
+    font-weight: 600;
+  }
+
+  .step-tab[aria-current="page"] .step-number {
+    background-color: var(--color-accent);
+    color: var(--color-on-accent);
+  }
+
+  .activity-bar {
+    display: flex;
+    flex-wrap: wrap;
+    flex-shrink: 0;
+    align-items: center;
+    gap: 0.5rem 1.25rem;
+    padding: 0.5rem 1.5rem;
+    background-color: var(--color-ink);
+    color: var(--color-surface-3);
+    font-size: 0.8rem;
+  }
+
+  .activity-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    padding: 0;
+  }
+
+  button.activity-item {
+    cursor: pointer;
+  }
+
+  .activity-dot {
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: 999px;
+    background-color: #e0b24a;
+  }
+
+  .activity-dot[data-state="ok"] {
+    background-color: #6fcf97;
+  }
+
+  .activity-dot[data-state="error"] {
+    background-color: #f08a7e;
+  }
+
+  .activity-button {
+    min-height: 2rem;
+    padding: 0 0.75rem;
+    border-radius: 0.5rem;
+    border: 1px solid #4a4843;
+    background: transparent;
+    color: var(--color-surface-3);
+    cursor: pointer;
+  }
+
+  .activity-button:hover {
+    background-color: #2e2d2a;
+  }
+
   /* --- buttons --- */
   .btn {
     display: inline-flex;
