@@ -335,11 +335,6 @@
     font-weight: 600;
   }
 
-  .step-tab-extra {
-    color: var(--color-muted);
-    font-size: 0.85rem;
-  }
-
   .step-number {
     display: inline-flex;
     width: 1.4rem;
@@ -868,34 +863,6 @@
 
   .log-line[data-level="warn"] .log-message {
     color: var(--color-warn-strong);
-  }
-
-  /* --- review editors (CodeMirror 6) --- */
-  .codemirror-host {
-    border: 1px solid var(--color-line);
-    border-radius: 0.375rem;
-    overflow: hidden;
-    background-color: var(--color-surface);
-  }
-
-  .codemirror-host .cm-editor {
-    height: 100%;
-  }
-
-  .codemirror-host .cm-scroller {
-    font-family: var(--font-mono);
-    font-size: 0.72rem;
-    max-height: 24rem;
-    overflow: auto;
-  }
-
-  .codemirror-merge .cm-mergeView {
-    max-height: 24rem;
-    overflow: auto;
-  }
-
-  .codemirror-host .cm-mergeViewEditors {
-    align-items: stretch;
   }
 
   /* --- live chapter preview --- */
