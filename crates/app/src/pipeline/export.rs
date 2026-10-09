@@ -8,7 +8,7 @@
 //! selective rebuild — and `force` bypasses the skip.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -252,8 +252,7 @@ pub async fn run_export(deps: &PipelineDeps, request: &ExportRequest) -> Result<
     let metadata = book_metadata(&project, &document);
     let options = resolve_render_options(deps, request);
     let output_dir = deps.output_dir(&request.project_id);
-    let units_dir = output_dir.join("units");
-    tokio::fs::create_dir_all(&units_dir).await?;
+    tokio::fs::create_dir_all(&output_dir).await?;
     let _ = write_metadata_yaml(&output_dir, &metadata)?;
 
     let output_path = request
@@ -315,35 +314,46 @@ pub async fn run_export(deps: &PipelineDeps, request: &ExportRequest) -> Result<
     }
 
     // ---- write the units and run pandoc -----------------------------------
-    let mut pandoc_units: Vec<PandocUnit> = Vec::with_capacity(units.len());
-    for (index, unit) in units.iter().enumerate() {
-        let path = units_dir.join(format!("unit-{index:04}.md"));
-        tokio::fs::write(&path, &unit.markdown).await?;
-        pandoc_units.push(PandocUnit {
-            path: path.to_string_lossy().to_string(),
-            title: unit.title.clone(),
-        });
+    // Each build gets its own unit directory: two concurrent builds of the same project
+    // must not overwrite each other's units between the write and the pandoc read. The
+    // directory is removed however the build ends.
+    let units_dir = unique_units_dir(&output_dir);
+    tokio::fs::create_dir_all(&units_dir).await?;
+
+    let build = async {
+        let mut pandoc_units: Vec<PandocUnit> = Vec::with_capacity(units.len());
+        for (index, unit) in units.iter().enumerate() {
+            let path = units_dir.join(format!("unit-{index:04}.md"));
+            tokio::fs::write(&path, &unit.markdown).await?;
+            pandoc_units.push(PandocUnit {
+                path: path.to_string_lossy().to_string(),
+                title: unit.title.clone(),
+            });
+        }
+
+        // Pandoc resolves the units' relative image hrefs (e.g. `assets/harbour.png`)
+        // against the directory that holds `document.md` and the extracted assets dir.
+        let resource_path = resource_paths(&document.markdown_path);
+
+        let driver = PandocDriver::new(deps.sidecar.clone());
+        driver
+            .build(PandocBuild {
+                units: pandoc_units,
+                metadata: metadata.clone(),
+                output_path: output_path.clone(),
+                output_format: request.output_format.clone(),
+                template: options.template.clone(),
+                css: options.css.clone(),
+                resource_path,
+                toc: options.toc,
+                lua_filters: options.lua_filters.clone(),
+                top_level_division: options.top_level_division.clone(),
+            })
+            .await
     }
-
-    // Pandoc resolves the units' relative image hrefs (e.g. `assets/harbour.png`)
-    // against the directory that holds `document.md` and the extracted assets dir.
-    let resource_path = resource_paths(&document.markdown_path);
-
-    let driver = PandocDriver::new(deps.sidecar.clone());
-    let result = driver
-        .build(PandocBuild {
-            units: pandoc_units,
-            metadata: metadata.clone(),
-            output_path: output_path.clone(),
-            output_format: request.output_format.clone(),
-            template: options.template.clone(),
-            css: options.css.clone(),
-            resource_path,
-            toc: options.toc,
-            lua_filters: options.lua_filters.clone(),
-            top_level_division: options.top_level_division.clone(),
-        })
-        .await?;
+    .await;
+    let _ = tokio::fs::remove_dir_all(&units_dir).await;
+    let result = build?;
 
     let final_output = if result.output_path.is_empty() {
         output_path
@@ -716,6 +726,15 @@ pub(crate) fn chunk_has_translation(chunk: &Chunk) -> bool {
     translated_text(chunk).is_some()
 }
 
+/// A per-build scratch directory for the composed Markdown units.
+///
+/// Two concurrent builds of the same project must not share unit files: the second write
+/// would land between the first build's write and its pandoc read. The caller removes the
+/// directory when the build ends.
+fn unique_units_dir(output_dir: &Path) -> PathBuf {
+    output_dir.join(format!("units-{}", crate::db::new_id()))
+}
+
 /// Default output filename: `<sanitized name>.<format>`.
 fn export_filename(name: &str, output_format: &str) -> String {
     format!("{}.{}", sanitize(name), output_format)
@@ -826,6 +845,19 @@ mod tests {
     #[test]
     fn sanitize_replaces_unsafe_characters() {
         assert_eq!(sanitize("My Book: v2"), "My_Book__v2");
+    }
+
+    #[test]
+    fn every_build_gets_its_own_unit_directory() {
+        let dir = Path::new("/out");
+        let first = unique_units_dir(dir);
+        let second = unique_units_dir(dir);
+        assert_ne!(first, second, "concurrent builds must not share units");
+        assert!(first.starts_with(dir));
+        assert!(first
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with("units-")));
     }
 
     #[test]
