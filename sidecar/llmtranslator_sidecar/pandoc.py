@@ -49,10 +49,32 @@ PANDOC_ENV = "LLMTRANSLATOR_PANDOC"
 #: Environment variable that overrides the pandoc run timeout, in seconds.
 PANDOC_TIMEOUT_ENV = "LLMTRANSLATOR_PANDOC_TIMEOUT"
 
+#: Suffix of the file that keeps pandoc's output when a build fails, next to the target.
+PANDOC_LOG_SUFFIX = ".pandoc.log"
+
 #: A pandoc run that takes longer than this is killed. The sidecar's JSON-RPC loop is
 #: sequential, so a hung pandoc would block every later request until the client times out
 #: and abandons it, leaving the worker unable to make progress.
 DEFAULT_TIMEOUT_SECONDS = 600.0
+
+
+def _persist_log(output_path: str, log: str) -> str:
+    """Write pandoc's combined output next to the target and return a short pointer to it.
+
+    The log can quote the document being built, so it must not travel inside the RPC error:
+    that message is logged, stored on the job and shipped in the diagnostics bundle, all of
+    which promise never to carry book text. The file lives beside the requested output, the
+    one durable artefact of a build; the caller gets a path to hand to the user.
+    """
+    if not log:
+        return ""
+    path = Path(f"{output_path}{PANDOC_LOG_SUFFIX}")
+    try:
+        path.write_text(log, encoding="utf-8")
+    except OSError:
+        return ""
+    return f"pandoc log written to {path}"
+
 
 #: Requested output format -> pandoc writer. An unknown format falls back to its own name.
 _WRITERS: dict[str, str] = {
@@ -242,7 +264,7 @@ def build(  # noqa: PLR0913 - the keyword signature is frozen by PLAN.md §12.1
                 for stream in (exc.stdout, exc.stderr)
             )
             msg = f"pandoc timed out after {timeout:g}s"
-            raise PandocError(msg, log=partial) from exc
+            raise PandocError(msg, log=_persist_log(output_path, partial)) from exc
         except OSError as exc:
             Path(temporary).unlink(missing_ok=True)
             msg = f"failed to run pandoc: {exc}"
@@ -252,7 +274,7 @@ def build(  # noqa: PLR0913 - the keyword signature is frozen by PLAN.md §12.1
         if completed.returncode != 0:
             Path(temporary).unlink(missing_ok=True)
             msg = f"pandoc exited with status {completed.returncode}"
-            raise PandocError(msg, log=log)
+            raise PandocError(msg, log=_persist_log(output_path, log))
         try:
             Path(temporary).replace(target)
         except OSError as exc:
@@ -261,7 +283,7 @@ def build(  # noqa: PLR0913 - the keyword signature is frozen by PLAN.md §12.1
             # build failure, not an unmapped internal error.
             Path(temporary).unlink(missing_ok=True)
             msg = f"failed to move the pandoc output into {target}: {exc}"
-            raise PandocError(msg, log=log) from exc
+            raise PandocError(msg, log=_persist_log(output_path, log)) from exc
 
     duration_ms = int((time.perf_counter() - started) * 1000)
     return {"output_path": output_path, "log": log, "duration_ms": duration_ms}

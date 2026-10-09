@@ -51,11 +51,14 @@ impl RpcErrorObject {
 impl From<RpcErrorObject> for AppError {
     fn from(e: RpcErrorObject) -> Self {
         let retryable = e.is_retryable();
-        // Fold the JSON-RPC `data` payload into the message: a pandoc failure (code
-        // 1002) carries its build log there, and dropping it left the failure
-        // undiagnosable.
+        // Fold a *bounded, single-line* rendering of the JSON-RPC `data` payload into the
+        // message: a pandoc failure (code 1002) carries a pointer to its build log there.
+        // The message is logged and shipped in the diagnostics bundle, so it must not become
+        // a second, unredacted copy of a log that can quote the book.
         let message = match e.data {
-            Some(data) if !data.is_null() => format!("{} [data: {data}]", e.message),
+            Some(data) if !data.is_null() => {
+                format!("{} [data: {}]", e.message, describe_data(&data))
+            }
             _ => e.message,
         };
         AppError::Sidecar {
@@ -63,6 +66,25 @@ impl From<RpcErrorObject> for AppError {
             message,
             retryable,
         }
+    }
+}
+
+/// Length cap for a sidecar error payload folded into a logged message.
+const MAX_ERROR_DATA_CHARS: usize = 200;
+
+/// A compact, single-line description of a sidecar error payload.
+fn describe_data(data: &Value) -> String {
+    let single_line = data
+        .to_string()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if single_line.chars().count() <= MAX_ERROR_DATA_CHARS {
+        single_line
+    } else {
+        let mut capped: String = single_line.chars().take(MAX_ERROR_DATA_CHARS - 1).collect();
+        capped.push('…');
+        capped
     }
 }
 
@@ -759,17 +781,30 @@ mod tests {
         });
         assert!(internal.retryable());
 
-        // A pandoc failure carries its build log in `data`; it must survive into
-        // the message, or the failure is undiagnosable.
+        // A pandoc failure carries a pointer to its build log in `data`; it must survive
+        // into the message (bounded and single-line), or the failure is undiagnosable.
         let pandoc = AppError::from(RpcErrorObject {
             code: 1002,
             message: "pandoc failed".into(),
-            data: Some(serde_json::json!({ "log": "! LaTeX Error: Unicode character ⟦" })),
+            data: Some(
+                serde_json::json!({ "log": "pandoc log written to /out/book.epub.pandoc.log" }),
+            ),
         });
         assert!(pandoc.retryable());
         let text = pandoc.to_string();
         assert!(text.contains("pandoc failed"));
-        assert!(text.contains("LaTeX Error"));
+        assert!(text.contains("book.epub.pandoc.log"));
+
+        // A large payload is capped and flattened, so the message cannot become a second
+        // copy of a log that may quote the book.
+        let noisy = AppError::from(RpcErrorObject {
+            code: -32603,
+            message: "boom".into(),
+            data: Some(serde_json::json!({ "log": "line\n".repeat(500) })),
+        });
+        let noisy_text = noisy.to_string();
+        assert!(noisy_text.contains('…'));
+        assert!(!noisy_text.contains('\n'));
     }
 
     #[tokio::test]

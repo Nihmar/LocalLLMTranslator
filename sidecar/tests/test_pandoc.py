@@ -164,7 +164,7 @@ def test_missing_binary_raises_missing_dependency(
     assert info.value.code == 1003
 
 
-def test_pandoc_failure_raises_pandoc_error_carrying_the_log(tmp_path: Path) -> None:
+def test_pandoc_failure_raises_pandoc_error_pointing_at_the_log(tmp_path: Path) -> None:
     output = tmp_path / "book.html"
     with pytest.raises(PandocError) as info:
         build(
@@ -175,7 +175,12 @@ def test_pandoc_failure_raises_pandoc_error_carrying_the_log(tmp_path: Path) -> 
             template=str(tmp_path / "does-not-exist.html"),
         )
     assert info.value.code == 1002
-    assert info.value.log
+    # The RPC error carries a short pointer, not the log text: the log can quote the book
+    # and the error is logged and shipped in the diagnostics bundle.
+    assert "pandoc log written to" in info.value.log
+    log_path = tmp_path / "book.html.pandoc.log"
+    assert log_path.is_file()
+    assert log_path.read_text(encoding="utf-8").strip()
     # Atomic write: a failed build never leaves a partial export behind.
     assert not output.exists()
 

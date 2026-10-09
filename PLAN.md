@@ -1062,7 +1062,10 @@ One request per line, one response per line. Progressive numeric `id`.
 Errors: `{"jsonrpc":"2.0","id":N,"error":{"code":-32602,"message":"...","data":{...}}}`.
 Codes: `-32700` parse, `-32600` invalid request, `-32601` method not found,
 `-32602` invalid params, `-32603` internal, `1001` ingestion failure, `1002` pandoc failure,
-`1003` missing dependency.
+`1003` missing dependency. A `data` payload is folded into the message the control plane logs
+and ships in the diagnostics bundle, so it is kept short and single-line: a pandoc failure
+(`1002`) writes its build log next to the requested output and reports that path in `data.log`,
+never the log text itself.
 
 | Method | Params | Result |
 |---|---|---|

@@ -42,7 +42,10 @@ class ExtractionError(SidecarError):
 class PandocError(SidecarError):
     """Pandoc failed; the RPC layer maps this to code ``1002``.
 
-    :attr:`log` carries pandoc's combined stdout and stderr so the caller can surface it.
+    :attr:`log` is a short pointer to the file that holds pandoc's combined stdout and
+    stderr, written next to the requested output. It is deliberately not the log itself: the
+    RPC error message is logged and shipped in the diagnostics bundle, and the log can quote
+    the document being built.
     """
 
     code = PANDOC_FAILURE
