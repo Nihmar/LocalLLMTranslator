@@ -125,6 +125,11 @@ export function ExportView({ project, onNavigate }: ExportViewProps) {
 
   const [building, setBuilding] = useState(false);
   const [buildError, setBuildError] = useState<string | null>(null);
+  /** Set when a build would emit untranslated chunks in the source language. */
+  const [untranslatedWarning, setUntranslatedWarning] = useState<{
+    missing: number;
+    total: number;
+  } | null>(null);
   const [result, setResult] = useState<ExportOutcome | null>(null);
   const [progress, setProgress] = useState<ExportProgressEvent | null>(null);
   const [openError, setOpenError] = useState<string | null>(null);
@@ -210,10 +215,11 @@ export function ExportView({ project, onNavigate }: ExportViewProps) {
     }
   }
 
-  async function handleBuild() {
+  async function handleBuild(allowUntranslated = false) {
     if (projectId === null || formatSpec === undefined) {
       return;
     }
+    setUntranslatedWarning(null);
     const trimmedOutput = outputPath.trim();
     const trimmedTemplate = template.trim();
     const trimmedCss = css.trim();
@@ -230,6 +236,22 @@ export function ExportView({ project, onNavigate }: ExportViewProps) {
       return;
     }
 
+    const chapterId = chapterScope === "all" ? null : chapterScope;
+    if (!allowUntranslated) {
+      // The backend refuses a half-translated build anyway; asking first turns that into a
+      // choice instead of an error. A failing preview falls through to the build's own check.
+      const composed = await exportPreview({ project_id: projectId, chapter_id: chapterId }).catch(
+        () => null,
+      );
+      if (composed !== null && composed.untranslated_chunks > 0) {
+        setUntranslatedWarning({
+          missing: composed.untranslated_chunks,
+          total: composed.total_chunks,
+        });
+        return;
+      }
+    }
+
     setBuilding(true);
     setBuildError(null);
     setOpenError(null);
@@ -243,8 +265,9 @@ export function ExportView({ project, onNavigate }: ExportViewProps) {
         css: trimmedCss.length > 0 ? trimmedCss : null,
         output_path: trimmedOutput.length > 0 ? trimmedOutput : null,
         toc,
-        chapter_id: chapterScope === "all" ? null : chapterScope,
+        chapter_id: chapterId,
         force,
+        allow_untranslated: allowUntranslated,
       });
       setResult(built);
       setHistory(await exportHistory(projectId).catch(() => history));
@@ -484,6 +507,39 @@ export function ExportView({ project, onNavigate }: ExportViewProps) {
                 </p>
               </div>
             </div>
+
+            {untranslatedWarning !== null ? (
+              <div className="banner banner-warn" role="alert">
+                <span aria-hidden="true">⚠</span>
+                <div className="flex flex-col gap-2">
+                  <span>
+                    {formatNumber(untranslatedWarning.missing)} parti su{" "}
+                    {formatNumber(untranslatedWarning.total)} non sono tradotte: nel file
+                    uscirebbero nella lingua originale.
+                  </span>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      className="btn"
+                      onClick={() => {
+                        void handleBuild(true);
+                      }}
+                    >
+                      Esporta comunque
+                    </button>
+                    <button
+                      type="button"
+                      className="btn"
+                      onClick={() => {
+                        setUntranslatedWarning(null);
+                      }}
+                    >
+                      Annulla
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : null}
 
             {buildError !== null ? (
               <div className="banner banner-error" role="alert">

@@ -687,6 +687,8 @@ export interface ExportRequest {  project_id: string;
   chapter_id?: string | null;
   /** Bypass the unchanged-build skip. */
   force?: boolean;
+  /** Export although some chunks have no translation (they are rendered from the source). */
+  allow_untranslated?: boolean;
 }
 
 /** Result of `export_build` (`pipeline::export::ExportOutcome`). */
