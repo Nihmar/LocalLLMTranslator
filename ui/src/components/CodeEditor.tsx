@@ -7,13 +7,13 @@ import { EditorView } from "@codemirror/view";
 /**
  * CodeMirror 6 wrappers for the review screen (`PLAN.md` §1, §11.4).
  *
- * The app is dark, so a small theme built from the design tokens is applied on
- * top of the default light theme. Both editors are read-only: accepting or
+ * A small theme built from the design tokens is applied on top of the default
+ * light theme, so the diff follows the app palette. Both editors are read-only: accepting or
  * rejecting a proposal is a control-plane operation, not a direct edit, so the
  * review never mutates the text locally.
  */
 
-const darkTheme = EditorView.theme(
+const tokenTheme = EditorView.theme(
   {
     "&": {
       color: "var(--color-ink)",
@@ -27,36 +27,36 @@ const darkTheme = EditorView.theme(
     },
     ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--color-accent)" },
     "&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection": {
-      backgroundColor: "rgba(91, 140, 255, 0.28)",
+      backgroundColor: "rgba(14, 106, 101, 0.18)",
     },
     ".cm-gutters": {
       backgroundColor: "var(--color-surface-2)",
       color: "var(--color-faint)",
       border: "none",
     },
-    ".cm-activeLine": { backgroundColor: "rgba(30, 41, 65, 0.45)" },
+    ".cm-activeLine": { backgroundColor: "var(--color-surface-2)" },
     ".cm-activeLineGutter": {
       backgroundColor: "var(--color-surface-3)",
       color: "var(--color-ink-soft)",
     },
-    ".cm-changedLine": { backgroundColor: "rgba(52, 211, 153, 0.08)" },
+    ".cm-changedLine": { backgroundColor: "rgba(47, 107, 47, 0.06)" },
     ".cm-changedText": {
-      backgroundColor: "rgba(52, 211, 153, 0.28)",
+      backgroundColor: "var(--color-ok-soft)",
       textDecoration: "underline",
       textDecorationColor: "var(--color-ok)",
     },
-    ".cm-changedLineGutter": { backgroundColor: "rgba(52, 211, 153, 0.14)" },
-    ".cm-deletedChunk": { backgroundColor: "rgba(248, 113, 113, 0.08)" },
-    ".cm-deletedText": { backgroundColor: "rgba(248, 113, 113, 0.3)" },
+    ".cm-changedLineGutter": { backgroundColor: "var(--color-ok-soft)" },
+    ".cm-deletedChunk": { backgroundColor: "rgba(161, 52, 42, 0.05)" },
+    ".cm-deletedText": { backgroundColor: "var(--color-danger-soft)" },
     ".cm-mergeSpacer": { backgroundColor: "var(--color-surface-2)" },
     ".cm-mergeView .cm-changedLine": { borderColor: "var(--color-ok)" },
   },
-  { dark: true },
+  { dark: false },
 );
 
 function extensions(readOnly: boolean): Extension[] {
   return [
-    darkTheme,
+    tokenTheme,
     markdown(),
     EditorView.lineWrapping,
     EditorState.readOnly.of(readOnly),

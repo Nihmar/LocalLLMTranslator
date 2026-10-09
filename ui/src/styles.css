@@ -5,39 +5,52 @@
  *
  * Tailwind v4 turns every `--color-*` entry below into both a CSS custom property (used by the
  * plain-CSS component classes further down) and a set of utilities (`bg-surface`, `text-muted`,
- * ...). No remote fonts: the stacks resolve to fonts already installed on the system.
+ * ...). Light, editorial look (mockups in issue #14): book text in a serif, UI in a sans, one teal
+ * accent, amber only for "needs your attention". The fonts are bundled (`@fontsource`, OFL), never
+ * fetched: the app works offline.
  */
 @theme {
   --font-sans:
-    system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", "Noto Sans", Arial,
-    sans-serif;
-  --font-mono:
-    ui-monospace, "SFMono-Regular", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+    "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", "Noto Sans", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  --font-serif: "Literata Variable", Georgia, "Noto Serif", serif;
 
-  --color-canvas: #0a0e17;
-  --color-surface: #111827;
-  --color-surface-2: #172033;
-  --color-surface-3: #1e2941;
-  --color-line: #263149;
-  --color-line-strong: #35446a;
+  --color-canvas: #f3f2ee;
+  --color-surface: #ffffff;
+  --color-surface-2: #faf9f6;
+  --color-surface-3: #efede7;
+  --color-line: #e3e1da;
+  --color-line-strong: #cfccc3;
 
-  --color-ink: #e7ecf7;
-  --color-ink-soft: #c3cbdd;
-  --color-muted: #8b97b0;
-  --color-faint: #63708c;
+  --color-ink: #1d1c1a;
+  --color-ink-soft: #3a3833;
+  --color-muted: #6e6b64;
+  --color-faint: #7a766d;
 
-  --color-accent: #5b8cff;
-  --color-ok: #34d399;
-  --color-warn: #fbbf24;
-  --color-danger: #f87171;
-  --color-info: #60a5fa;
+  --color-accent: #0e6a65;
+  --color-accent-hover: #0a4f4b;
+  --color-on-accent: #ffffff;
+  --color-ok: #2f6b2f;
+  --color-warn: #8a4b00;
+  --color-danger: #a1342a;
+  --color-info: #2b5c8a;
 
-  /* Soft variants used by the badges and banners. */
-  --color-accent-soft: #1c2a4d;
-  --color-ok-soft: #10362c;
-  --color-warn-soft: #3a2e10;
-  --color-danger-soft: #3d1d22;
-  --color-info-soft: #16283f;
+  /* Soft fills, the text that sits on them and their edges (badges, banners). */
+  --color-accent-soft: #e3f0ee;
+  --color-ok-soft: #e4f0e1;
+  --color-warn-soft: #fbebd3;
+  --color-danger-soft: #f8e2de;
+  --color-info-soft: #e3ecf5;
+  --color-accent-strong: #0a4f4b;
+  --color-ok-strong: #245a24;
+  --color-warn-strong: #6b3a00;
+  --color-danger-strong: #8e2c23;
+  --color-info-strong: #1f4466;
+  --color-accent-edge: #9bc9c3;
+  --color-ok-edge: #a9cfa0;
+  --color-warn-edge: #e8c38a;
+  --color-danger-edge: #e5a79d;
+  --color-info-edge: #a9c3df;
 
   --radius-panel: 0.75rem;
 }
@@ -60,6 +73,7 @@
     font-family: var(--font-sans);
     font-size: 14px;
     line-height: 1.5;
+    accent-color: var(--color-accent);
     -webkit-font-smoothing: antialiased;
     overflow: hidden;
   }
@@ -116,9 +130,7 @@
     height: 100%;
     width: 100%;
     overflow: hidden;
-    background:
-      radial-gradient(1100px 480px at 12% -8%, rgba(91, 140, 255, 0.11), transparent 62%),
-      var(--color-canvas);
+    background: var(--color-canvas);
   }
 
   .panel {
@@ -142,7 +154,7 @@
   .dialog-backdrop {
     position: absolute;
     inset: 0;
-    background-color: rgb(6 8 14 / 72%);
+    background-color: rgb(29 28 26 / 45%);
   }
 
   .dialog {
@@ -154,7 +166,7 @@
     background-color: var(--color-surface);
     border: 1px solid var(--color-line-strong);
     border-radius: var(--radius-panel);
-    box-shadow: 0 24px 60px rgb(0 0 0 / 45%);
+    box-shadow: 0 24px 64px rgb(29 28 26 / 22%);
   }
 
   .dialog:focus {
@@ -308,23 +320,23 @@
   .btn-primary {
     background-color: var(--color-accent);
     border-color: var(--color-accent);
-    color: #08101f;
+    color: var(--color-on-accent);
     font-weight: 600;
   }
 
   .btn-primary:hover:not(:disabled) {
-    background-color: #74a0ff;
-    border-color: #74a0ff;
+    background-color: var(--color-accent-hover);
+    border-color: var(--color-accent-hover);
   }
 
   .btn-danger {
     background-color: var(--color-danger-soft);
-    border-color: #6c2b33;
-    color: #ffc9cd;
+    border-color: var(--color-danger-edge);
+    color: var(--color-danger-strong);
   }
 
   .btn-danger:hover:not(:disabled) {
-    background-color: #4d2229;
+    background-color: #f2cfc8;
   }
 
   .btn-ghost {
@@ -349,7 +361,7 @@
   .select,
   .textarea {
     width: 100%;
-    background-color: var(--color-canvas);
+    background-color: var(--color-surface);
     border: 1px solid var(--color-line-strong);
     border-radius: 0.5rem;
     padding: 0.42rem 0.6rem;
@@ -490,32 +502,32 @@
 
   .badge-accent {
     background-color: var(--color-accent-soft);
-    border-color: #3450a0;
-    color: #bcd0ff;
+    border-color: var(--color-accent-edge);
+    color: var(--color-accent-strong);
   }
 
   .badge-info {
     background-color: var(--color-info-soft);
-    border-color: #2a4d78;
-    color: #bcd8ff;
+    border-color: var(--color-info-edge);
+    color: var(--color-info-strong);
   }
 
   .badge-success {
     background-color: var(--color-ok-soft);
-    border-color: #1f6b55;
-    color: #a7f3d0;
+    border-color: var(--color-ok-edge);
+    color: var(--color-ok-strong);
   }
 
   .badge-warning {
     background-color: var(--color-warn-soft);
-    border-color: #7a6218;
-    color: #fde68a;
+    border-color: var(--color-warn-edge);
+    color: var(--color-warn-strong);
   }
 
   .badge-danger {
     background-color: var(--color-danger-soft);
-    border-color: #7f333c;
-    color: #fecdd3;
+    border-color: var(--color-danger-edge);
+    color: var(--color-danger-strong);
   }
 
   .mono-chip {
@@ -554,7 +566,7 @@
   /* --- log pane --- */
   .log-scroll {
     overflow: auto;
-    background-color: #070a11;
+    background-color: var(--color-surface-2);
     border-top: 1px solid var(--color-line);
     padding: 0.4rem 0;
     font-family: var(--font-mono);
@@ -581,7 +593,7 @@
 
   .log-source {
     flex: none;
-    color: #7f8dab;
+    color: var(--color-muted);
     max-width: 12rem;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -618,11 +630,11 @@
   }
 
   .log-line[data-level="error"] .log-message {
-    color: #ffd4d8;
+    color: var(--color-danger-strong);
   }
 
   .log-line[data-level="warn"] .log-message {
-    color: #ffe9b8;
+    color: var(--color-warn-strong);
   }
 
   /* --- review editors (CodeMirror 6) --- */
@@ -659,9 +671,10 @@
     overflow: auto;
     border: 1px solid var(--color-line);
     border-radius: 0.55rem;
-    background-color: var(--color-canvas);
+    background-color: var(--color-surface);
     padding: 0.9rem 1.1rem;
-    font-size: 0.875rem;
+    font-family: var(--font-serif);
+    font-size: 1rem;
     line-height: 1.7;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
@@ -748,20 +761,20 @@
 
   .banner-error {
     background-color: var(--color-danger-soft);
-    border-color: #7f333c;
-    color: #ffd9dd;
+    border-color: var(--color-danger-edge);
+    color: var(--color-danger-strong);
   }
 
   .banner-warn {
     background-color: var(--color-warn-soft);
-    border-color: #7a6218;
-    color: #ffe9b8;
+    border-color: var(--color-warn-edge);
+    color: var(--color-warn-strong);
   }
 
   .banner-ok {
     background-color: var(--color-ok-soft);
-    border-color: #1f6b55;
-    color: #b7f7dc;
+    border-color: var(--color-ok-edge);
+    color: var(--color-ok-strong);
   }
 
   .kbd {
