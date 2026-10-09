@@ -369,12 +369,11 @@ pub async fn maybe_enqueue_summaries(
         chapter_id: chapter_id.to_string(),
         final_run,
     })?;
-    if crate::scheduler::queue::has_pending(pool, project_id, JOB_KIND, &payload).await? {
-        return Ok(None);
-    }
-
     let job = crate::scheduler::NewJob::new(project_id, JOB_KIND, payload).with_priority(50);
-    let job_id = crate::scheduler::queue::enqueue(pool, &job).await?;
+    let Some(job_id) = crate::scheduler::queue::enqueue_if_absent(pool, &job).await? else {
+        // An equivalent summary is already queued.
+        return Ok(None);
+    };
     tracing::debug!(
         project_id,
         chapter_id,

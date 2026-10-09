@@ -8,7 +8,7 @@ use crate::error::{AppError, Result};
 use crate::scheduler::NewJob;
 use crate::AppState;
 
-use super::enqueue_and_emit;
+use super::enqueue_once_and_emit;
 
 #[derive(Debug, Clone, Deserialize, ts_rs::TS)]
 #[ts(export, optional_fields = nullable)]
@@ -63,7 +63,7 @@ pub async fn ingest_start(state: &AppState, req: IngestStartRequest) -> Result<J
     });
 
     let job = NewJob::new(&req.project_id, "ingest", payload).with_priority(0);
-    let job = enqueue_and_emit(state, &job).await?;
+    let job = enqueue_once_and_emit(state, &job).await?;
 
     // Ensure the worker pool is running to pick the job up.
     state.worker.start();

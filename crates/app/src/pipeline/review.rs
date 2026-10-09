@@ -601,12 +601,11 @@ pub async fn enqueue_review_jobs(
             kinds.push(super::qa::JOB_KIND);
         }
         for kind in kinds {
-            if crate::scheduler::queue::has_pending(pool, project_id, kind, &payload).await? {
-                continue;
-            }
             let job = crate::scheduler::NewJob::new(project_id, kind, payload.clone())
                 .with_priority(60 + chunk.order_index);
-            jobs.push(crate::scheduler::queue::enqueue(pool, &job).await?);
+            if let Some(id) = crate::scheduler::queue::enqueue_if_absent(pool, &job).await? {
+                jobs.push(id);
+            }
         }
     }
     Ok(jobs)

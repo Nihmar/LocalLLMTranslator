@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
-use super::{enqueue_and_emit, Ack};
+use super::{enqueue_if_absent_and_emit, Ack};
 use crate::db::models::Chunk;
 use crate::db::repo;
 use crate::error::{AppError, Result};
@@ -106,8 +106,9 @@ pub async fn translation_start(
         let payload = serde_json::json!({ "chunk_id": chunk.id });
         let job = NewJob::new(&project_id, "translate_chunk", payload)
             .with_priority(100 + chunk.order_index);
-        enqueue_and_emit(state, &job).await?;
-        enqueued += 1;
+        if enqueue_if_absent_and_emit(state, &job).await? {
+            enqueued += 1;
+        }
     }
 
     state.worker.start();

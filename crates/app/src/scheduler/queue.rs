@@ -138,6 +138,57 @@ pub async fn enqueue(pool: &SqlitePool, job: &NewJob) -> Result<String> {
     Ok(id)
 }
 
+/// Insert a new pending job only when no unfinished job with the same identity exists.
+///
+/// The identity is `project_id` + `kind` + `payload_json`, the same one [`has_pending`]
+/// checks. The check and the insert are a single statement, so two concurrent callers
+/// cannot both pass it: SQLite serialises writers. Returns the new id, or `None` when an
+/// equivalent job is already `pending`/`leased`/`running`.
+pub async fn enqueue_if_absent(pool: &SqlitePool, job: &NewJob) -> Result<Option<String>> {
+    let id = new_id();
+    let payload_json = serde_json::to_string(&job.payload)?;
+    let res = sqlx::query(
+        "INSERT INTO job (id, project_id, kind, payload_json, priority, state, attempts, \
+         max_attempts, run_after, created_at) \
+         SELECT ?1,?2,?3,?4,?5,'pending',0,?6,?7,?8 \
+         WHERE NOT EXISTS (SELECT 1 FROM job WHERE project_id = ?2 AND kind = ?3 \
+           AND payload_json = ?4 AND state IN ('pending','leased','running'))",
+    )
+    .bind(id.as_str())
+    .bind(job.project_id.as_str())
+    .bind(job.kind.as_str())
+    .bind(&payload_json)
+    .bind(job.priority)
+    .bind(job.max_attempts)
+    .bind(job.run_after.as_deref())
+    .bind(now())
+    .execute(pool)
+    .await?;
+    Ok((res.rows_affected() > 0).then_some(id))
+}
+
+/// The oldest unfinished job matching the identity used by [`enqueue_if_absent`].
+///
+/// Used to hand back the id of an already-queued job instead of enqueueing a twin.
+pub async fn find_active(
+    pool: &SqlitePool,
+    project_id: &str,
+    kind: &str,
+    payload: &Value,
+) -> Result<Option<Job>> {
+    let payload_json = serde_json::to_string(payload)?;
+    let row = sqlx::query_as::<_, Job>(
+        "SELECT * FROM job WHERE project_id = ?1 AND kind = ?2 AND payload_json = ?3 \
+         AND state IN ('pending','leased','running') ORDER BY created_at LIMIT 1",
+    )
+    .bind(project_id)
+    .bind(kind)
+    .bind(&payload_json)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}
+
 /// Claim the next eligible job, or `None` when the queue is empty.
 pub async fn claim(pool: &SqlitePool, owner: &str) -> Result<Option<Job>> {
     let expires_at = now_plus_secs(LEASE_SECS);
@@ -466,6 +517,47 @@ mod tests {
             active,
             HashSet::from(["c-waiting".to_string(), "c-running".to_string()])
         );
+    }
+
+    /// Enqueueing the same identity twice must not create a twin while one is unfinished,
+    /// and must work again once the first settles.
+    #[tokio::test]
+    async fn enqueue_if_absent_suppresses_an_unfinished_twin() {
+        let (pool, _dir) = connect_temp_file().await.expect("pool");
+        insert_test_project(&pool, "proj").await;
+        let payload = serde_json::json!({ "chunk_id": "c1" });
+        let job = NewJob::new("proj", "translate_chunk", payload.clone());
+
+        let first = enqueue_if_absent(&pool, &job).await.expect("first");
+        assert!(first.is_some());
+        assert!(enqueue_if_absent(&pool, &job)
+            .await
+            .expect("second")
+            .is_none());
+        // A different payload is a different identity.
+        let other = NewJob::new(
+            "proj",
+            "translate_chunk",
+            serde_json::json!({ "chunk_id": "c2" }),
+        );
+        assert!(enqueue_if_absent(&pool, &other)
+            .await
+            .expect("other")
+            .is_some());
+
+        // The existing job is findable for a caller that wants to return its id.
+        let active = find_active(&pool, "proj", "translate_chunk", &payload)
+            .await
+            .expect("find")
+            .expect("some");
+        assert_eq!(active.id, first.unwrap());
+
+        // Once the unfinished job settles, the same identity can be enqueued again.
+        complete(&pool, &active.id).await.expect("complete");
+        assert!(enqueue_if_absent(&pool, &job)
+            .await
+            .expect("again")
+            .is_some());
     }
 
     #[tokio::test]

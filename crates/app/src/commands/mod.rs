@@ -52,6 +52,43 @@ pub async fn enqueue_and_emit(state: &AppState, job: &NewJob) -> Result<Job> {
     Ok(stored)
 }
 
+/// Enqueue a job only when no equivalent one is already unfinished. Returns whether a new
+/// job was created and announces its `pending` transition. The check and the insert are one
+/// statement, so a double click or two overlapping calls cannot enqueue a twin.
+pub async fn enqueue_if_absent_and_emit(state: &AppState, job: &NewJob) -> Result<bool> {
+    let Some(id) = crate::scheduler::queue::enqueue_if_absent(&state.pool, job).await? else {
+        return Ok(false);
+    };
+    if let Some(stored) = crate::scheduler::queue::get_job(&state.pool, &id).await? {
+        crate::events::emit_job(&*state.emitter, &stored);
+    }
+    Ok(true)
+}
+
+/// Enqueue a job unless an equivalent one is unfinished, returning the stored row either
+/// way so a command can report a job id without creating a duplicate.
+pub async fn enqueue_once_and_emit(state: &AppState, job: &NewJob) -> Result<Job> {
+    if let Some(id) = crate::scheduler::queue::enqueue_if_absent(&state.pool, job).await? {
+        let stored = crate::scheduler::queue::get_job(&state.pool, &id)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("job {id}")))?;
+        crate::events::emit_job(&*state.emitter, &stored);
+        return Ok(stored);
+    }
+    match crate::scheduler::queue::find_active(
+        &state.pool,
+        &job.project_id,
+        &job.kind,
+        &job.payload,
+    )
+    .await?
+    {
+        Some(existing) => Ok(existing),
+        // The twin settled between the insert attempt and the lookup: enqueue for real.
+        None => enqueue_and_emit(state, job).await,
+    }
+}
+
 /// Build the pipeline dependencies from the shared state.
 pub fn pipeline_deps(state: &AppState) -> PipelineDeps {
     PipelineDeps::new(

@@ -4,7 +4,7 @@
 use serde::Deserialize;
 use tauri::State;
 
-use super::enqueue_and_emit;
+use super::enqueue_once_and_emit;
 use super::ingest::JobStarted;
 use crate::db::repo;
 use crate::error::{AppError, Result};
@@ -55,7 +55,7 @@ pub async fn recon_start(state: &AppState, req: ReconStartRequest) -> Result<Job
 
     let payload = serde_json::json!({ "pasted_text": req.pasted_text });
     let job = NewJob::new(&req.project_id, recon::JOB_KIND, payload).with_priority(10);
-    let job = enqueue_and_emit(state, &job).await?;
+    let job = enqueue_once_and_emit(state, &job).await?;
     state.worker.start();
     Ok(JobStarted { job_id: job.id })
 }

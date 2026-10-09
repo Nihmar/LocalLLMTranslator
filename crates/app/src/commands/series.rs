@@ -548,21 +548,12 @@ pub async fn series_qa_scan(state: &AppState, series_id: String) -> Result<Serie
                 continue;
             }
             let payload = serde_json::json!({ "chunk_id": chunk.id });
-            if crate::scheduler::queue::has_pending(
-                &state.pool,
-                &project.id,
-                crate::pipeline::qa::JOB_KIND,
-                &payload,
-            )
-            .await?
-            {
-                continue;
-            }
             let job =
                 crate::scheduler::NewJob::new(&project.id, crate::pipeline::qa::JOB_KIND, payload)
                     .with_priority(60 + chunk.order_index);
-            super::enqueue_and_emit(state, &job).await?;
-            enqueued += 1;
+            if super::enqueue_if_absent_and_emit(state, &job).await? {
+                enqueued += 1;
+            }
         }
     }
     if enqueued > 0 {
@@ -617,7 +608,7 @@ pub async fn series_recon_start(
     let job =
         crate::scheduler::NewJob::new(&first.id, crate::pipeline::series_recon::JOB_KIND, payload)
             .with_priority(20);
-    let job = super::enqueue_and_emit(state, &job).await?;
+    let job = super::enqueue_once_and_emit(state, &job).await?;
     state.worker.start();
     Ok(super::ingest::JobStarted { job_id: job.id })
 }
