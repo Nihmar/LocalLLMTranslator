@@ -944,6 +944,9 @@ of issue #14) is a header, a row of book steps and an activity bar:
 - the **header** carries the open book (name and language pair; clicking it opens the library)
   and the application destinations, always reachable: **Libreria** (the books), **Serie** and
   **Modelli**;
+- a book opens on its **Panoramica**: one "next action" derived from where the book is (import,
+  prepare, translate, retry failed parts, review, export) and translation, review and glossary
+  at a glance;
 - while a book is open, its **five steps** follow the order of the work — **Importa**,
   **Prepara** (book profile, dialogue convention, glossary), **Traduci**, **Rivedi**, **Esporta**
   — each a freely visitable route, not a constraint;

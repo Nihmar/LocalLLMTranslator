@@ -212,8 +212,8 @@ export function ProjectsView({ currentProjectId, onOpenProject, onDeleteProject,
     try {
       const fresh = await projectGet(projectId);
       onOpenProject(fresh.project);
-      // A book that was never imported starts at the import; otherwise at the reading.
-      onNavigate(fresh.chapters.length === 0 ? "ingest" : "translate");
+      // A book that was never imported starts at the import; otherwise at its overview.
+      onNavigate(fresh.chapters.length === 0 ? "ingest" : "overview");
     } catch (openError) {
       setActionError(toErrorMessage(openError));
     } finally {

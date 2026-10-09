@@ -9,6 +9,7 @@ import { GlossaryView } from "./routes/GlossaryView";
 import { IngestView } from "./routes/IngestView";
 import { JobsView } from "./routes/JobsView";
 import { ModelsView } from "./routes/ModelsView";
+import { OverviewView } from "./routes/OverviewView";
 import { ProjectsView } from "./routes/ProjectsView";
 import { ReviewView } from "./routes/ReviewView";
 import { SeriesView } from "./routes/SeriesView";
@@ -34,6 +35,7 @@ import { TranslateView } from "./routes/TranslateView";
 
 export type ViewId =
   | "projects"
+  | "overview"
   | "ingest"
   | "models"
   | "translate"
@@ -65,9 +67,10 @@ const APP_LINKS: readonly NavEntry[] = [
   { id: "models", label: "Modelli", hint: "Endpoint, salute, ruoli" },
 ];
 
-const PROJECT_VIEWS: ReadonlySet<ViewId> = new Set(
-  BOOK_STEPS.map((entry) => entry.id),
-);
+const PROJECT_VIEWS: ReadonlySet<ViewId> = new Set<ViewId>([
+  "overview",
+  ...BOOK_STEPS.map((entry) => entry.id),
+]);
 
 const STORAGE_KEY = "llmtranslator.current_project_id";
 
@@ -197,7 +200,7 @@ export default function App() {
             type="button"
             className="font-serif text-lg font-semibold text-ink"
             onClick={() => {
-              setView(project === null ? "projects" : "translate");
+              setView(project === null ? "projects" : "overview");
             }}
           >
             LLM Translator
@@ -213,9 +216,9 @@ export default function App() {
             <button
               type="button"
               className="btn"
-              title={`${project.source_path} — cambia libro`}
+              title={`${project.source_path} — panoramica del libro`}
               onClick={() => {
-                setView("projects");
+                setView("overview");
               }}
             >
               <span className="max-w-[18rem] truncate font-semibold">{project.name}</span>
@@ -244,6 +247,17 @@ export default function App() {
 
         {project === null ? null : (
           <nav aria-label="Passi del libro" className="flex flex-wrap items-end gap-x-2 px-6">
+            <button
+              type="button"
+              className="step-tab"
+              title="Dove è il libro e cosa fare adesso"
+              aria-current={view === "overview" ? "page" : undefined}
+              onClick={() => {
+                setView("overview");
+              }}
+            >
+              Panoramica
+            </button>
             {BOOK_STEPS.map((entry, index) => (
               <button
                 key={entry.id}
@@ -288,6 +302,8 @@ export default function App() {
               onDeleteProject={handleDeleteProject}
               onNavigate={setView}
             />
+          ) : view === "overview" ? (
+            <OverviewView project={project} onNavigate={setView} />
           ) : view === "series" ? (
             <SeriesView />
           ) : view === "ingest" ? (
