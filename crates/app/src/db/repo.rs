@@ -95,6 +95,32 @@ pub async fn delete_project(pool: &SqlitePool, id: &str) -> Result<u64> {
     Ok(res.rows_affected())
 }
 
+/// Delete the rows that point at a project's chunks but have no foreign key, before the
+/// document tree is replaced by a re-ingest.
+///
+/// `llm_call` and `qa_finding` reference chunks/projects with plain `TEXT` columns, so
+/// `DELETE FROM document` (which cascades to chapters/blocks/chunks) does not touch them.
+/// Without this, a re-import leaves stale QA findings and model calls — including the book
+/// text they carry — behind. `delete_project` handles the same rows for a deletion.
+pub async fn delete_document_dependents(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    project_id: &str,
+) -> Result<()> {
+    sqlx::query(
+        "DELETE FROM llm_call WHERE job_id IN (SELECT id FROM job WHERE project_id = ?1) \
+         OR chunk_id IN (SELECT c.id FROM chunk c JOIN document d ON d.id = c.document_id \
+         WHERE d.project_id = ?1)",
+    )
+    .bind(project_id)
+    .execute(&mut **tx)
+    .await?;
+    sqlx::query("DELETE FROM qa_finding WHERE project_id = ?1")
+        .bind(project_id)
+        .execute(&mut **tx)
+        .await?;
+    Ok(())
+}
+
 pub async fn touch_project(pool: &SqlitePool, id: &str) -> Result<()> {
     sqlx::query("UPDATE project SET updated_at = ?2 WHERE id = ?1")
         .bind(id)
@@ -1475,6 +1501,59 @@ mod tests {
                 .expect(count);
             assert_eq!(left, 0, "{count}: rows of the deleted project are left");
         }
+    }
+
+    #[tokio::test]
+    async fn delete_document_dependents_removes_orphan_calls_and_findings() {
+        let pool = connect_memory().await.expect("pool");
+        seed(&pool).await;
+        let ts = now();
+        for statement in [
+            "INSERT INTO job (id, project_id, kind, payload_json, created_at) \
+             VALUES ('j1','p','translate_chunk','{}',?1)",
+            "INSERT INTO llm_call (id, job_id, role, model, params_json, prompt_hash, created_at) \
+             VALUES ('l1','j1','translator','m','{}','h',?1)",
+            "INSERT INTO llm_call (id, chunk_id, role, model, params_json, prompt_hash, created_at) \
+             VALUES ('l2','c1','editor','m','{}','h',?1)",
+            "INSERT INTO qa_finding (id, project_id, kind, severity, details_json, created_at) \
+             VALUES ('q1','p','untranslated','major','{}',?1)",
+        ] {
+            sqlx::query(statement)
+                .bind(&ts)
+                .execute(&pool)
+                .await
+                .expect(statement);
+        }
+
+        // A re-ingest deletes the document tree; the dependents must go first.
+        let mut tx = pool.begin().await.expect("tx");
+        delete_document_dependents(&mut tx, "p")
+            .await
+            .expect("clean");
+        sqlx::query("DELETE FROM document WHERE project_id = ?1")
+            .bind("p")
+            .execute(&mut *tx)
+            .await
+            .expect("document");
+        tx.commit().await.expect("commit");
+
+        for count in [
+            "SELECT COUNT(*) FROM llm_call",
+            "SELECT COUNT(*) FROM qa_finding",
+            "SELECT COUNT(*) FROM chunk",
+        ] {
+            let left: i64 = sqlx::query_scalar(count)
+                .fetch_one(&pool)
+                .await
+                .expect(count);
+            assert_eq!(left, 0, "{count}: rows of the replaced document are left");
+        }
+        // The project itself and the job row survive (the job is the running re-ingest).
+        let projects: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM project")
+            .fetch_one(&pool)
+            .await
+            .expect("projects");
+        assert_eq!(projects, 1);
     }
 
     #[tokio::test]

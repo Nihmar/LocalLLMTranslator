@@ -104,7 +104,9 @@ pub async fn run_ingest(
     let mut tx = pool.begin().await?;
 
     // Re-ingesting replaces the previous document tree (cascades to chapters,
-    // blocks, chunks and their children).
+    // blocks, chunks and their children). `llm_call` and `qa_finding` have no foreign
+    // key to that tree, so they are deleted explicitly first.
+    crate::db::repo::delete_document_dependents(&mut tx, project_id).await?;
     sqlx::query("DELETE FROM document WHERE project_id = ?1")
         .bind(project_id)
         .execute(&mut *tx)
