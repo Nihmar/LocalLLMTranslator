@@ -1,0 +1,31 @@
+[package]
+name = "local-llm-translator-server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Headless LocalLLMTranslator: control plane, UI and command API over HTTP"
+
+[[bin]]
+name = "llmtz"
+path = "src/main.rs"
+
+[dependencies]
+local-llm-translator = { path = "../app" }
+
+axum.workspace = true
+tower-http.workspace = true
+clap.workspace = true
+
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+futures-util.workspace = true
+tracing.workspace = true
+anyhow.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tower = { version = "0.5", features = ["util"] }

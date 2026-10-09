@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/app"]
+members = ["crates/app", "crates/server"]
 
 [workspace.package]
 version = "0.1.0"
@@ -16,6 +16,10 @@ tauri-build = { version = "2" }
 tauri-plugin-shell = { version = "2" }
 tauri-plugin-dialog = { version = "2" }
 
+axum = "0.8"
+tower-http = { version = "0.6", features = ["fs"] }
+clap = { version = "4", features = ["derive"] }
+
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = [
@@ -26,6 +30,7 @@ tokio = { version = "1", features = [
     "time",
     "io-util",
     "fs",
+    "signal",
 ] }
 sqlx = { version = "0.9", default-features = false, features = [
     "sqlite",
