@@ -128,7 +128,21 @@ export function parseSeriesProfile(json: string): SeriesProfile | null {
     const rejected = Array.isArray(record["rejected"])
       ? record["rejected"].filter((source): source is string => typeof source === "string")
       : [];
-    return { synopsis, style_notes: styleNotes, characters, rejected };
+    return {
+      synopsis,
+      style_notes: styleNotes,
+      characters,
+      rejected,
+      // Older candidates predate the provenance field; an empty one renders as absent.
+      provenance: {
+        generated_at: "",
+        model: "",
+        prompt_hash: "",
+        books: [],
+        sources: [],
+        glossary_hash: "",
+      },
+    };
   } catch {
     return null;
   }

@@ -73,22 +73,22 @@ export type LogLevel = "trace" | "debug" | "info" | "warn" | "error";
  * Sidecar supervisor state (`crates/app/src/sidecar/supervisor.rs::SidecarState`, serde
  * `snake_case`). Reported by `sidecar_status` and on `sidecar://status`.
  */
-export type SidecarState = "stopped" | "starting" | "running" | "restarting" | "failed";
+import type { SidecarState } from "./generated/SidecarState.ts";
+export type { SidecarState };
 
 /**
  * Why the resource governor capped the parallel degree
  * (`crates/app/src/resources/vram.rs::ParallelReason`, serde `snake_case`).
  */
-export type ParallelReason = "ok" | "vram_unknown" | "insufficient_headroom" | "slot_limited";
+import type { ParallelReason } from "./generated/ParallelReason.ts";
+export type { ParallelReason };
 
 /** Output formats offered by the Pandoc driver. */
 export type ExportFormat = "pdf" | "epub" | "docx";
 
 /** Generic acknowledgement returned by the mutating commands (`commands::Ack`). */
-export interface Ack {
-  ok: boolean;
-}
-
+import type { Ack } from "./generated/Ack.ts";
+export type { Ack };
 // --- projects ------------------------------------------------------------------------------
 
 /** Row of `project` (`db::models::Project`); `settings_json` is the raw column. */
@@ -96,51 +96,24 @@ import type { Project } from "./generated/Project.ts";
 export type { Project };
 
 /** Request body of `project_create` (`commands::CreateProjectRequest`). */
-export interface CreateProjectRequest {
-  name: string;
-  source_path: string;
-  target_lang: string;
-  source_lang?: string | null;
-  source_format?: string | null;
-  doc_title?: string | null;
-  doc_author?: string | null;
-  settings?: JsonValue;
-  /** Series to create the book in, when it belongs to a saga. */
-  series_id?: string | null;
-  series_order?: number | null;
-}
-
+import type { CreateProjectRequest } from "./generated/CreateProjectRequest.ts";
+export type { CreateProjectRequest };
 /** Row of `chapter` (`db::models::Chapter`). */
 import type { Chapter } from "./generated/Chapter.ts";
 export type { Chapter };
 
 /** Result of `project_get` (`commands::project::ProjectDetail`). */
-export interface ProjectDetail {
-  project: Project;
-  chapters: Chapter[];
-  chunks_total: number;
-  chunks_done: number;
-}
-
+import type { ProjectDetail } from "./generated/ProjectDetail.ts";
+export type { ProjectDetail };
 /** Request body of `project_export` (`commands::project::ExportBundleRequest`). */
-export interface ExportBundleRequest {
-  project_id: string;
-  /** Destination `.llmtz`; `null` writes it into the project output directory. */
-  output_path?: string | null;
-}
-
+import type { ExportBundleRequest } from "./generated/ExportBundleRequest.ts";
+export type { ExportBundleRequest };
 /** Result of `project_export` (`pipeline::bundle::ExportBundleOutcome`). */
-export interface ExportBundleOutcome {
-  output_path: string;
-  bytes: number;
-  files: number;
-}
-
+import type { ExportBundleOutcome } from "./generated/ExportBundleOutcome.ts";
+export type { ExportBundleOutcome };
 /** Request body of `project_import` (`commands::project::ImportBundleRequest`). */
-export interface ImportBundleRequest {
-  archive_path: string;
-}
-
+import type { ImportBundleRequest } from "./generated/ImportBundleRequest.ts";
+export type { ImportBundleRequest };
 // --- LLM endpoints -------------------------------------------------------------------------
 
 /** Row of `llm_endpoint` (`db::models::LlmEndpoint`); `props_json` is the raw `/props` body. */
@@ -148,51 +121,23 @@ import type { LlmEndpoint as Endpoint } from "./generated/LlmEndpoint.ts";
 export type { Endpoint };
 
 /** Request body of `endpoint_upsert` (`commands::endpoint::EndpointUpsert`); `id` absent = create. */
-export interface EndpointUpsert {
-  id?: string | null;
-  name: string;
-  base_url: string;
-  api_key_ref?: string | null;
-  max_concurrency?: number | null;
-  notes?: string | null;
-}
-
+import type { EndpointUpsert } from "./generated/EndpointUpsert.ts";
+export type { EndpointUpsert };
 /** Request body of `endpoint_models` (`commands::endpoint::EndpointModelsRequest`). */
-export interface EndpointModelsRequest {
-  endpoint_id?: string | null;
-  base_url?: string | null;
-}
-
+import type { EndpointModelsRequest } from "./generated/EndpointModelsRequest.ts";
+export type { EndpointModelsRequest };
 /** Result of a single `GET /health` probe (`llm::health::EndpointHealth`). */
-export interface EndpointHealth {
-  ok: boolean;
-  status: string | null;
-  code: number;
-  checked_at: string;
-}
-
+import type { EndpointHealth } from "./generated/EndpointHealth.ts";
+export type { EndpointHealth };
 /** `GET /props` (`llm::types::Props`). */
-export interface Props {
-  total_slots: number | null;
-  n_ctx: number | null;
-  model_path: string | null;
-  default_generation_settings: JsonValue | null;
-}
-
+import type { Props } from "./generated/Props.ts";
+export type { Props };
 /** One entry of `GET /v1/models` (`llm::types::ModelInfo`). */
-export interface ModelInfo {
-  id: string;
-  object: string | null;
-  owned_by: string | null;
-}
-
+import type { ModelInfo } from "./generated/ModelInfo.ts";
+export type { ModelInfo };
 /** Result of `endpoint_test` (`commands::endpoint::EndpointTestResult`). */
-export interface EndpointTestResult {
-  health: EndpointHealth;
-  props: Props | null;
-  models: ModelInfo[];
-}
-
+import type { EndpointTestResult } from "./generated/EndpointTestResult.ts";
+export type { EndpointTestResult };
 // --- role bindings -------------------------------------------------------------------------
 
 /** Row of `role_binding` (`db::models::RoleBinding`); `params_json` is the raw column. */
@@ -200,53 +145,27 @@ import type { RoleBinding } from "./generated/RoleBinding.ts";
 export type { RoleBinding };
 
 /** Request body of `role_binding_set` (`commands::role_binding::RoleBindingSet`). */
-export interface RoleBindingSet {
-  id?: string | null;
-  role: string;
-  endpoint_id: string;
-  model: string;
-  params?: JsonValue;
-  priority?: number | null;
-}
-
+import type { RoleBindingSet } from "./generated/RoleBindingSet.ts";
+export type { RoleBindingSet };
 // --- ingestion -----------------------------------------------------------------------------
 
 /** Request body of `ingest_start` (`commands::ingest::IngestStartRequest`). */
-export interface IngestStartRequest {
-  project_id: string;
-  /** Falls back to the project's `source_path` when omitted. */
-  source_path?: string | null;
-  pdf_backend?: string | null;
-}
-
+import type { IngestStartRequest } from "./generated/IngestStartRequest.ts";
+export type { IngestStartRequest };
 /** Result of `document_inspect` (`sidecar::DetectFormatResult`). */
-export interface DocumentInspection {
-  format: string;
-  backends: string[];
-  /** Read from the file before ingestion; the language is guessed from the text. */
-  metadata: { title?: string | null; author?: string | null; language?: string | null };
-}
-
+import type { DetectFormatResult as DocumentInspection } from "./generated/DetectFormatResult.ts";
+export type { DocumentInspection };
 /** Result of `ingest_start` (`commands::ingest::JobStarted`). */
-export interface JobStarted {
-  job_id: string;
-}
-
+import type { JobStarted } from "./generated/JobStarted.ts";
+export type { JobStarted };
 // --- translation control -------------------------------------------------------------------
 
 /** Request body of `translation_start` (`commands::translation::TranslationStartRequest`). */
-export interface TranslationStartRequest {
-  project_id?: string | null;
-  /** Only re-enqueue chunks that previously failed or need review. */
-  only_retry?: boolean;
-}
-
+import type { TranslationStartRequest } from "./generated/TranslationStartRequest.ts";
+export type { TranslationStartRequest };
 /** Result of `translation_start` (`commands::translation::TranslationStartResult`). */
-export interface TranslationStartResult {
-  enqueued: number;
-  running: boolean;
-}
-
+import type { TranslationStartResult } from "./generated/TranslationStartResult.ts";
+export type { TranslationStartResult };
 // --- book reconnaissance (PLAN.md §9.4) -----------------------------------------------------
 
 /**
@@ -254,120 +173,42 @@ export interface TranslationStartResult {
  * `from_text`, `metadata`, `inferred` (or `user` for a value typed by hand): an `inferred`
  * field is shown as such and is not confirmed by default.
  */
-export interface ProfileField<T> {
-  value: T;
-  basis: string;
-}
-
+import type { ProfileField } from "./generated/ProfileField.ts";
+export type { ProfileField };
 /** A name the profile proposes for the glossary (`pipeline::recon::ProperNoun`). */
-export interface ProperNoun {
-  source: string;
-  kind: string;
-  note: string;
-}
-
+import type { ProperNoun } from "./generated/ProperNoun.ts";
+export type { ProperNoun };
 /** Where the candidate came from (`pipeline::recon::ProfileProvenance`). */
-export interface ProfileProvenance {
-  generated_at: string;
-  model: string;
-  prompt_hash: string;
-  excerpt_blocks: number;
-  metadata: boolean;
-  pasted_chars: number;
-}
-
+import type { ProfileProvenance } from "./generated/ProfileProvenance.ts";
+export type { ProfileProvenance };
 /** The candidate book profile (`pipeline::recon::BookProfile`). */
-export interface BookProfile {
-  source_language: ProfileField<string>;
-  genre: ProfileField<string>;
-  audience: ProfileField<string>;
-  era: ProfileField<string>;
-  narrative_voice: ProfileField<string>;
-  register: ProfileField<string>;
-  style_notes: ProfileField<string[]>;
-  themes: ProfileField<string[]>;
-  synopsis: ProfileField<string>;
-  proper_nouns: ProperNoun[];
-  provenance: ProfileProvenance;
-}
-
+import type { BookProfile } from "./generated/BookProfile.ts";
+export type { BookProfile };
 /** Row of `glossary_term` (`db::models::GlossaryTerm`). */
 import type { GlossaryTerm } from "./generated/GlossaryTerm.ts";
 export type { GlossaryTerm };
 
 /** Result of `recon_get` and `recon_confirm` (`pipeline::recon::ReconSnapshot`). */
-export interface ReconSnapshot {
-  project_id: string;
-  /** The last candidate, still unconfirmed; `null` when none was generated. */
-  profile: BookProfile | null;
-  /** Confirmed values the translator prompt already reads. */
-  style_guide: string;
-  synopsis: string;
-  book_meta: JsonValue | null;
-  glossary: GlossaryTerm[];
-  /** Style-note candidates proposed by the summarizer; the user decides. */
-  style_notes: string[];
-  /** How the translator renders dialogue (`project_memory['dialogue_style']`). */
-  dialogue_style: DialogueStyle;
-  orchestrator_bound: boolean;
-  /** Id of a pending/running `book_recon` job, when there is one. */
-  running_job: string | null;
-  /** Last failure of a `book_recon` job, when there is one. */
-  last_error: string | null;
-}
-
+import type { ReconSnapshot } from "./generated/ReconSnapshot.ts";
+export type { ReconSnapshot };
 /** `keep` = the source's dash, `quotes` = target-language quotation marks. */
 export type DialogueStyle = "keep" | "quotes";
 
 /** Request body of `project_set_dialogue_style` (`commands::recon::DialogueStyleRequest`). */
-export interface DialogueStyleRequest {
-  project_id: string;
-  dialogue_style: DialogueStyle;
-}
-
+import type { DialogueStyleRequest } from "./generated/DialogueStyleRequest.ts";
+export type { DialogueStyleRequest };
 /** Request body of `recon_start` (`commands::recon::ReconStartRequest`). */
-export interface ReconStartRequest {
-  project_id: string;
-  /** Text the user pasted themselves; the app never fetches a page. */
-  pasted_text?: string | null;
-}
-
+import type { ReconStartRequest } from "./generated/ReconStartRequest.ts";
+export type { ReconStartRequest };
 /** One accepted proper noun in `recon_confirm` (`pipeline::recon::ConfirmedTerm`). */
-export interface ConfirmedTerm {
-  source: string;
-  target?: string | null;
-  kind: string;
-  note?: string | null;
-}
-
+import type { ConfirmedTerm } from "./generated/ConfirmedTerm.ts";
+export type { ConfirmedTerm };
 /** Request body of `recon_confirm` (`pipeline::recon::ConfirmRequest`). */
-export interface ReconConfirmRequest {
-  project_id: string;
-  profile: BookProfile;
-  /** Profile keys the user accepted; only those are written. */
-  confirmed_fields: string[];
-  /** Style guide assembled and edited in the UI. */
-  style_guide: string;
-  proper_nouns: ConfirmedTerm[];
-}
-
+import type { ConfirmRequest as ReconConfirmRequest } from "./generated/ConfirmRequest.ts";
+export type { ReconConfirmRequest };
 /** Request body of `glossary_upsert` (`commands::glossary::GlossaryUpsert`). */
-export interface GlossaryUpsertRequest {
-  /** Absent or `null` creates a term; present edits the existing row. */
-  id?: string | null;
-  project_id: string;
-  source: string;
-  target?: string | null;
-  kind?: string | null;
-  note?: string | null;
-  /** `approved` | `candidate` | `rejected` | `conflict`; defaults to `approved`. */
-  status?: string | null;
-  source_lang?: string | null;
-  target_lang?: string | null;
-  /** Optimistic lock: the revision the edit started from. */
-  expected_revision?: number | null;
-}
-
+import type { GlossaryUpsert as GlossaryUpsertRequest } from "./generated/GlossaryUpsert.ts";
+export type { GlossaryUpsertRequest };
 // --- review and QA (PLAN.md §11.4) ---------------------------------------------------------
 
 /** Row of `suggestion` (`db::models::Suggestion`); `original`/`proposed` are raw strings. */
@@ -379,51 +220,20 @@ import type { QaFinding } from "./generated/QaFinding.ts";
 export type { QaFinding };
 
 /** Request body of `review_start` (`commands::review::ReviewStartRequest`). */
-export interface ReviewStartRequest {
-  project_id: string;
-  /** Restrict to these chunks; omitted means every eligible chunk. */
-  chunk_ids?: string[] | null;
-  chapter_id?: string | null;
-  /** `editor` | `proofreader` | `both` (default). */
-  pass?: string | null;
-  /** Also re-run the QA scan on the selected chunks. */
-  with_qa?: boolean;
-}
-
+import type { ReviewStartRequest } from "./generated/ReviewStartRequest.ts";
+export type { ReviewStartRequest };
 /** Result of `review_start` (`commands::review::ReviewStartResult`). */
-export interface ReviewStartResult {
-  enqueued: number;
-}
-
+import type { ReviewStartResult } from "./generated/ReviewStartResult.ts";
+export type { ReviewStartResult };
 /** Request body of `suggestion_list` (`commands::review::SuggestionListRequest`). */
-export interface SuggestionListRequest {
-  project_id: string;
-  chunk_id?: string | null;
-  pass?: string | null;
-  status?: string | null;
-}
-
+import type { SuggestionListRequest } from "./generated/SuggestionListRequest.ts";
+export type { SuggestionListRequest };
 /** Request body of `suggestion_history` (`commands::review::SuggestionHistoryRequest`). */
-export interface SuggestionHistoryRequest {
-  project_id: string;
-  chunk_id?: string | null;
-  pass?: string | null;
-  /** `accepted` | `rejected`; omitted returns both. */
-  status?: string | null;
-  /** Newest decisions first; the backend defaults to 1000. */
-  limit?: number | null;
-}
-
+import type { SuggestionHistoryRequest } from "./generated/SuggestionHistoryRequest.ts";
+export type { SuggestionHistoryRequest };
 /** Request body of `qa_report` (`commands::review::QaReportRequest`). */
-export interface QaReportRequest {
-  project_id: string;
-  kind?: string | null;
-  severity?: string | null;
-  chunk_id?: string | null;
-  /** `open` | `resolved` | `ignored`; `null` returns every status. */
-  status?: string | null;
-}
-
+import type { QaReportRequest } from "./generated/QaReportRequest.ts";
+export type { QaReportRequest };
 // --- jobs ----------------------------------------------------------------------------------
 
 /** Row of `job` (`db::models::Job`); `payload_json` is the raw column. */
@@ -431,25 +241,14 @@ import type { Job } from "./generated/Job.ts";
 export type { Job };
 
 /** Request body of `job_list` (`commands::jobs::JobListRequest`). */
-export interface JobListRequest {
-  project_id?: string | null;
-  state?: string | null;
-  limit?: number | null;
-}
-
+import type { JobListRequest } from "./generated/JobListRequest.ts";
+export type { JobListRequest };
 /** Request body of `job_cancel` (`commands::jobs::JobCancelRequest`). */
-export interface JobCancelRequest {
-  job_ids: string[];
-}
-
+import type { JobCancelRequest } from "./generated/JobCancelRequest.ts";
+export type { JobCancelRequest };
 /** Result of `job_cancel` (`commands::jobs::JobCancelResult`). */
-export interface JobCancelResult {
-  /** Ids that were unfinished and are now `cancelled`. */
-  cancelled: string[];
-  /** Ids that had already finished (or never existed). */
-  skipped: string[];
-}
-
+import type { JobCancelResult } from "./generated/JobCancelResult.ts";
+export type { JobCancelResult };
 // --- chunks and blocks ---------------------------------------------------------------------
 
 /** Row of `chunk` (`db::models::Chunk`); the `*_json` columns are raw strings. */
@@ -457,11 +256,8 @@ import type { Chunk } from "./generated/Chunk.ts";
 export type { Chunk };
 
 /** Request body of `chunk_list` (`commands::chunks::ChunkListRequest`). */
-export interface ChunkListRequest {
-  project_id: string;
-  status?: string | null;
-}
-
+import type { ChunkListRequest } from "./generated/ChunkListRequest.ts";
+export type { ChunkListRequest };
 /** Row of `block` (`db::models::Block`); `attrs_json` is the raw column. */
 import type { Block } from "./generated/Block.ts";
 export type { Block };
@@ -475,145 +271,54 @@ import type { LlmCall } from "./generated/LlmCall.ts";
 export type { LlmCall };
 
 /** Result of `chunk_get` (`commands::chunks::ChunkDetail`). */
-export interface ChunkDetail {
-  chunk: Chunk;
-  blocks: Block[];
-  translations: BlockTranslation[];
-  llm_calls: LlmCall[];
-}
-
+import type { ChunkDetail } from "./generated/ChunkDetail.ts";
+export type { ChunkDetail };
 // --- metrics -------------------------------------------------------------------------------
 
 /** VRAM reading, in bytes (`resources::vram::VramInfo`). */
-export interface VramInfo {
-  used_bytes: number;
-  total_bytes: number;
-}
-
+import type { VramInfo } from "./generated/VramInfo.ts";
+export type { VramInfo };
 /** One row of the queue-depth histogram (`commands::metrics::JobCount`). */
-export interface JobCount {
-  state: string;
-  count: number;
-}
-
+import type { JobCount } from "./generated/JobCount.ts";
+export type { JobCount };
 /**
  * Per-role LLM capacity (`resources::endpoints::EndpointUsage`, PLAN.md §10). The UI shows it so
  * a capped sub-agent is explained instead of looking slow.
  */
-export interface EndpointUsage {
-  role: string;
-  endpoint_id: string | null;
-  limit: number;
-  in_flight: number;
-  reason: string;
-}
-
+import type { EndpointUsage } from "./generated/EndpointUsage.ts";
+export type { EndpointUsage };
 /**
  * Result of `metrics_get` (`commands::metrics::Metrics`): a point-in-time snapshot of
  * machine resources, queue depth and worker state. `metrics://tick` carries a closely related
  * payload (see `MetricsTickEvent`).
  */
-export interface Metrics {
-  vram: VramInfo | null;
-  free_bytes: number | null;
-  suggested_parallel: number;
-  reason: ParallelReason;
-  jobs: JobCount[];
-  /** Per-role endpoint capacity and in-flight counts. */
-  endpoints: EndpointUsage[];
-  sidecar_in_flight: number;
-  worker_running: boolean;
-  worker_paused: boolean;
-}
-
+import type { Metrics } from "./generated/Metrics.ts";
+export type { Metrics };
 // --- sidecar -------------------------------------------------------------------------------
 
 /** Result of `sidecar_status` and payload of `sidecar://status` (`sidecar::supervisor::SidecarStatus`). */
-export interface SidecarStatus {
-  state: SidecarState;
-  pid: number | null;
-  attempts: number;
-  message: string | null;
-}
-
+import type { SidecarStatus } from "./generated/SidecarStatus.ts";
+export type { SidecarStatus };
 // --- export --------------------------------------------------------------------------------
 
 /** Request body of `export_build` (`pipeline::export::ExportRequest`). */
-export interface ExportRequest {  project_id: string;
-  /** `pdf` | `epub` | `docx` | `html`. */
-  output_format: string;
-  /** Absolute destination; `null` lets the backend place the file under the project output directory. */
-  output_path?: string | null;
-  /** Absolute template override; `null` uses the format's default from `pandoc/`. */
-  template?: string | null;
-  /** Absolute CSS override; `null` uses the format's default. */
-  css?: string | null;
-  /** Include the table of contents (default true). */
-  toc?: boolean;
-  /** Build only this chapter into a standalone file. */
-  chapter_id?: string | null;
-  /** Bypass the unchanged-build skip. */
-  force?: boolean;
-  /** Export although some chunks have no translation (they are rendered from the source). */
-  allow_untranslated?: boolean;
-}
-
+import type { ExportRequest } from "./generated/ExportRequest.ts";
+export type { ExportRequest };
 /** Result of `export_build` (`pipeline::export::ExportOutcome`). */
-export interface ExportOutcome {
-  output_path: string;
-  /** Number of Markdown units that were rendered. */
-  units: number;
-  log: string;
-  duration_ms: number | null;
-  /** True when the build was skipped because nothing changed. */
-  from_cache: boolean;
-  /** Unit keys rebuilt since the previous build. */
-  changed_units: string[];
-  /** Unit keys reused from the previous build. */
-  reused_units: number;
-  build_id: string;
-}
-
+import type { ExportOutcome } from "./generated/ExportOutcome.ts";
+export type { ExportOutcome };
 /** One entry of the build history (`pipeline::export::ExportBuildRecord`). */
-export interface ExportBuildRecord {
-  id: string;
-  output_path: string;
-  output_format: string;
-  chapter_id: string | null;
-  template: string | null;
-  css: string | null;
-  toc: boolean;
-  units: number;
-  changed_units: string[];
-  reused_units: number;
-  from_cache: boolean;
-  duration_ms: number | null;
-  built_at: string;
-}
-
+import type { ExportBuildRecord } from "./generated/ExportBuildRecord.ts";
+export type { ExportBuildRecord };
 /** Request body of `export_preview` (`pipeline::export::ExportPreviewRequest`). */
-export interface ExportPreviewRequest {
-  project_id: string;
-  chapter_id?: string | null;
-}
-
+import type { ExportPreviewRequest } from "./generated/ExportPreviewRequest.ts";
+export type { ExportPreviewRequest };
 /** One composed unit of an `export_preview` (`pipeline::export::PreviewUnit`). */
-export interface PreviewUnit {
-  key: string;
-  title: string;
-  markdown: string;
-  chunks: number;
-  untranslated: number;
-}
-
+import type { PreviewUnit } from "./generated/PreviewUnit.ts";
+export type { PreviewUnit };
 /** Result of `export_preview` (`pipeline::export::ExportPreview`). */
-export interface ExportPreview {
-  metadata_yaml: string;
-  units: PreviewUnit[];
-  total_chunks: number;
-  untranslated_chunks: number;
-}
-
+import type { ExportPreview } from "./generated/ExportPreview.ts";
+export type { ExportPreview };
 // --- event payloads ------------------------------------------------------------------------
 
 /**
@@ -631,17 +336,8 @@ export type JobProgressEvent = Job;
  * but not identical to, the `metrics_get` result: it carries the sidecar status inline and no
  * `vram` / `sidecar_in_flight` fields.
  */
-export interface MetricsTickEvent {
-  free_bytes: number | null;
-  suggested_parallel: number;
-  reason: ParallelReason;
-  jobs: JobCount[];
-  endpoints: EndpointUsage[];
-  worker_running: boolean;
-  worker_paused: boolean;
-  sidecar: SidecarStatus;
-}
-
+import type { MetricsTick as MetricsTickEvent } from "./generated/MetricsTick.ts";
+export type { MetricsTickEvent };
 /**
  * Payload of `log://line` (`crates/app/src/events.rs::LogLine`).
  *
@@ -649,39 +345,19 @@ export interface MetricsTickEvent {
  * control plane does not populate `project_id` today, so the view treats a missing value as a
  * global line rather than dropping it.
  */
-export interface LogLineEvent {
-  ts: string;
-  level: LogLevel;
-  source: string;
-  message: string;
-  project_id?: string | null;
-}
-
+import type { LogLine as LogLineEvent } from "./generated/LogLine.ts";
+export type { LogLineEvent };
 /** Payload of `export://progress` (`commands::export`, one of a `started` / `done` ack). */
-export interface ExportProgressEvent {
-  state: string;
-  format?: string;
-  output_path?: string;
-  units?: number;
-}
-
+import type { ExportProgress as ExportProgressEvent } from "./generated/ExportProgress.ts";
+export type { ExportProgressEvent };
 // --- diagnostics ---------------------------------------------------------------------------
 
 /** Result of `diagnostics_paths` (`commands::misc::DiagnosticsPaths`). */
-export interface DiagnosticsPaths {
-  /** Application data directory (database, projects, logs). */
-  data_dir: string;
-  /** Where the daily log files live. */
-  log_dir: string;
-}
-
+import type { DiagnosticsPaths } from "./generated/DiagnosticsPaths.ts";
+export type { DiagnosticsPaths };
 /** Result of `diagnostics_export` (`diagnostics::DiagnosticsOutcome`). */
-export interface DiagnosticsOutcome {
-  output_path: string;
-  bytes: number;
-  files: number;
-}
-
+import type { DiagnosticsOutcome } from "./generated/DiagnosticsOutcome.ts";
+export type { DiagnosticsOutcome };
 // --- series (PLAN.md §9.5) ------------------------------------------------------------------
 
 /** Row of `series` (`db::models::Series`); the language pair is shared by its books. */
@@ -701,175 +377,69 @@ import type { SeriesMemory } from "./generated/SeriesMemory.ts";
 export type { SeriesMemory };
 
 /** Result of `series_get` (`commands::series::SeriesDetail`). */
-export interface SeriesDetail {
-  series: Series;
-  projects: Project[];
-  memory: SeriesMemory[];
-  /** The whole series glossary + aliases, so the view loads with one call. */
-  glossary: SeriesGlossaryTerm[];
-  variants: SeriesGlossaryVariant[];
-}
-
+import type { SeriesDetail } from "./generated/SeriesDetail.ts";
+export type { SeriesDetail };
 /** Request body of `series_create` (`commands::series::SeriesCreate`). */
-export interface SeriesCreateRequest {
-  name: string;
-  source_lang?: string | null;
-  target_lang?: string | null;
-}
-
+import type { SeriesCreate as SeriesCreateRequest } from "./generated/SeriesCreate.ts";
+export type { SeriesCreateRequest };
 /** Request body of `series_update` (`commands::series::SeriesUpdate`). */
-export interface SeriesUpdateRequest {
-  id: string;
-  name?: string | null;
-  source_lang?: string | null;
-  target_lang?: string | null;
-  settings?: JsonValue | null;
-  style_guide?: string | null;
-  synopsis?: string | null;
-}
-
+import type { SeriesUpdate as SeriesUpdateRequest } from "./generated/SeriesUpdate.ts";
+export type { SeriesUpdateRequest };
 /** Request body of `project_set_series` (`commands::series::ProjectSetSeries`). */
-export interface ProjectSetSeriesRequest {
-  project_id: string;
-  series_id?: string | null;
-  series_order?: number | null;
-}
-
+import type { ProjectSetSeries as ProjectSetSeriesRequest } from "./generated/ProjectSetSeries.ts";
+export type { ProjectSetSeriesRequest };
 /** Request body of `series_glossary_upsert` (`commands::series::SeriesGlossaryUpsert`). */
-export interface SeriesGlossaryUpsertRequest {
-  id?: string | null;
-  series_id: string;
-  source: string;
-  target?: string | null;
-  kind?: string | null;
-  note?: string | null;
-  status?: string | null;
-  source_lang?: string | null;
-  target_lang?: string | null;
-  expected_revision?: number | null;
-}
-
+import type { SeriesGlossaryUpsert as SeriesGlossaryUpsertRequest } from "./generated/SeriesGlossaryUpsert.ts";
+export type { SeriesGlossaryUpsertRequest };
 /** Request body of `series_variant_upsert` (`commands::series::SeriesVariantUpsert`). */
-export interface SeriesVariantUpsertRequest {
-  term_id: string;
-  text: string;
-}
-
+import type { SeriesVariantUpsert as SeriesVariantUpsertRequest } from "./generated/SeriesVariantUpsert.ts";
+export type { SeriesVariantUpsertRequest };
 /** Request body of `series_promote_term` (`commands::series::SeriesPromote`). */
-export interface SeriesPromoteRequest {
-  project_id: string;
-  term_id: string;
-}
-
+import type { SeriesPromote as SeriesPromoteRequest } from "./generated/SeriesPromote.ts";
+export type { SeriesPromoteRequest };
 /** Outcome of a promotion (`pipeline::glossary::ProposalOutcome`, serde `snake_case`). */
-export type ProposalOutcome = "added" | "unchanged" | "conflict";
+import type { ProposalOutcome } from "./generated/ProposalOutcome.ts";
+export type { ProposalOutcome };
 
 /** Result of `series_promote_term` (`commands::series::PromoteOutcome`). */
-export interface PromoteOutcome {
-  outcome: ProposalOutcome;
-}
-
+import type { PromoteOutcome } from "./generated/PromoteOutcome.ts";
+export type { PromoteOutcome };
 /** Request body of `series_export` (`commands::series::SeriesExportRequest`). */
-export interface SeriesExportRequest {
-  series_id: string;
-  /** Destination `.llmtsz`; `null` writes it under `<app data>/series/`. */
-  output_path?: string | null;
-}
-
+import type { SeriesExportRequest } from "./generated/SeriesExportRequest.ts";
+export type { SeriesExportRequest };
 /** Result of `series_export` (`pipeline::series_bundle::SeriesExportOutcome`). */
-export interface SeriesExportOutcome {
-  output_path: string;
-  bytes: number;
-  terms: number;
-  variants: number;
-  /** Member books carried by the bundle. */
-  books: number;
-}
-
+import type { SeriesExportOutcome } from "./generated/SeriesExportOutcome.ts";
+export type { SeriesExportOutcome };
 /** Request body of `series_import` (`commands::series::SeriesImportRequest`). */
-export interface SeriesImportRequest {
-  archive_path: string;
-}
-
+import type { SeriesImportRequest } from "./generated/SeriesImportRequest.ts";
+export type { SeriesImportRequest };
 /** Result of `series_import` (`pipeline::series_bundle::SeriesImportOutcome`). */
-export interface SeriesImportOutcome {
-  series: Series;
-  terms_added: number;
-  terms_updated: number;
-  conflicts: number;
-  variants_added: number;
-  memory_updated: number;
-  /** Member books carried by the bundle and copied locally. */
-  books_imported: number;
-  /** Member books the bundle carried but that already existed locally. */
-  books_skipped: number;
-}
-
+import type { SeriesImportOutcome } from "./generated/SeriesImportOutcome.ts";
+export type { SeriesImportOutcome };
 /** Result of `series_qa_scan` (`commands::series::SeriesQaScanResult`). */
-export interface SeriesQaScanResult {
-  enqueued: number;
-}
-
+import type { SeriesQaScanResult } from "./generated/SeriesQaScanResult.ts";
+export type { SeriesQaScanResult };
 /** Request body of `series_recon_start` (`commands::series::SeriesReconStart`). */
-export interface SeriesReconStartRequest {
-  series_id: string;
-  /** Re-synthesize even when no book profile or canon changed. */
-  force?: boolean;
-}
-
+import type { SeriesReconStart as SeriesReconStartRequest } from "./generated/SeriesReconStart.ts";
+export type { SeriesReconStartRequest };
 /** One character/term of the candidate series profile (`pipeline::series_recon::SeriesCharacter`). */
-export interface SeriesReconCharacter {
-  source: string;
-  target: string;
-  note: string;
-}
-
+import type { SeriesCharacter as SeriesReconCharacter } from "./generated/SeriesCharacter.ts";
+export type { SeriesReconCharacter };
 /** Where the candidate series profile came from (`pipeline::series_recon::SeriesProfileProvenance`). */
-export interface SeriesReconProvenance {
-  generated_at: string;
-  model: string;
-  prompt_hash: string;
-  books: string[];
-  /** Identity of every book's evidence, so an unchanged book is not re-synthesized. */
-  sources: [{ project_id: string; hash: string }];
-  /** Hash of the canon the profile was built with. */
-  glossary_hash: string;
-}
-
+import type { SeriesProfileProvenance as SeriesReconProvenance } from "./generated/SeriesProfileProvenance.ts";
+export type { SeriesReconProvenance };
 /**
  * Candidate series profile, stored in `series_memory['series_profile']`.
  * `rejected` lists the sources the user refused: a later reconnaissance skips them.
  */
-export interface SeriesProfile {
-  synopsis: string;
-  style_notes: string[];
-  characters: SeriesReconCharacter[];
-  rejected: string[];
-  provenance?: SeriesReconProvenance;
-}
-
+import type { SeriesProfile } from "./generated/SeriesProfile.ts";
+export type { SeriesProfile };
 /** One character the user accepted from the candidate (`pipeline::series_recon::ConfirmedCharacter`). */
-export interface ConfirmedSeriesCharacter {
-  source: string;
-  target: string;
-  note?: string | null;
-}
-
+import type { ConfirmedCharacter as ConfirmedSeriesCharacter } from "./generated/ConfirmedCharacter.ts";
+export type { ConfirmedSeriesCharacter };
 /** Request body of `series_recon_confirm` (`pipeline::series_recon::ConfirmRequest`). */
-export interface SeriesConfirmRequest {
-  series_id: string;
-  synopsis?: string | null;
-  style_guide?: string | null;
-  characters: ConfirmedSeriesCharacter[];
-  rejected_characters: string[];
-  discard?: boolean;
-}
-
+import type { SeriesConfirmRequest } from "./generated/SeriesConfirmRequest.ts";
+export type { SeriesConfirmRequest };
 /** Result of `series_recon_confirm` (`pipeline::series_recon::ConfirmOutcome`). */
-export interface SeriesConfirmOutcome {
-  synopsis_updated: boolean;
-  style_guide_updated: boolean;
-  characters_accepted: number;
-  characters_rejected: number;
-  discarded: boolean;
-}
+import type { SeriesConfirmOutcome } from "./generated/SeriesConfirmOutcome.ts";
+export type { SeriesConfirmOutcome };

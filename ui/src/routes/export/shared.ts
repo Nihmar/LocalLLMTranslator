@@ -61,10 +61,12 @@ export function looksAbsolute(path: string): boolean {
 /** Italian description of the last `export://progress` state. */
 export function progressLabel(event: ExportProgressEvent): string {
   if (event.state === "started") {
-    return `Build avviata${event.format === undefined ? "" : ` (${event.format.toUpperCase()})`}.`;
+    const format = event.format ?? null;
+    return `Build avviata${format === null ? "" : ` (${format.toUpperCase()})`}.`;
   }
   if (event.state === "done") {
-    return `Build conclusa${event.output_path === undefined ? "" : `: ${event.output_path}`}.`;
+    const outputPath = event.output_path ?? null;
+    return `Build conclusa${outputPath === null ? "" : `: ${outputPath}`}.`;
   }
   return `Stato: ${event.state}.`;
 }

@@ -28,13 +28,18 @@ export interface LogViewProps {
   headerExtra?: ReactNode | undefined;
 }
 
-const LEVEL_ORDER: Readonly<Record<LogLevel, number>> = {
+const LEVEL_ORDER: Readonly<Record<string, number>> = {
   trace: 0,
   debug: 1,
   info: 2,
   warn: 3,
   error: 4,
 };
+
+/** Unknown levels (the control plane sends `String`) count as `info`. */
+function levelOrder(level: string): number {
+  return LEVEL_ORDER[level] ?? LEVEL_ORDER["info"] ?? 0;
+}
 
 const FLUSH_INTERVAL_MS = 220;
 
@@ -104,8 +109,8 @@ export function LogView({
   }, [lines, follow]);
 
   const visible = useMemo(() => {
-    const threshold = LEVEL_ORDER[minLevel];
-    return lines.filter((line) => LEVEL_ORDER[line.level] >= threshold);
+    const threshold = levelOrder(minLevel);
+    return lines.filter((line) => levelOrder(line.level) >= threshold);
   }, [lines, minLevel]);
 
   const handleJumpToEnd = useCallback(() => {
