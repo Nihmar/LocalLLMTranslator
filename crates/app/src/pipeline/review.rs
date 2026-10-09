@@ -653,6 +653,82 @@ pub async fn recompose_chunk(pool: &SqlitePool, chunk_id: &str) -> Result<()> {
     repo::update_chunk_target(pool, chunk_id, &parts.join("\n\n")).await
 }
 
+/// Block markers the extractor escapes at the start of a line (`\-` for a dialogue
+/// dash, `\#`, `\>`, …) so a paragraph does not turn into a list, a heading or a
+/// quote. Ordered-list markers (`1\.`) are handled separately.
+const LINE_MARKERS: &str = "-+*#>|";
+
+/// Whether a placeholder literal is a line-start escape (`\-`, `12\.`): a markdown
+/// artefact, not content, so the guard does not count it (see
+/// [`restore_line_escapes`]).
+fn is_line_escape(literal: &str) -> bool {
+    let Some(rest) = literal.strip_suffix(['.', ')']) else {
+        let mut chars = literal.chars();
+        return chars.next() == Some('\\')
+            && chars.next().is_some_and(|c| LINE_MARKERS.contains(c))
+            && chars.next().is_none();
+    };
+    rest.strip_suffix('\\')
+        .is_some_and(|digits| !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// The escaped marker a line opens with (`\- Sit` → `-`, `3\. Then` → `.`).
+fn escaped_marker(line: &str) -> Option<char> {
+    if let Some(rest) = line.strip_prefix('\\') {
+        return rest.chars().next().filter(|c| LINE_MARKERS.contains(*c));
+    }
+    let digits = line.bytes().take_while(u8::is_ascii_digit).count();
+    let rest = line[digits..].strip_prefix('\\')?;
+    (digits > 0)
+        .then(|| rest.chars().next())
+        .flatten()
+        .filter(|c| matches!(c, '.' | ')'))
+}
+
+/// The line with its block marker escaped, when it opens with an unescaped one.
+fn escape_line(line: &str) -> Option<(char, String)> {
+    let mut chars = line.chars();
+    let first = chars.next()?;
+    if LINE_MARKERS.contains(first) {
+        // `-`, `+` and `*` only start a list when a space follows.
+        let needs_space = matches!(first, '-' | '+' | '*');
+        if needs_space && chars.next() != Some(' ') {
+            return None;
+        }
+        return Some((first, format!("\\{line}")));
+    }
+    let digits = line.bytes().take_while(u8::is_ascii_digit).count();
+    if digits == 0 {
+        return None;
+    }
+    let marker = line[digits..]
+        .chars()
+        .next()
+        .filter(|c| matches!(c, '.' | ')'))?;
+    line[digits + 1..]
+        .starts_with(' ')
+        .then(|| (marker, format!("{}\\{}", &line[..digits], &line[digits..])))
+}
+
+/// Re-add the line-start escapes a correction lost.
+///
+/// A correction may drop an escape on purpose — `\- But…` → `"But…"` no longer opens
+/// with a marker, so there is nothing to escape — or lose only the backslash, which
+/// would turn a dialogue paragraph into a list. Only the second case is repaired, and
+/// only for markers the current text escapes, so a correction never gains an escape
+/// the extractor did not put there.
+fn restore_line_escapes(current: &str, proposed: &str) -> String {
+    let escaped: Vec<char> = current.lines().filter_map(escaped_marker).collect();
+    proposed
+        .split('\n')
+        .map(|line| match escape_line(line) {
+            Some((marker, fixed)) if escaped.contains(&marker) => fixed,
+            _ => line.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// A change must not lose or duplicate a placeholder literal of its block.
 /// Best-effort: when the sidecar is unreachable the guard is skipped rather than
 /// blocking the review.
@@ -686,7 +762,8 @@ async fn guard_placeholders(
     literals.sort_unstable();
     literals.dedup();
     for literal in literals {
-        if literal.is_empty() {
+        // Line-start escapes are repaired by `restore_line_escapes`, not counted.
+        if literal.is_empty() || is_line_escape(literal) {
             continue;
         }
         let before = old_text.matches(literal).count();
@@ -740,6 +817,7 @@ pub async fn accept_suggestion(deps: &PipelineDeps, id: &str) -> Result<Suggesti
         }
     };
 
+    let new_text = restore_line_escapes(&current, &new_text);
     guard_placeholders(deps, &suggestion.chunk_id, &current, &new_text).await?;
 
     repo::upsert_block_translation(
@@ -801,6 +879,45 @@ pub async fn current_texts(pool: &SqlitePool, chunk_id: &str) -> Result<HashMap<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn line_escapes_are_recognised() {
+        for literal in ["\\-", "\\#", "\\>", "\\|", "1\\.", "12\\)"] {
+            assert!(is_line_escape(literal), "{literal} is a line escape");
+        }
+        for literal in ["\\", "-", "\\a", "\\.", "a\\.", "1.", "⟦1⟧", "**bold**"] {
+            assert!(!is_line_escape(literal), "{literal} is not a line escape");
+        }
+    }
+
+    #[test]
+    fn a_dialogue_line_may_drop_its_escape_for_quotes() {
+        let current = "\\- But why don't you tell them? he had wondered.";
+        let proposed = "\"But why don't you tell them?\" he had wondered.";
+        assert_eq!(restore_line_escapes(current, proposed), proposed);
+    }
+
+    #[test]
+    fn a_lost_backslash_is_put_back() {
+        let current = "\\- Sit down.\n\\- Why?\n3\\. Then";
+        let proposed = "- Sit down, now.\n- Why?\n3. Then";
+        assert_eq!(
+            restore_line_escapes(current, proposed),
+            "\\- Sit down, now.\n\\- Why?\n3\\. Then"
+        );
+    }
+
+    #[test]
+    fn no_escape_is_added_where_the_text_had_none() {
+        let current = "A plain paragraph.";
+        let proposed = "- now a list item\n# and a heading";
+        assert_eq!(restore_line_escapes(current, proposed), proposed);
+        // `-` without a space is a word, never a list marker.
+        assert_eq!(
+            restore_line_escapes("\\- x", "-ish is fine"),
+            "-ish is fine"
+        );
+    }
 
     fn block(id: &str, source: &str) -> Block {
         Block {
