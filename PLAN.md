@@ -11,7 +11,7 @@
 > | Review | works; span-level proposals, markup guard at generation and acceptance |
 > | Export | works; refuses to mix untranslated chunks without confirmation |
 > | Series | works; UI component pending a refactor (#10) |
-> | Web app | not started (#17) |
+> | Web app | `llmtz serve` on loopback (issue #17); browser upload/download not yet |
 
 ---
 
@@ -1235,6 +1235,32 @@ API keys: `llm_endpoint.api_key_ref` stores only the *name* of the keyring entry
 requires authentication is not usable today. Wiring the keyring lookup is future work; the
 no-secrets-in-the-database rule already holds.
 
+### 12.3 Headless server (`llmtz serve`, issue #17)
+
+`llmtz serve` starts the same control plane as the desktop app (`app_lib::build_state`) and its
+HTTP surface mirrors §12.2; the two shells call the same functions, so a command is defined once.
+
+- `POST /api/<command>` receives the same JSON object `invoke()` receives — `{req: {...}}` for
+the struct commands, `{id}` / `{project_id}` / `{chunk_id}` / `{path}` for the flat ones, `{}` for
+the no-argument ones — and answers with the same JSON. A failure is the serialized `AppError`
+(`{code, message, retryable}`) with status 400 (`invalid`, `json`), 404 (`not_found`),
+502 (`endpoint`) or 500. `open_path` exists only in the desktop shell and answers 400.
+- `GET /api/events` streams the §12.2 events as Server-Sent Events: one named event per event
+name (`job://progress`, `log://line`, …) with the payload verbatim.
+- Everything else serves the built UI (`ui/dist`) with an SPA fallback to `index.html`.
+
+Flags: `--host` (default `127.0.0.1`), `--port` (default 4321), `--data-dir` (default: the
+desktop app data directory; `$LLMTZ_DATA_DIR` overrides), `--ui-dir` (`$LLMTZ_UI_DIR`), `--token`.
+A non-loopback `--host` without `--token` is refused at startup; the token gates `/api/*` as
+`Authorization: Bearer <token>` or `?token=`, while the static files stay public. The sidecar
+binary is found like in the desktop app (`$LLMTRANSLATOR_SIDECAR`, bundled resource, `python -m
+llmtranslator_sidecar`).
+
+`ui/src/lib/ipc.ts` and `ui/src/lib/events.ts` pick the transport at runtime
+(`isTauriRuntime()`): inside the Tauri webview `invoke`/`listen`, in a browser
+`POST /api/<command>` and the SSE stream, with the token from `?token=` kept in
+`sessionStorage`. There is no other network call, and nothing is fetched remotely.
+
 ---
 
 ## 13. Milestones
@@ -1254,6 +1280,7 @@ no-secrets-in-the-database rule already holds.
 | **S3** | Series memory: `series_memory` style guide and synopsis injected below the book-level ones; merge from `book_recon` into the series | Both books of the series prompt with the shared profile without losing their own |
 | **S4** | Consistency at scale: alias/variant matching in the filter, cross-book QA scan, series export/import with merge-by-revision | A term rename is auditable across every member book, and importing a series bundle never drops a differing rendering |
 | **S5** | Optional `series_recon` job on the orchestrator role: series synopsis and canonical character sheet | — |
+| **W1** | Headless web app (issue #17): `llmtz serve`, HTTP command API, SSE events, UI transport at runtime (invoke/listen vs fetch/SSE) | The UI runs in a browser against `llmtz serve` on loopback; the desktop app is unchanged |
 
 Dependencies: M1 unblocks everything; M3 comes before M4 (the editor uses the glossary and
 context); M6 after M3 (concurrency requires the versioned glossary).

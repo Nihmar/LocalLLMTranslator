@@ -110,6 +110,27 @@ make check     # lint + typecheck + test + build UI + cargo check
 make dev       # start the desktop app
 ```
 
+## Web app (headless)
+
+The same UI runs in a browser, served by a headless engine:
+
+```sh
+make build-ui
+cargo run -p local-llm-translator-server -- serve   # http://127.0.0.1:4321
+```
+
+`llmtz serve` starts the control plane (database, queue, worker pool, sidecar supervisor) and
+serves the built UI, `POST /api/<command>` with exactly the arguments `invoke()` sends, and
+`GET /api/events` (SSE) with the same events. It binds loopback by default; a non-loopback
+`--host` requires `--token <secret>` and refuses to start without one. `--data-dir` defaults to
+the desktop app's data directory, so the browser shows the same books; `LLMTZ_DATA_DIR`,
+`LLMTZ_UI_DIR` and `LLMTRANSLATOR_SIDECAR` override the defaults.
+
+The desktop app is untouched: `ui/src/lib/ipc.ts` and `ui/src/lib/events.ts` pick
+invoke/listen or fetch/SSE at runtime. Uploads and downloads (add a file, save an export) are not
+implemented yet: the browser can only reach paths that exist on the machine running the server.
+See issue #17.
+
 ## `llama-server`
 
 The app does **not** start the servers: it detects them on endpoints you configure, and reads
@@ -276,6 +297,7 @@ uv run --project sidecar python tools/make_fixtures.py
 
 ```
 crates/app/     Tauri 2 (Rust) — control plane: DB, queue, LLM, orchestration
+crates/server/  headless `llmtz` — HTTP command API, SSE events, serves the UI
 ui/             React + TS + Vite — presentation only, no direct network calls
 sidecar/        Python — data plane: formats, Markdown IR, chunking, Pandoc
 prompts/        Jinja2 templates, editable by the user
@@ -295,6 +317,7 @@ tools/          Fake llama-server and fixture generator
 | M5 | Export and typesetting with templates and Lua filters | ✅ |
 | M6 | Parallel sub-agents with VRAM budget and serial degradation | ✅ |
 | M7 | Packaging (PyInstaller + Tauri bundle) | ✅ |
+| W1 | Headless web app (`llmtz serve`): HTTP command API, SSE events, browser transport | ✅ loopback; upload/download pending (#17) |
 
 Known gaps, worth knowing rather than blocking: the sidecar's `estimate_tokens` route is
 intentionally unused because the control plane counts exactly via `/tokenize` with a built-in
