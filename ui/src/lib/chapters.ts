@@ -37,20 +37,6 @@ export function chunkTranslated(chunk: Chunk): boolean {
 }
 
 /**
- * One chunk of the live preview, in reading order.
- *
- * A chunk without a usable translation falls back to its source markdown: that is exactly what
- * the export renderer emits, and it keeps the preview readable while the run is still going.
- */
-export interface PreviewSegment {
-  chunk_id: string;
-  order_index: number;
-  status: string;
-  translated: boolean;
-  markdown: string;
-}
-
-/**
  * Chunk counts per chapter, in document order. Chapters without chunks are dropped: the
  * preview and the export build skip them, so listing them would offer an action that cannot
  * produce anything.
@@ -102,23 +88,15 @@ export function chapterProgress(
     .sort((left, right) => left.order_index - right.order_index);
 }
 
-/** The chunks of one chapter as preview segments, in reading order. */
-export function composePreview(
-  chunks: readonly Chunk[],
-  chapterId: string,
-): PreviewSegment[] {
-  return chunks
-    .filter((chunk) => chunk.chapter_id === chapterId)
-    .sort((left, right) => left.order_index - right.order_index)
-    .map((chunk) => {
-      const target = chunk.target_md;
-      const translated = chunkTranslated(chunk);
-      return {
-        chunk_id: chunk.id,
-        order_index: chunk.order_index,
-        status: chunk.status,
-        translated,
-        markdown: translated && target !== null ? target : chunk.source_md,
-      };
-    });
+/**
+ * Markdown made readable for the chapter reader: heading markers, backslash escapes (the
+ * extractor's `\-` before a dialogue dash) and emphasis markers are dropped. Display only; the
+ * stored text is never changed.
+ */
+export function readableText(markdown: string): string {
+  return markdown
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/\\([\\`*_{}[\]()#+\-.!>|])/g, "$1")
+    .replace(/(\*\*|__)(.+?)\1/g, "$2")
+    .replace(/(^|[^*\w])\*([^*\n]+)\*(?!\*)/g, "$1$2");
 }

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { chapterProgress, chunkTranslated, composePreview } from "./chapters.ts";
+import { chapterProgress, chunkTranslated, readableText } from "./chapters.ts";
 import type { Chapter, Chunk } from "./types.ts";
 
 function chapter(id: string, order_index: number, title: string): Chapter {
@@ -112,27 +112,8 @@ test("chapterProgress counts a needs_review chunk as translated when it carries 
   assert.equal(row.needs_review, 2);
 });
 
-test("composePreview keeps one chapter and orders its chunks by reading order", () => {
-  const chunks = [
-    chunk("c3", "ch1", 3, "done", "terzo", "third"),
-    chunk("c1", "ch1", 1, "done", "primo", "first"),
-    chunk("c2", "ch2", 2, "done", "altro", "other"),
-    chunk("c0", "ch1", 0, "pending", "zero", null),
-  ];
-
-  const segments = composePreview(chunks, "ch1");
-
-  assert.deepEqual(
-    segments.map((segment) => [segment.chunk_id, segment.order_index]),
-    [
-      ["c0", 0],
-      ["c1", 1],
-      ["c3", 3],
-    ],
-  );
-  // Untranslated chunks fall back to their source, exactly like the export renderer.
-  assert.equal(segments[0]?.markdown, "zero");
-  assert.equal(segments[0]?.translated, false);
-  assert.equal(segments[1]?.markdown, "first");
-  assert.equal(segments[1]?.translated, true);
+test("readableText drops markdown markers for reading", () => {
+  assert.equal(readableText("## Chapitre 21"), "Chapitre 21");
+  assert.equal(readableText("\\- Sit down. **Now**, *please*."), "- Sit down. Now, please.");
+  assert.equal(readableText("2 * 3 = 6"), "2 * 3 = 6");
 });

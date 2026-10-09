@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ChapterList } from "../components/ChapterList";
+import { ChapterReader } from "../components/ChapterReader";
 import { ChunkTable } from "../components/ChunkTable";
 import type { ChunkRow } from "../components/ChunkTable";
 import { EmptyState } from "../components/EmptyState";
@@ -7,9 +7,9 @@ import { LogView } from "../components/LogView";
 import { ProgressBar } from "../components/ProgressBar";
 import { ResourceGauge } from "../components/ResourceGauge";
 import { StatusBadge } from "../components/StatusBadge";
-import { chapterProgress, chunkTranslated, composePreview } from "../lib/chapters";
+import { chapterProgress, chunkTranslated } from "../lib/chapters";
 import { onJobProgress, onMetricsTick } from "../lib/events";
-import { countLabel, formatNumber, formatTokens } from "../lib/format";
+import { countLabel, formatNumber } from "../lib/format";
 import { isActiveJobState } from "../lib/jobs";
 import {
   chunkGet,
@@ -152,8 +152,6 @@ export function TranslateView({ project, onNavigate, onOpenJobs }: TranslateView
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
 
-  // Chapter whose live preview is open; the panel is derived from the chunk rows already loaded.
-  const [previewChapterId, setPreviewChapterId] = useState<string | null>(null);
 
   // Bumped on every `job://progress` so the book profile panel refetches the
   // reconnaissance outcome without opening its own event listener.
@@ -225,10 +223,6 @@ export function TranslateView({ project, onNavigate, onOpenJobs }: TranslateView
   useEffect(() => {
     setLimit(PAGE_SIZE);
   }, [projectId, statusFilter]);
-
-  useEffect(() => {
-    setPreviewChapterId(null);
-  }, [projectId]);
 
   // Any progress event invalidates the queue and the table; refetch instead of patching the single
   // job row it carries.
@@ -317,20 +311,6 @@ export function TranslateView({ project, onNavigate, onOpenJobs }: TranslateView
   );
 
   const chapterRows = useMemo(() => chapterProgress(chapters, chunks), [chapters, chunks]);
-
-  const previewChapter = useMemo(
-    () => chapterRows.find((row) => row.id === previewChapterId) ?? null,
-    [chapterRows, previewChapterId],
-  );
-  const previewSegments = useMemo(
-    () => (previewChapterId === null ? [] : composePreview(chunks, previewChapterId)),
-    [chunks, previewChapterId],
-  );
-  const previewUntranslated = useMemo(
-    () => previewSegments.filter((segment) => !segment.translated).length,
-    [previewSegments],
-  );
-  const previewRunning = previewSegments.some((segment) => segment.status === "running");
 
   async function runStart(onlyRetry: boolean) {
     if (projectId === null) {
@@ -530,9 +510,7 @@ export function TranslateView({ project, onNavigate, onOpenJobs }: TranslateView
         </div>
       ) : null}
 
-      <div className="grid grid-cols-1 gap-3 xl:grid-cols-[minmax(0,1fr)_20rem]">
-        <div className="section-stack min-w-0">
-          <div className="panel panel-pad section-stack">
+      <div className="panel panel-pad section-stack">
             <ProgressBar
               value={translatedCount}
               total={chunks.length}
@@ -569,100 +547,14 @@ export function TranslateView({ project, onNavigate, onOpenJobs }: TranslateView
             </div>
           </div>
 
-          {chapterRows.length > 0 ? (
-            <div className="panel flex min-h-0 flex-col">
-              <div className="panel-head">
-                <span className="panel-title">Capitoli</span>
-                <span className="flex items-center gap-2">
-                  <span className="text-[0.7rem] text-faint">
-                    Doppio clic su un capitolo per l&apos;anteprima della traduzione
-                  </span>
-                  <span className="mono-chip">
-                    {countLabel(chapterRows.length, "capitolo", "capitoli")}
-                  </span>
-                </span>
-              </div>
+      {chapterRows.length > 0 ? <ChapterReader chapters={chapterRows} chunks={chunks} /> : null}
 
-              <ChapterList
-                chapters={chapterRows}
-                activeId={previewChapterId}
-                onOpen={setPreviewChapterId}
-              />
-            </div>
-          ) : null}
-
-          {previewChapter !== null ? (
-            <div className="panel">
-              <div className="panel-head">
-                <span className="panel-title">Anteprima traduzione</span>
-                <span className="flex items-center gap-2">
-                  <span className="mono-chip">
-                    {formatNumber(previewChapter.translated)}/
-                    {formatNumber(previewChapter.total)} chunk tradotti
-                  </span>
-                  <button
-                    type="button"
-                    className="btn btn-sm btn-ghost"
-                    onClick={() => {
-                      setPreviewChapterId(null);
-                    }}
-                  >
-                    Chiudi
-                  </button>
-                </span>
-              </div>
-
-              <div className="panel-pad section-stack">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="min-w-0">
-                    <div className="truncate text-sm font-semibold text-ink">
-                      {previewChapter.title}
-                    </div>
-                    <div className="text-[0.7rem] text-faint">
-                      {countLabel(previewSegments.length, "chunk", "chunk")} · {" "}
-                      {formatTokens(previewChapter.tokens)} stimati
-                    </div>
-                  </div>
-                  {previewRunning ? (
-                    <StatusBadge status="running" pulse label="Traduzione in corso" />
-                  ) : null}
-                </div>
-
-                {previewUntranslated > 0 ? (
-                  <div className="banner">
-                    <span aria-hidden="true">◌</span>
-                    <span>
-                      {countLabel(
-                        previewUntranslated,
-                        "chunk non ancora tradotto",
-                        "chunk non ancora tradotti",
-                      )}
-                      : il testo di partenza è mostrato in grigio e l&apos;anteprima si aggiorna a
-                      ogni chunk completato.
-                    </span>
-                  </div>
-                ) : null}
-
-                <div className="preview-reader">
-                  {previewSegments.map((segment) => (
-                    <div
-                      key={segment.chunk_id}
-                      className="preview-segment"
-                      data-translated={segment.translated}
-                    >
-                      {segment.translated ? null : (
-                        <span className="preview-gap">
-                          non ancora tradotto · testo di partenza
-                        </span>
-                      )}
-                      {segment.markdown}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          ) : null}
-
+      <details className="panel">
+        <summary className="panel-head cursor-pointer">
+          <span className="panel-title">Dettagli tecnici: chunk, risorse, coda e log</span>
+        </summary>
+        <div className="panel-pad grid grid-cols-1 gap-3 xl:grid-cols-[minmax(0,1fr)_20rem]">
+        <div className="section-stack min-w-0">
           <div className="panel flex min-h-0 flex-col" style={{ maxHeight: "34rem" }}>
             <div className="panel-head">
               <span className="panel-title">Chunk</span>
@@ -936,7 +828,8 @@ export function TranslateView({ project, onNavigate, onOpenJobs }: TranslateView
 
           <LogView limit={300} heightClass="h-64" />
         </div>
-      </div>
+        </div>
+      </details>
     </div>
   );
 }
