@@ -49,6 +49,7 @@ You do not rewrite for taste. You propose the smallest correction that fixes the
 Blocks are numbered `[0]`, `[1]`, ... in both texts; the `block_index` of an issue is that number.
 Copy `quote` verbatim from the translation and make `suggested` the text that replaces it.
 Report an issue only if you are confident; an empty issue list is a valid answer.
+Dialogue punctuation (a dash or quotation marks) is a choice made for the whole book, never a defect.
 Reply with JSON only."#;
 
 pub const DEFAULT_EDITOR_USER_TEMPLATE: &str = r#"SOURCE ({{ source_language }}):
@@ -68,12 +69,20 @@ The text was translated from {{ source_language }} and reads slightly foreign.
 Fix grammar, agreement, punctuation, calques, false friends and unnatural collocations.
 Do NOT change meaning. Do NOT add or remove content. Do NOT touch placeholders ⟦n⟧.
 Do NOT alter Markdown structure, code spans, URLs or table pipes.
+Do NOT change how dialogue is punctuated (a dash or quotation marks): it is a choice made for the whole book.
 The text arrives as blocks separated by a line containing only `<!-- block -->`.
 Keep the same number of blocks, in the same order, with the same separators.
 Output only the corrected text, with no commentary and no code fences."#;
 
 pub const DEFAULT_PROOFREADER_USER_TEMPLATE: &str = r#"{{ text }}
 "#;
+
+/// SHA-256 of the system templates earlier releases shipped
+/// (see [`crate::util::ensure_prompt_file`]).
+const SHIPPED_EDITOR_SYSTEM_HASHES: &[&str] =
+    &["e1b5271f0108c0f3ec1a8287144aa57a5bc528b220e66deb107c595c2334f54b"];
+const SHIPPED_PROOFREADER_SYSTEM_HASHES: &[&str] =
+    &["c4b6ace99c38f9e6e2c818528a791c7b87cf6282a54679012ce3d00f9ea85de2"];
 
 // ---------------------------------------------------------------------------
 // Pure helpers
@@ -226,17 +235,26 @@ fn strip_code_fence(text: &str) -> String {
 /// edited one.
 pub async fn ensure_prompt_files(dir: &Path) -> Result<()> {
     tokio::fs::create_dir_all(dir).await?;
-    for (name, content) in [
-        ("editor.system.md", DEFAULT_EDITOR_SYSTEM_TEMPLATE),
-        ("editor.user.md", DEFAULT_EDITOR_USER_TEMPLATE),
-        ("editor.schema.json", DEFAULT_EDITOR_SCHEMA),
-        ("proofreader.system.md", DEFAULT_PROOFREADER_SYSTEM_TEMPLATE),
-        ("proofreader.user.md", DEFAULT_PROOFREADER_USER_TEMPLATE),
+    for (name, content, shipped) in [
+        (
+            "editor.system.md",
+            DEFAULT_EDITOR_SYSTEM_TEMPLATE,
+            SHIPPED_EDITOR_SYSTEM_HASHES,
+        ),
+        ("editor.user.md", DEFAULT_EDITOR_USER_TEMPLATE, &[]),
+        ("editor.schema.json", DEFAULT_EDITOR_SCHEMA, &[]),
+        (
+            "proofreader.system.md",
+            DEFAULT_PROOFREADER_SYSTEM_TEMPLATE,
+            SHIPPED_PROOFREADER_SYSTEM_HASHES,
+        ),
+        (
+            "proofreader.user.md",
+            DEFAULT_PROOFREADER_USER_TEMPLATE,
+            &[],
+        ),
     ] {
-        let path = dir.join(name);
-        if !path.exists() {
-            tokio::fs::write(&path, content).await?;
-        }
+        crate::util::ensure_prompt_file(&dir.join(name), content, shipped).await?;
     }
     Ok(())
 }
