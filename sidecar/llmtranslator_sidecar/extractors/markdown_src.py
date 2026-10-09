@@ -57,6 +57,12 @@ def _read_front_matter(text: str, warnings: list[str]) -> dict[str, Any]:
     return {str(key): value for key, value in mapping.items()}
 
 
+def peek(path: str, sample_chars: int) -> tuple[dict[str, Any], str]:
+    """The YAML front matter and the first ``sample_chars`` of a Markdown source."""
+    text = Path(path).read_text(encoding="utf-8")
+    return _read_front_matter(text, []), text[:sample_chars]
+
+
 class MarkdownSourceExtractor:
     """Backend for documents that are already Markdown."""
 

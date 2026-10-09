@@ -125,3 +125,19 @@ class PymupdfExtractor:
             warnings.append("PDF produced no Markdown content")
 
         return ExtractResult(markdown=markdown, metadata=metadata, warnings=warnings)
+
+
+def peek(path: str, sample_chars: int) -> tuple[dict[str, Any], str]:
+    """The PDF's title/author metadata and the text of its first pages."""
+    with pymupdf.open(path) as document:
+        info = document.metadata or {}
+        metadata = {key: info.get(key) for key in ("title", "author") if info.get(key)}
+        parts: list[str] = []
+        size = 0
+        for page in document:
+            text = str(page.get_text())
+            parts.append(text)
+            size += len(text)
+            if size >= sample_chars:
+                break
+    return metadata, " ".join(parts)[:sample_chars]

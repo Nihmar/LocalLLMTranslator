@@ -105,7 +105,8 @@ Codes: `-32700` parse, `-32600` invalid request, `-32601` method not found,
 | Method | Params | Result |
 |---|---|---|
 | `ping` | `{}` | `{pong, version, python, platform}` |
-| `detect_format` | `{path}` | `{format: "epub"\|"pdf"\|"markdown", backends: [str]}` || `ingest` | `{path, work_dir, pdf_backend?}` | `{markdown_path, metadata{}, chapters[{title,level,order}], warnings[str], assets_dir?, assets[]}` |
+| `detect_format` | `{path}` | `{format: "epub"\|"pdf"\|"markdown", backends: [str], metadata{title?, author?, language?}}` |
+| `ingest` | `{path, work_dir, pdf_backend?}` | `{markdown_path, metadata{}, chapters[{title,level,order}], warnings[str], assets_dir?, assets[]}` |
 | `parse_document` | `{markdown_path}` | `{blocks[Block], chapters[Chapter]}` |
 | `build_chunks` | `{blocks[], budget_tokens}` | `{chunks[Chunk]}` |
 | `prepare_text` | `{block_ids?, text}` | `{llm_text, placeholders[[n,literal]], used_blocks[int]}` |

@@ -253,7 +253,7 @@ def _handle_ping(_params: JsonObject, _notify: ProgressSink) -> JsonObject:
 
 
 def _handle_detect_format(params: JsonObject, _notify: ProgressSink) -> JsonObject:
-    return extractors.detect_format(_require_str(params, "path"))
+    return extractors.inspect(_require_str(params, "path"))
 
 
 def _handle_ingest(params: JsonObject, notify: ProgressSink) -> JsonObject:

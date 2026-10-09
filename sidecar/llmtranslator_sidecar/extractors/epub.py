@@ -606,6 +606,20 @@ def _metadata(book: epub.EpubBook) -> dict[str, Any]:
     return metadata
 
 
+def peek(path: str, sample_chars: int) -> tuple[dict[str, Any], str]:
+    """The Dublin Core metadata and the first ``sample_chars`` of text, in reading order."""
+    book = epub.read_epub(path)
+    parts: list[str] = []
+    size = 0
+    for item in _reading_order(book):
+        text = BeautifulSoup(item.get_content(), "xml").get_text(" ")
+        parts.append(text)
+        size += len(text)
+        if size >= sample_chars:
+            break
+    return _metadata(book), " ".join(parts)[:sample_chars]
+
+
 def _reading_order(book: epub.EpubBook) -> list[epub.EpubItem]:
     ordered: list[epub.EpubItem] = []
     seen: set[str] = set()

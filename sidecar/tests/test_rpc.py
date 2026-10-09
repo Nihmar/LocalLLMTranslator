@@ -117,6 +117,7 @@ def test_detect_format(fixtures: Path) -> None:
     assert call("detect_format", {"path": str(fixtures / "content.md")}) == {
         "format": "markdown",
         "backends": ["source"],
+        "metadata": {"title": "The Lantern Keeper", "author": "Fixture Author", "language": "en"},
     }
     assert call("detect_format", {"path": str(fixtures / "content.epub")})["format"] == "epub"
     assert call("detect_format", {"path": str(fixtures / "content.pdf")})["format"] == "pdf"

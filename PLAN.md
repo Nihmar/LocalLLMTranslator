@@ -1032,7 +1032,7 @@ Requests `{"jsonrpc":"2.0","id":N,"method":"...","params":{...}}`; responses `re
 | Method | Return |
 |---|---|
 | `ping` | `{pong, version, python, platform}` |
-| `detect_format` | `{format, backends[]}` |
+| `detect_format` | `{format, backends[], metadata{title?, author?, language?}}` — the language is guessed from a text sample (function words, `langdetect.py`) because declared metadata is often wrong; the hints only pre-fill the new-book form |
 | `ingest` | `{markdown_path, metadata, chapters[], warnings[], assets_dir, assets[]}` |
 | `parse_document` | `{blocks[], chapters[]}` |
 | `build_chunks` | `{chunks[]}` |
