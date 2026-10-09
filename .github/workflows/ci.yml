@@ -75,7 +75,9 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: crates/app
+          # The lock file lives at the workspace root; caching `crates/app` alone missed it
+          # already and would ignore the server crate too.
+          workspaces: .
       - name: System dependencies
         run: |
           sudo apt-get update
