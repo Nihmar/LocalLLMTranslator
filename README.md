@@ -341,7 +341,7 @@ not travel, and an existing project id is rejected instead of overwritten.
 - **No secrets in the database**: API keys live in the system keyring.
 - The webview runs under a strict Content Security Policy (`tauri.conf.json`): only the bundled
   assets, the Tauri IPC channel and `asset:`/`data:` images; inline styles are allowed because
-  CodeMirror and the progress bars use them, no remote origin is reachable.
+  the progress bars use them, no remote origin is reachable.
 - Prompts and Pandoc templates are **user data**: externalised, copied into the project
   snapshot, editable from the UI.
 - Nothing that requires a GPU or downloaded models on the default path: the `marker` exception

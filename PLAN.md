@@ -15,7 +15,7 @@
 | LLM engine | **External `llama-server`** | The user starts and tunes the servers; the app detects endpoints, health, models and slots |
 | State | **SQLite** (sqlx + embedded migrations) | Checkpoints, resume, cache, audit, job queue |
 | PDF | **Pluggable interface**: `pymupdf4llm` default, `marker` optional | Default without heavy dependencies; marker can be enabled where layout quality matters |
-| Frontend | React + TS + Vite + Tailwind + **CodeMirror 6** | CodeMirror 6 + `@codemirror/merge` renders the review diff (a read-only merge view in a dark theme built from the design tokens); the app needs no diff implementation of its own. |
+| Frontend | React + TS + Vite + Tailwind, fonts bundled with `@fontsource` | The review shows a correction inside its paragraph (the quote struck, the proposal inserted), in the reading font: a three-column merge editor was more machinery than the decision needs. Literata and IBM Plex are OFL and ship in the bundle, never fetched. |
 | Tests | pytest + ruff + pyright (Python), cargo test + clippy + rustfmt (Rust), **fake llama-server** | Deterministic, offline CI |
 
 **Product constraints**: no telemetry, no network calls except the configured endpoints,
@@ -124,7 +124,7 @@ LocalLLMTranslator/
 ├── ui/                            # React + TS + Vite
 │   └── src/
 │       ├── routes/{wizard,jobs,review,export,settings}
-│       ├── components/{ChunkTable,DiffEditor,LogView,ResourceGauge}
+│       ├── components/{ChunkTable,BookProfilePanel,JobMonitor,LogView,ResourceGauge}
 │       └── lib/{ipc,events,queries}
 ├── sidecar/
 │   ├── pyproject.toml
@@ -938,28 +938,31 @@ and is attached to the first member book — the queue is project-scoped — wit
 
 ## 11. User interface
 
-The numbered subsections below are stable anchors, not the on-screen order: the shell groups
-destinations by **scope**. The **project steps** — Ingestion, Translation, Review and Export —
-are the translation pipeline; the sidebar shows them only while a project is open, in reading
-order, and each one is a freely visitable route (not a constraint). The **application
-destinations** — Projects, Models, Series and the Job dashboard — are always reachable,
-independent of the open project; they come first in the sidebar, so opening or closing a book
-never moves the entries above. A project also reaches, beside its four steps, the **Glossario**:
-the terms the translator prompt reads, reviewed as a destination of its own instead of inside a
-collapsed panel, and the **Storico**: the per-project correction history of §11.4. The open
-project is pinned in the header (name, language pair, source path), so
-the current book is unambiguous on every page.
+The numbered subsections below are stable anchors, not the on-screen order. The shell (redesign
+of issue #14) is a header, a row of book steps and an activity bar:
 
-1. **Ingestion** — drag&drop, format detection, chapter and block preview, PDF backend
-   choice, extraction result with warnings.
+- the **header** carries the open book (name and language pair; clicking it opens the library)
+  and the application destinations, always reachable: **Libreria** (the books), **Serie** and
+  **Modelli**;
+- while a book is open, its **five steps** follow the order of the work — **Importa**,
+  **Prepara** (book profile, dialogue convention, glossary), **Traduci**, **Rivedi**, **Esporta**
+  — each a freely visitable route, not a constraint;
+- the **activity bar** at the bottom shows the sidecar and the queue on every page and opens the
+  job monitor or the job dashboard ("Log e coda").
+
+The interface is light and editorial: book text in a serif, the UI in a sans, one teal accent and
+amber only for what needs attention. Creating a book imports it in the same step (§11.1).
+
+1. **Ingestion** — "Crea e importa" creates the project and starts the ingestion of its file;
+   the step then shows the running job, chapters and warnings, and re-imports (or imports
+   another file, with the PDF backend choice) on demand.
 2. **Models** — endpoint CRUD (URL, health-check, model list from `/v1/models`, `props`),
    role assignment, savable profiles, VRAM/slot indicator.
    A binding is one row per (role, endpoint): assigning the same pair again updates that row
    instead of adding a twin, and `role_binding_delete` removes it, so a model can be unassigned
    from a role it was given earlier. A role may keep several bindings, ordered by priority
    (the highest wins in `role_binding_for`).
-3. **Translation** — book profile panel (the reconnaissance result of §9.4, confirmed field by
-   field) plus chunk table (`pending/running/done/failed/needs_review`) with tokens,
+3. **Translation** — chunk table (`pending/running/done/failed/needs_review`) with tokens,
    attempts, model; start/pause/resume; live log; resource gauge; actions on multiple
    selection (retry, skip, re-translate with another model).
    Above the chunk table sits a chapter outline with the same aggregated statuses; double-clicking
@@ -969,21 +972,19 @@ the current book is unambiguous on every page.
    for the export. The status filter applies to the table only: counters, outline and preview
    always describe the whole project. The translation page also summarises what is running and
    opens the **job monitor** described below.
-4. **Review** — 3-column side-by-side editor (original / translated / corrected) with block-level
-   and character-level diff, navigation by suggestion, accept/reject per individual
-   change, and a filterable QA report. The diff is a read-only CodeMirror 6 merge view
-   (`@codemirror/merge`) with a dark theme built from the design tokens: the source block is a
-   read-only markdown editor, the current translation and the selected proposal are the two
-   sides of the merge view. The explanation of the selected proposal is shown next to the diff as
-   well as in the suggestion card, so the reason is readable while the two texts are compared.
-   Accept/reject is a control-plane operation that rewrites a block
-   translation and recomposes the chunk, so the editor never mutates the text locally.
-   Passes run as `edit_chunk` / `proofread_chunk` jobs; the QA heuristics run inline on every
-   validated translation and can be re-run per chunk with `qa_scan` (for example after a glossary
-   change). Accepting a suggestion rewrites the block with the pass as its origin and recomposes
-   the chunk's `target_md`, so the exporter sees the reviewed text. The decision stamps
-   `suggestion.decided_at`, so the accepted and rejected proposals read back as a per-project
-   history of the corrections made (`suggestion_history`).
+4. **Review** — an inbox of decisions. Every editor and proofreader proposal is an item, sorted by
+   severity and then by book order; critical and major ones are shown by default, minor ones on
+   request, and a pass filter narrows to editor or proofreader. The detail shows the source
+   paragraph and the translation with the correction inside it (the quote struck, the proposal
+   inserted) and the reason; Accetta / Rifiuta decide and move to the next item, also with the
+   keyboard (J/K, A, R). "Decise" lists the decided proposals newest first (`suggestion_history`,
+   the per-project correction history) and "Controlli QA" the open findings.
+   Accept/reject is a control-plane operation that rewrites a block translation and recomposes
+   the chunk, so the view never mutates the text locally. Passes run as `edit_chunk` /
+   `proofread_chunk` jobs; the QA heuristics run inline on every validated translation and can be
+   re-run per chunk with `qa_scan` (for example after a glossary change). Accepting a suggestion
+   rewrites the block with the pass as its origin and recomposes the chunk's `target_md`, so the
+   exporter sees the reviewed text; the decision stamps `suggestion.decided_at`.
 5. **Export** — per-chapter unit, `metadata.yaml`, template/CSS/LaTeX choice, preview,
    selective rebuild of only the modified chapter, build history.
    Mechanics: the composed units are hashed (content, metadata and the template/CSS/filters in
