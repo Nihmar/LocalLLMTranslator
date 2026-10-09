@@ -497,7 +497,11 @@ repeated paragraphs, title pages) without even calling the model.
   snapshot. `project_export` writes it; `project_import` extracts it under the project data
   directory, copies the project-owned rows out of the attached archive database and rewrites the
   absolute paths (`document.markdown_path`, `project.prompts_snapshot_dir`) to the local
-  locations. An id that already exists is rejected and no other project's rows are touched.
+  locations. An id that already exists is rejected and no other project's rows are touched. The
+  archive's schema is compared to the running app's before any row is copied, so a bundle from a
+  different version is rejected with a clear error instead of a column mismatch. The manifest's
+  project id is only accepted as a single, plain path component, so a crafted archive cannot
+  write outside the project data directory.
 
 ---
 

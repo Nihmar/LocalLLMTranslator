@@ -12,7 +12,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use sqlx::{SqliteConnection, SqlitePool};
+use sqlx::{Row, SqliteConnection, SqlitePool};
 
 use crate::db::models::Project;
 use crate::db::{new_id, now, repo};
@@ -229,6 +229,68 @@ async fn import_staged(pool: &SqlitePool, data_dir: &Path, staging: &Path) -> Re
         .ok_or_else(|| AppError::NotFound(format!("imported project {project_id}")))
 }
 
+/// The tables copied out of an archive database, in copy order. Kept in one place so the
+/// compatibility check and the copy statements cannot drift.
+const IMPORTED_TABLES: [&str; 10] = [
+    "project",
+    "document",
+    "chapter",
+    "block",
+    "chunk",
+    "block_translation",
+    "suggestion",
+    "qa_finding",
+    "glossary_term",
+    "project_memory",
+];
+
+/// Fail with a clear message when the attached archive's schema differs from the local one.
+///
+/// `copy_rows_in_transaction` copies with `INSERT ... SELECT *`, which requires identical
+/// column names **and order**. An archive written by a different app version is rejected
+/// here instead of failing with a cryptic "table X has N columns" (or, worse, silently
+/// mapping values onto the wrong columns).
+async fn verify_imported_schema(connection: &mut SqliteConnection) -> Result<()> {
+    for table in IMPORTED_TABLES {
+        let local = table_columns(connection, "", table).await?;
+        let archived = table_columns(connection, "imported", table).await?;
+        if local != archived {
+            return Err(AppError::Invalid(format!(
+                "the archive schema of `{table}` does not match this app version \
+                 (expected {} columns, found {}); export the bundle again with the same version",
+                local.len(),
+                archived.len()
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// The ordered column names of a table, optionally in the `imported` schema.
+async fn table_columns(
+    connection: &mut SqliteConnection,
+    schema: &str,
+    table: &str,
+) -> Result<Vec<String>> {
+    // `table` and `schema` are compile-time constants, never user input.
+    let pragma = if schema.is_empty() {
+        format!("PRAGMA table_info({table})")
+    } else {
+        format!("PRAGMA {schema}.table_info({table})")
+    };
+    // SAFETY: `schema` and `table` are compile-time constants (the fixed table list and the
+    // literal `imported` alias), never user input. sqlx 0.9 only accepts `&'static str`
+    // otherwise, and `PRAGMA` cannot take bind parameters for a table name.
+    let rows = sqlx::query(sqlx::AssertSqlSafe(pragma))
+        .fetch_all(&mut *connection)
+        .await?;
+    let mut columns = Vec::with_capacity(rows.len());
+    for row in rows {
+        columns.push(row.try_get::<String, _>("name")?);
+    }
+    Ok(columns)
+}
+
 /// Copy the project-owned rows from the attached archive database. `ATTACH` is
 /// per-connection, so the whole copy runs on one pooled connection.
 pub(crate) async fn copy_project_rows(
@@ -244,8 +306,11 @@ pub(crate) async fn copy_project_rows(
         .execute(&mut *connection)
         .await?;
 
-    let result =
-        copy_rows_in_transaction(&mut connection, project_id, local_work, local_prompts).await;
+    let result = async {
+        verify_imported_schema(&mut connection).await?;
+        copy_rows_in_transaction(&mut connection, project_id, local_work, local_prompts).await
+    }
+    .await;
     let _ = sqlx::query("DETACH DATABASE imported")
         .execute(&mut *connection)
         .await;
@@ -587,6 +652,50 @@ mod tests {
         let error = extract_archive_with_limits(&archive, &dir.path().join("out"), 2, 1024)
             .expect_err("the entry cap must reject the archive");
         assert!(error.to_string().contains("entries"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn an_archive_with_a_different_schema_is_rejected() {
+        let (pool, dir) = crate::db::connect_temp_file().await.expect("pool");
+        let mut connection = pool.acquire().await.expect("connection");
+
+        // A fresh, empty database has none of the expected tables: the check must refuse it
+        // before any `SELECT *` copy runs.
+        let empty = dir.path().join("empty.sqlite");
+        sqlx::query("ATTACH DATABASE ?1 AS imported")
+            .bind(empty.to_string_lossy().to_string())
+            .execute(&mut *connection)
+            .await
+            .expect("attach empty");
+        let error = verify_imported_schema(&mut connection)
+            .await
+            .expect_err("an empty schema must be refused");
+        assert!(error.to_string().contains("archive schema"), "{error}");
+        sqlx::query("DETACH DATABASE imported")
+            .execute(&mut *connection)
+            .await
+            .expect("detach empty");
+
+        // A database produced by this app version matches column for column. The pool runs
+        // in WAL mode, so checkpoint before copying the main file.
+        sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+            .execute(&mut *connection)
+            .await
+            .expect("checkpoint");
+        let own = dir.path().join("own.sqlite");
+        std::fs::copy(dir.path().join("test.sqlite"), &own).expect("copy");
+        sqlx::query("ATTACH DATABASE ?1 AS imported")
+            .bind(own.to_string_lossy().to_string())
+            .execute(&mut *connection)
+            .await
+            .expect("attach own");
+        verify_imported_schema(&mut connection)
+            .await
+            .expect("the same schema must pass");
+        sqlx::query("DETACH DATABASE imported")
+            .execute(&mut *connection)
+            .await
+            .expect("detach own");
     }
 
     #[test]
