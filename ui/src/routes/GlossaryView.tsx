@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { BookProfilePanel } from "../components/BookProfilePanel";
 import { EmptyState } from "../components/EmptyState";
 import { FormField } from "../components/FormField";
 import { StatusBadge, statusLabel } from "../components/StatusBadge";
+import { onJobProgress } from "../lib/events";
 import { glossaryDelete, glossaryList, glossaryUpsert, toErrorMessage } from "../lib/ipc";
 import {
   GLOSSARY_KINDS,
@@ -98,6 +100,16 @@ export function GlossaryView({ project, onNavigate }: GlossaryViewProps) {
   const [notice, setNotice] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState("");
   const [query, setQuery] = useState("");
+  // Bumped on every job transition so the book profile refetches when a reconnaissance ends.
+  const [profileToken, setProfileToken] = useState(0);
+
+  useEffect(
+    () =>
+      onJobProgress(() => {
+        setProfileToken((current) => current + 1);
+      }),
+    [],
+  );
 
   const projectId = project?.id ?? null;
   const load = useCallback(async () => {
@@ -236,6 +248,8 @@ export function GlossaryView({ project, onNavigate }: GlossaryViewProps) {
 
   return (
     <div className="section-stack">
+      <BookProfilePanel projectId={project.id} reloadToken={profileToken} initiallyExpanded />
+
       <section className="panel">
         <div className="panel-head">
           <span className="panel-title">Glossario del progetto</span>
@@ -252,8 +266,8 @@ export function GlossaryView({ project, onNavigate }: GlossaryViewProps) {
 
         <div className="panel-pad section-stack">
           <p className="text-xs text-muted">
-            Il prompt del traduttore riceve i termini non rifiutati. I candidati arrivano dalla
-            ricognizione e dai riassunti: approva, correggi o rifiuta. Un conflitto segnala una resa
+            Il prompt del traduttore riceve solo i termini approvati. I candidati arrivano dalla
+            ricognizione e dai riassunti e aspettano te: approva, correggi o rifiuta. Un conflitto segnala una resa
             diversa da quella del canone di serie.
           </p>
 

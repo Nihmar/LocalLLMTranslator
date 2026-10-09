@@ -35,6 +35,8 @@ export interface BookProfilePanelProps {
   projectId: string;
   /** Bumped by the parent on `job://progress` so the panel refetches. */
   reloadToken: number;
+  /** Start expanded: on the "Prepara" page the profile is the content, not a side note. */
+  initiallyExpanded?: boolean;
 }
 
 type FieldKey =
@@ -285,7 +287,11 @@ function formToRequest(
   };
 }
 
-export function BookProfilePanel({ projectId, reloadToken }: BookProfilePanelProps) {
+export function BookProfilePanel({
+  projectId,
+  reloadToken,
+  initiallyExpanded = false,
+}: BookProfilePanelProps) {
   const [snapshot, setSnapshot] = useState<ReconSnapshot | null>(null);
   const [form, setForm] = useState<FormState>(emptyForm);
   const [loading, setLoading] = useState(true);
@@ -295,7 +301,7 @@ export function BookProfilePanel({ projectId, reloadToken }: BookProfilePanelPro
   const [actionError, setActionError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [pasted, setPasted] = useState("");
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(initiallyExpanded);
   const signatureRef = useRef("");
   const [deletedTerms, setDeletedTerms] = useState<string[]>([]);
   const [glossarySaving, setGlossarySaving] = useState(false);

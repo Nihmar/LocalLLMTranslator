@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { BookProfilePanel } from "../components/BookProfilePanel";
 import { ChapterList } from "../components/ChapterList";
 import { ChunkTable } from "../components/ChunkTable";
 import type { ChunkRow } from "../components/ChunkTable";
@@ -158,7 +157,6 @@ export function TranslateView({ project, onNavigate, onOpenJobs }: TranslateView
 
   // Bumped on every `job://progress` so the book profile panel refetches the
   // reconnaissance outcome without opening its own event listener.
-  const [reconToken, setReconToken] = useState(0);
 
   const projectId = project?.id ?? null;
 
@@ -240,7 +238,6 @@ export function TranslateView({ project, onNavigate, onOpenJobs }: TranslateView
         void loadChunks();
         void loadContext();
         void loadMetrics();
-        setReconToken((current) => current + 1);
       }),
     [loadChunks, loadContext, loadMetrics],
   );
@@ -535,8 +532,6 @@ export function TranslateView({ project, onNavigate, onOpenJobs }: TranslateView
 
       <div className="grid grid-cols-1 gap-3 xl:grid-cols-[minmax(0,1fr)_20rem]">
         <div className="section-stack min-w-0">
-          <BookProfilePanel projectId={project.id} reloadToken={reconToken} />
-
           <div className="panel panel-pad section-stack">
             <ProgressBar
               value={translatedCount}
