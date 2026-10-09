@@ -9,7 +9,8 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 /// A VRAM reading, in bytes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
 pub struct VramInfo {
     pub used_bytes: u64,
     pub total_bytes: u64,
@@ -155,7 +156,8 @@ fn value_to_u64(value: &serde_json::Value) -> Option<u64> {
 }
 
 /// Reason the parallel degree was capped; surfaced to the UI.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
 #[serde(rename_all = "snake_case")]
 pub enum ParallelReason {
     /// Full parallelism is available.

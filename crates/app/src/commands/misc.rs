@@ -49,7 +49,8 @@ pub async fn log_frontend_error(command: String, message: String) -> Result<Ack>
     Ok(Ack::done())
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct DiagnosticsPaths {
     /// The application data directory (database, projects, logs).
     pub data_dir: String,

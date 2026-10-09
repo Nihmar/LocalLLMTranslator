@@ -67,7 +67,8 @@ pub struct DiagnosticsReport {
     pub llm_call_errors: Vec<LlmCallError>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct DiagnosticsOutcome {
     pub output_path: String,
     pub bytes: u64,

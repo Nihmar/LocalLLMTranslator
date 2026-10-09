@@ -21,19 +21,26 @@ pub async fn export_build(state: &AppState, req: ExportRequest) -> Result<Export
     emit(
         state,
         EVENT_EXPORT_PROGRESS,
-        serde_json::json!({ "state": "started", "format": req.output_format }),
+        export::ExportProgress {
+            state: "started".to_string(),
+            format: Some(req.output_format.clone()),
+            output_path: None,
+            units: None,
+            from_cache: None,
+        },
     );
     let deps = pipeline_deps(state);
     let outcome = export::run_export(&deps, &req).await?;
     emit(
         state,
         EVENT_EXPORT_PROGRESS,
-        serde_json::json!({
-            "state": "done",
-            "output_path": outcome.output_path,
-            "units": outcome.units,
-            "from_cache": outcome.from_cache,
-        }),
+        export::ExportProgress {
+            state: "done".to_string(),
+            format: None,
+            output_path: Some(outcome.output_path.clone()),
+            units: Some(outcome.units),
+            from_cache: Some(outcome.from_cache),
+        },
     );
     Ok(outcome)
 }

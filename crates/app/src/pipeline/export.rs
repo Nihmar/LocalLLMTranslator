@@ -31,7 +31,8 @@ fn default_true() -> bool {
     true
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, optional_fields = nullable)]
 pub struct ExportRequest {
     pub project_id: String,
     /// `pdf` | `epub` | `docx` (also `html` for previews).
@@ -61,7 +62,8 @@ pub struct ExportRequest {
     pub allow_untranslated: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct ExportOutcome {
     pub output_path: String,
     pub units: usize,
@@ -78,7 +80,8 @@ pub struct ExportOutcome {
 }
 
 /// One entry of the build history (PLAN.md §11.5).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
 pub struct ExportBuildRecord {
     pub id: String,
     pub output_path: String,
@@ -113,14 +116,16 @@ struct ExportState {
     unit_hashes: BTreeMap<String, String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, optional_fields = nullable)]
 pub struct ExportPreviewRequest {
     pub project_id: String,
     #[serde(default)]
     pub chapter_id: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct PreviewUnit {
     pub key: String,
     pub title: String,
@@ -129,12 +134,29 @@ pub struct PreviewUnit {
     pub untranslated: usize,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct ExportPreview {
     pub metadata_yaml: String,
     pub units: Vec<PreviewUnit>,
     pub total_chunks: usize,
     pub untranslated_chunks: usize,
+}
+
+/// Payload of `export://progress`, emitted before and after a build. The optional
+/// fields depend on `state`; `from_cache` arrives with the `done` ack.
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[ts(export)]
+pub struct ExportProgress {
+    pub state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub units: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_cache: Option<bool>,
 }
 
 /// A composed Markdown unit: the preamble or one chapter.

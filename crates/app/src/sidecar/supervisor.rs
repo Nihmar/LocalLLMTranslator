@@ -66,7 +66,8 @@ pub fn resolve_spawn_spec(bundled: Option<&Path>) -> SpawnSpec {
     )
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
 #[serde(rename_all = "snake_case")]
 pub enum SidecarState {
     Stopped,
@@ -77,7 +78,8 @@ pub enum SidecarState {
 }
 
 /// Reported through the `sidecar://status` event.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
 pub struct SidecarStatus {
     pub state: SidecarState,
     pub pid: Option<u32>,

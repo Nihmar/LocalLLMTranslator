@@ -10,7 +10,8 @@ use crate::AppState;
 
 use super::enqueue_and_emit;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, ts_rs::TS)]
+#[ts(export, optional_fields = nullable)]
 pub struct IngestStartRequest {
     pub project_id: String,
     #[serde(default)]
@@ -36,7 +37,8 @@ pub async fn document_inspect(
     state.sidecar.detect_format(&path).await
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct JobStarted {
     pub job_id: String,
 }

@@ -25,7 +25,8 @@ pub struct ProposedTerm {
 }
 
 /// What happened to a proposal.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ts_rs::TS)]
+#[ts(export)]
 #[serde(rename_all = "snake_case")]
 pub enum ProposalOutcome {
     /// A new candidate row was inserted.

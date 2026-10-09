@@ -139,14 +139,16 @@ const PROFILE_FIELDS: [&str; 9] = [
 /// One profile value with its provenance. `basis` is one of `from_text`,
 /// `metadata`, `inferred` (PLAN.md section 9.4): an `inferred` field is shown as
 /// such and never silently becomes a fact.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, ts_rs::TS)]
+#[ts(export)]
 pub struct ProfileField<T> {
     pub value: T,
     pub basis: String,
 }
 
 /// A name the profile proposes for the glossary.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, ts_rs::TS)]
+#[ts(export)]
 pub struct ProperNoun {
     pub source: String,
     pub kind: String,
@@ -155,7 +157,8 @@ pub struct ProperNoun {
 }
 
 /// Where the profile came from; travels with the value.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, ts_rs::TS)]
+#[ts(export)]
 pub struct ProfileProvenance {
     pub generated_at: String,
     pub model: String,
@@ -166,7 +169,8 @@ pub struct ProfileProvenance {
 }
 
 /// The candidate profile. Stored as JSON under [`MEMORY_KEY`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, ts_rs::TS)]
+#[ts(export)]
 pub struct BookProfile {
     pub source_language: ProfileField<String>,
     pub genre: ProfileField<String>,
@@ -183,7 +187,8 @@ pub struct BookProfile {
 }
 
 /// What `recon_get` returns: candidate + already-confirmed values + glossary.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct ReconSnapshot {
     pub project_id: String,
     pub profile: Option<BookProfile>,
@@ -204,7 +209,8 @@ pub struct ReconSnapshot {
 }
 
 /// Request of `recon_confirm`.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, ts_rs::TS)]
+#[ts(export, optional_fields = nullable)]
 pub struct ConfirmRequest {
     pub project_id: String,
     pub profile: BookProfile,
@@ -219,7 +225,8 @@ pub struct ConfirmRequest {
     pub proper_nouns: Vec<ConfirmedTerm>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, ts_rs::TS)]
+#[ts(export, optional_fields = nullable)]
 pub struct ConfirmedTerm {
     pub source: String,
     #[serde(default)]
@@ -230,7 +237,8 @@ pub struct ConfirmedTerm {
 }
 
 /// Result of one reconnaissance run.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct ReconOutcome {
     pub project_id: String,
     pub model: String,

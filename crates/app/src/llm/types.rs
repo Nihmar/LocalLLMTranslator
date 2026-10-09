@@ -135,7 +135,8 @@ pub struct Delta {
 }
 
 /// `GET /props`.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
 pub struct Props {
     #[serde(default)]
     pub total_slots: Option<u32>,
@@ -147,7 +148,8 @@ pub struct Props {
     pub default_generation_settings: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
 pub struct ModelInfo {
     pub id: String,
     #[serde(default)]

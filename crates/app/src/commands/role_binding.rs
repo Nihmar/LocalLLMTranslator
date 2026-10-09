@@ -10,7 +10,8 @@ use crate::db::{new_id, repo};
 use crate::error::Result;
 use crate::AppState;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, ts_rs::TS)]
+#[ts(export, optional_fields = nullable)]
 pub struct RoleBindingSet {
     #[serde(default)]
     pub id: Option<String>,

@@ -453,16 +453,16 @@ fn spawn_metrics_ticker(
             emit_event(
                 &*emitter,
                 EVENT_METRICS_TICK,
-                serde_json::json!({
-                    "free_bytes": snapshot.free_bytes,
-                    "suggested_parallel": snapshot.suggested_parallel,
-                    "reason": snapshot.reason,
-                    "jobs": jobs,
-                    "endpoints": worker.endpoint_usage(),
-                    "worker_running": worker.is_running(),
-                    "worker_paused": worker.is_paused(),
-                    "sidecar": supervisor.status(),
-                }),
+                crate::commands::metrics::MetricsTick {
+                    free_bytes: snapshot.free_bytes,
+                    suggested_parallel: snapshot.suggested_parallel,
+                    reason: snapshot.reason,
+                    jobs,
+                    endpoints: worker.endpoint_usage(),
+                    worker_running: worker.is_running(),
+                    worker_paused: worker.is_paused(),
+                    sidecar: supervisor.status(),
+                },
             );
         }
     });

@@ -62,7 +62,8 @@ pub struct SeriesBundle {
     pub memory: Vec<SeriesMemory>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct SeriesExportOutcome {
     pub output_path: String,
     pub bytes: u64,
@@ -71,7 +72,8 @@ pub struct SeriesExportOutcome {
     pub books: usize,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct SeriesImportOutcome {
     pub series: Series,
     pub terms_added: usize,

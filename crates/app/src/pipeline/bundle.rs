@@ -38,7 +38,8 @@ pub struct BundleManifest {
     pub project_name: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct ExportBundleOutcome {
     pub output_path: String,
     pub bytes: u64,

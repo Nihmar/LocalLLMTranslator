@@ -85,7 +85,8 @@ pub fn plan_limit(max_concurrency: Option<i64>, total_slots: Option<u32>) -> (us
 }
 
 /// Live usage of one role, reported on `metrics_get` / `metrics://tick`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct EndpointUsage {
     pub role: String,
     pub endpoint_id: Option<String>,

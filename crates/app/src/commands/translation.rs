@@ -13,7 +13,8 @@ use crate::pipeline::export::chunk_has_translation;
 use crate::scheduler::{queue, NewJob};
 use crate::AppState;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, ts_rs::TS)]
+#[ts(export, optional_fields = nullable)]
 pub struct TranslationStartRequest {
     #[serde(default)]
     pub project_id: Option<String>,
@@ -22,7 +23,8 @@ pub struct TranslationStartRequest {
     pub only_retry: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct TranslationStartResult {
     pub enqueued: usize,
     pub running: bool,
@@ -33,7 +35,8 @@ pub struct TranslationStartResult {
 /// The optional `project_id` scopes the cancellation to a single project; when
 /// omitted every project's translation work is cancelled, preserving the old
 /// global behaviour for callers that do not pass the argument.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, ts_rs::TS)]
+#[ts(export, optional_fields = nullable)]
 pub struct TranslationCancelRequest {
     #[serde(default)]
     pub project_id: Option<String>,

@@ -10,7 +10,8 @@ use crate::error::{AppError, Result};
 use crate::llm::{probe, EndpointHealth, LlamaClient, ModelInfo, Props};
 use crate::AppState;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, ts_rs::TS)]
+#[ts(export, optional_fields = nullable)]
 pub struct EndpointUpsert {
     #[serde(default)]
     pub id: Option<String>,
@@ -24,14 +25,16 @@ pub struct EndpointUpsert {
     pub notes: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct EndpointTestResult {
     pub health: EndpointHealth,
     pub props: Option<Props>,
     pub models: Vec<ModelInfo>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, ts_rs::TS)]
+#[ts(export, optional_fields = nullable)]
 pub struct EndpointModelsRequest {
     #[serde(default)]
     pub endpoint_id: Option<String>,

@@ -13,7 +13,8 @@ use crate::db::{new_id, repo};
 use crate::error::{AppError, Result};
 use crate::AppState;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, ts_rs::TS)]
+#[ts(export, optional_fields = nullable)]
 pub struct GlossaryUpsert {
     /// Absent or `null` creates a term; present edits the existing row.
     #[serde(default)]

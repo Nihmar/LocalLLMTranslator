@@ -10,14 +10,16 @@ use crate::db::repo;
 use crate::error::{AppError, Result};
 use crate::AppState;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, ts_rs::TS)]
+#[ts(export, optional_fields = nullable)]
 pub struct ChunkListRequest {
     pub project_id: String,
     #[serde(default)]
     pub status: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct ChunkDetail {
     pub chunk: Chunk,
     pub blocks: Vec<Block>,

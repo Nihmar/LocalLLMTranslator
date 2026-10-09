@@ -12,7 +12,8 @@ use crate::pipeline::review;
 use crate::scheduler::queue;
 use crate::AppState;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, ts_rs::TS)]
+#[ts(export, optional_fields = nullable)]
 pub struct ReviewStartRequest {
     pub project_id: String,
     /// Restrict to these chunks; omitted means every eligible chunk.
@@ -28,7 +29,8 @@ pub struct ReviewStartRequest {
     pub with_qa: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct ReviewStartResult {
     pub enqueued: usize,
 }
@@ -73,7 +75,8 @@ pub async fn review_start(state: &AppState, req: ReviewStartRequest) -> Result<R
     })
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, ts_rs::TS)]
+#[ts(export, optional_fields = nullable)]
 pub struct SuggestionListRequest {
     pub project_id: String,
     #[serde(default)]
@@ -109,7 +112,8 @@ pub async fn suggestion_list(
 /// How many decisions `suggestion_history` returns when the caller sets no limit.
 const DEFAULT_HISTORY_LIMIT: u32 = 1000;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, ts_rs::TS)]
+#[ts(export, optional_fields = nullable)]
 pub struct SuggestionHistoryRequest {
     pub project_id: String,
     #[serde(default)]
@@ -182,7 +186,8 @@ pub async fn suggestion_reject(state: &AppState, id: String) -> Result<Suggestio
     review::reject_suggestion(&state.pool, &id).await
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, ts_rs::TS)]
+#[ts(export, optional_fields = nullable)]
 pub struct QaReportRequest {
     pub project_id: String,
     #[serde(default)]
@@ -216,7 +221,8 @@ pub async fn qa_report(state: &AppState, req: QaReportRequest) -> Result<Vec<QaF
     .await
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, ts_rs::TS)]
+#[ts(export)]
 pub struct QaFindingStatusRequest {
     pub id: String,
     /// `open` | `resolved` | `ignored`.

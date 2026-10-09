@@ -66,7 +66,8 @@ Reply with a single JSON object that validates against this schema:
 pub const DEFAULT_SERIES_RECON_SCHEMA: &str = r##"{"$comment":"Series reconnaissance schema (PLAN.md §9.5, S5). Everything here is a candidate: nothing reaches a translation prompt until the user copies it into the series memory.","type":"object","properties":{"synopsis":{"type":"string","maxLength":1200},"style_notes":{"type":"array","maxItems":8,"items":{"type":"string","maxLength":240}},"characters":{"type":"array","maxItems":24,"items":{"type":"object","properties":{"source":{"type":"string","maxLength":120},"target":{"type":"string","maxLength":120},"note":{"type":"string","maxLength":200}},"required":["source","target"]}}},"required":["synopsis","style_notes","characters"]}"##;
 
 /// One recurring character or term of the saga.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, ts_rs::TS)]
+#[ts(export)]
 pub struct SeriesCharacter {
     pub source: String,
     pub target: String,
@@ -74,7 +75,8 @@ pub struct SeriesCharacter {
     pub note: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, ts_rs::TS)]
+#[ts(export)]
 pub struct SeriesProfileProvenance {
     #[serde(default)]
     pub generated_at: String,
@@ -94,14 +96,16 @@ pub struct SeriesProfileProvenance {
 }
 
 /// One book's evidence identity (`project_id` + hash of its confirmed profile).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, ts_rs::TS)]
+#[ts(export)]
 pub struct BookSource {
     pub project_id: String,
     pub hash: String,
 }
 
 /// The candidate profile stored under [`MEMORY_KEY`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, ts_rs::TS)]
+#[ts(export)]
 pub struct SeriesProfile {
     #[serde(default)]
     pub synopsis: String,
@@ -117,7 +121,8 @@ pub struct SeriesProfile {
     pub provenance: SeriesProfileProvenance,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct SeriesReconOutcome {
     pub series_id: String,
     pub model: String,
@@ -130,7 +135,8 @@ pub struct SeriesReconOutcome {
 }
 
 /// One character the user accepted from the candidate.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, ts_rs::TS)]
+#[ts(export, optional_fields = nullable)]
 pub struct ConfirmedCharacter {
     pub source: String,
     #[serde(default)]
@@ -140,7 +146,8 @@ pub struct ConfirmedCharacter {
 }
 
 /// Request of the structured candidate confirmation.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, ts_rs::TS)]
+#[ts(export, optional_fields = nullable, rename = "SeriesConfirmRequest")]
 pub struct ConfirmRequest {
     pub series_id: String,
     /// Final synopsis text; `None` leaves the series memory untouched.
@@ -160,7 +167,8 @@ pub struct ConfirmRequest {
     pub discard: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[ts(export, rename = "SeriesConfirmOutcome")]
 pub struct ConfirmOutcome {
     pub synopsis_updated: bool,
     pub style_guide_updated: bool,

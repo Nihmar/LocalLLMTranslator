@@ -16,7 +16,8 @@ use crate::pipeline::glossary::{self, ProposalOutcome};
 use crate::pipeline::series_bundle;
 use crate::AppState;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, ts_rs::TS)]
+#[ts(export, optional_fields = nullable)]
 pub struct SeriesCreate {
     pub name: String,
     #[serde(default)]
@@ -25,7 +26,8 @@ pub struct SeriesCreate {
     pub target_lang: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, ts_rs::TS)]
+#[ts(export, optional_fields = nullable)]
 pub struct SeriesUpdate {
     pub id: String,
     #[serde(default)]
@@ -45,7 +47,8 @@ pub struct SeriesUpdate {
     pub synopsis: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct SeriesDetail {
     pub series: Series,
     /// Member books, in `series_order`.
@@ -56,7 +59,8 @@ pub struct SeriesDetail {
     pub variants: Vec<SeriesGlossaryVariant>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, ts_rs::TS)]
+#[ts(export, optional_fields = nullable)]
 pub struct ProjectSetSeries {
     pub project_id: String,
     /// `None` detaches the book from its series.
@@ -66,7 +70,8 @@ pub struct ProjectSetSeries {
     pub series_order: Option<i64>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, ts_rs::TS)]
+#[ts(export, optional_fields = nullable)]
 pub struct SeriesGlossaryUpsert {
     /// Absent or `null` creates a term; present edits the existing row.
     #[serde(default)]
@@ -89,20 +94,23 @@ pub struct SeriesGlossaryUpsert {
     pub expected_revision: Option<i64>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, ts_rs::TS)]
+#[ts(export)]
 pub struct SeriesVariantUpsert {
     pub term_id: String,
     pub text: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, ts_rs::TS)]
+#[ts(export)]
 pub struct SeriesPromote {
     pub project_id: String,
     pub term_id: String,
 }
 
 /// Serializable outcome of a promotion, so the UI can react without parsing strings.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct PromoteOutcome {
     pub outcome: ProposalOutcome,
 }
@@ -450,7 +458,8 @@ pub async fn series_promote_term(state: &AppState, req: SeriesPromote) -> Result
     Ok(PromoteOutcome { outcome })
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, ts_rs::TS)]
+#[ts(export, optional_fields = nullable)]
 pub struct SeriesExportRequest {
     pub series_id: String,
     /// Destination `.llmtsz`; when absent it goes under `<app data>/series/`.
@@ -458,7 +467,8 @@ pub struct SeriesExportRequest {
     pub output_path: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, ts_rs::TS)]
+#[ts(export)]
 pub struct SeriesImportRequest {
     pub archive_path: String,
 }
@@ -502,7 +512,8 @@ pub async fn series_import(
     series_bundle::import_series(&state.pool, &state.data_dir, &req.archive_path).await
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct SeriesQaScanResult {
     pub enqueued: usize,
 }
@@ -560,7 +571,8 @@ pub async fn series_qa_scan(state: &AppState, series_id: String) -> Result<Serie
     Ok(SeriesQaScanResult { enqueued })
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, ts_rs::TS)]
+#[ts(export, optional_fields = nullable)]
 pub struct SeriesReconStart {
     pub series_id: String,
     /// Re-synthesize even when no book profile or canon changed.

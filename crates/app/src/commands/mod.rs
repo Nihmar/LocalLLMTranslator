@@ -63,7 +63,8 @@ pub fn pipeline_deps(state: &AppState) -> PipelineDeps {
 }
 
 /// Request for `project_create`.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, ts_rs::TS)]
+#[ts(export, optional_fields = nullable)]
 pub struct CreateProjectRequest {
     pub name: String,
     pub source_path: String,
@@ -86,7 +87,8 @@ pub struct CreateProjectRequest {
 }
 
 /// Generic ok/err acknowledgement for commands with no interesting payload.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct Ack {
     pub ok: bool,
 }

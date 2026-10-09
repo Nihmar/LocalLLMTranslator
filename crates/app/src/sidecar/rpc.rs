@@ -287,7 +287,8 @@ pub struct PingResult {
     pub platform: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
 pub struct DetectFormatResult {
     pub format: String,
     #[serde(default)]
@@ -299,7 +300,8 @@ pub struct DetectFormatResult {
 
 /// Title, author and language of a document, read before ingestion to pre-fill the
 /// new-book form. The language is guessed from the text by the sidecar.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
 pub struct DocumentHints {
     #[serde(default)]
     pub title: Option<String>,

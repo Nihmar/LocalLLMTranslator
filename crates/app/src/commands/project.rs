@@ -11,7 +11,8 @@ use crate::scheduler::queue;
 use crate::util::{sha256_hex, sha256_hex_str};
 use crate::AppState;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct ProjectDetail {
     pub project: Project,
     pub chapters: Vec<Chapter>,
@@ -135,7 +136,8 @@ pub async fn project_delete(state: &AppState, id: String) -> Result<Ack> {
     Ok(Ack::done())
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, ts_rs::TS)]
+#[ts(export, optional_fields = nullable)]
 pub struct ExportBundleRequest {
     pub project_id: String,
     /// Destination `.llmtz`; when absent it goes to the project output directory.
@@ -165,7 +167,8 @@ pub async fn project_export(
     .await
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, ts_rs::TS)]
+#[ts(export)]
 pub struct ImportBundleRequest {
     pub archive_path: String,
 }

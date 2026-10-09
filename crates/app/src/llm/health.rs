@@ -7,7 +7,8 @@ use crate::db::now;
 
 /// Result of a single `GET /health` probe, timestamped for persistence in
 /// `llm_endpoint.last_health_at` / `last_health_ok`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
 pub struct EndpointHealth {
     pub ok: bool,
     pub status: Option<String>,

@@ -12,7 +12,8 @@ use crate::pipeline::recon::{self, ConfirmRequest, ReconSnapshot};
 use crate::scheduler::NewJob;
 use crate::AppState;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, ts_rs::TS)]
+#[ts(export, optional_fields = nullable)]
 pub struct ReconStartRequest {
     pub project_id: String,
     /// Optional text the user pasted themselves; the app never fetches a page.
@@ -85,7 +86,8 @@ pub async fn recon_confirm(state: &AppState, req: ConfirmRequest) -> Result<Reco
     recon::confirm(&state.pool, &req).await
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, ts_rs::TS)]
+#[ts(export)]
 pub struct DialogueStyleRequest {
     pub project_id: String,
     /// `keep` or `quotes`.

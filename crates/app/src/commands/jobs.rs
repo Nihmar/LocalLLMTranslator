@@ -8,7 +8,8 @@ use crate::error::Result;
 use crate::scheduler::queue;
 use crate::AppState;
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, ts_rs::TS)]
+#[ts(export, optional_fields = nullable)]
 pub struct JobListRequest {
     #[serde(default)]
     pub project_id: Option<String>,
@@ -37,12 +38,14 @@ pub async fn job_list(state: &AppState, req: JobListRequest) -> Result<Vec<Job>>
 ///
 /// A list rather than a single id: the monitor sends one id for "interrupt this", the ids the
 /// user selected for "interrupt these", and every in-flight id it can see for "interrupt all".
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, ts_rs::TS)]
+#[ts(export)]
 pub struct JobCancelRequest {
     pub job_ids: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct JobCancelResult {
     /// Ids that were unfinished and are now `cancelled`.
     pub cancelled: Vec<String>,

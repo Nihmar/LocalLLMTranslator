@@ -7,9 +7,11 @@ use crate::error::Result;
 use crate::resources::endpoints::EndpointUsage;
 use crate::resources::{vram, ParallelReason, VramInfo};
 use crate::scheduler::queue;
+use crate::sidecar::SidecarStatus;
 use crate::AppState;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct JobCount {
     pub state: String,
     pub count: i64,
@@ -26,7 +28,8 @@ pub fn job_counts(rows: Vec<(String, i64)>) -> Vec<JobCount> {
         .collect()
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct Metrics {
     pub vram: Option<VramInfo>,
     pub free_bytes: Option<u64>,
@@ -39,6 +42,21 @@ pub struct Metrics {
     pub sidecar_in_flight: usize,
     pub worker_running: bool,
     pub worker_paused: bool,
+}
+
+/// Payload of `metrics://tick`: the periodic snapshot, without a fresh VRAM probe
+/// and with the sidecar status the desktop banner reads (`PLAN.md` §12.2).
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[ts(export)]
+pub struct MetricsTick {
+    pub free_bytes: Option<u64>,
+    pub suggested_parallel: usize,
+    pub reason: ParallelReason,
+    pub jobs: Vec<JobCount>,
+    pub endpoints: Vec<EndpointUsage>,
+    pub worker_running: bool,
+    pub worker_paused: bool,
+    pub sidecar: SidecarStatus,
 }
 
 #[tauri::command(rename = "metrics_get", rename_all = "snake_case")]

@@ -54,7 +54,8 @@ impl EventEmitter for NullEmitter {
 }
 
 /// Payload of a `log://line` event.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct LogLine {
     pub ts: String,
     pub level: String,
