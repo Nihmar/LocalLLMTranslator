@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { EmptyState } from "../components/EmptyState";
+import { readableText } from "../lib/chapters";
 import { onJobProgress } from "../lib/events";
 import { formatDateTime, formatNumber } from "../lib/format";
 import {
@@ -492,7 +493,7 @@ export function ReviewView({ project, onNavigate }: ReviewViewProps) {
                 <div>
                   <div className="field-label">Originale</div>
                   <p className="reading reading-source">
-                    {block?.source_md ?? (detail === undefined ? "…" : "—")}
+                    {block === undefined ? (detail === undefined ? "…" : "—") : readableText(block.source_md)}
                   </p>
                 </div>
 
