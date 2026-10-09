@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { EmptyState } from "../components/EmptyState";
-import { readableText } from "../lib/chapters";
 import { onJobProgress } from "../lib/events";
-import { formatDateTime, formatNumber } from "../lib/format";
+import { formatNumber } from "../lib/format";
 import {
   chunkGet,
   chunkList,
@@ -15,15 +14,14 @@ import {
   suggestionReject,
   toErrorMessage,
 } from "../lib/ipc";
-import {
-  currentTextByBlock,
-  inboxOrder,
-  isImportant,
-  proposalSegments,
-  severityClass,
-} from "../lib/review";
+import { inboxOrder, isImportant } from "../lib/review";
 import type { ChunkDetail, Project, QaFinding, Suggestion } from "../lib/types";
 import type { ViewId } from "../App";
+import { QaList } from "./review/QaList";
+import { ReviewHeader } from "./review/ReviewHeader";
+import { ReviewTabs } from "./review/ReviewTabs";
+import { SuggestionInbox } from "./review/SuggestionInbox";
+import { isTypingTarget, type PassFilter, type SeverityFilter, type Tab } from "./review/shared";
 
 /**
  * "Rivedi": the review as an inbox of decisions (issue #14).
@@ -34,51 +32,14 @@ import type { ViewId } from "../App";
  * keyboard (J/K to move, A to accept, R to reject). "Decise" is the correction history, "Controlli
  * QA" the advisory findings. Accepting rewrites the block on the control plane and recomposes
  * the chunk, so an export right after sees the decision.
+ *
+ * The panels in `./review/` own the presentation; this component keeps the loaded inbox, the
+ * filters, the selection and the keyboard.
  */
 
 export interface ReviewViewProps {
   project: Project | null;
   onNavigate: (view: ViewId) => void;
-}
-
-type Tab = "open" | "decided" | "qa";
-type SeverityFilter = "important" | "all" | "minor";
-type PassFilter = "all" | "editor" | "proofreader";
-
-const PASSES: ReadonlyArray<{ value: string; label: string }> = [
-  { value: "both", label: "Editor + proofreader" },
-  { value: "editor", label: "Solo editor" },
-  { value: "proofreader", label: "Solo proofreader" },
-];
-
-const SEVERITY_LABEL: Record<string, string> = {
-  critical: "Critica",
-  major: "Importante",
-  minor: "Minore",
-};
-
-const QA_KIND_LABEL: Record<string, string> = {
-  untranslated: "Non tradotto",
-  glossary_mismatch: "Glossario non rispettato",
-  glossary_conflict: "Conflitto di glossario",
-  placeholder_broken: "Segnaposto rotti",
-  markdown_malformed: "Struttura alterata",
-  length_anomaly: "Lunghezza anomala",
-  duplicate: "Duplicato",
-  empty: "Vuoto",
-  latin_leftover: "Testo non tradotto rimasto",
-};
-
-function passLabel(pass: string): string {
-  return pass === "proofreader" ? "proofreader" : "editor";
-}
-
-function isTypingTarget(target: EventTarget | null): boolean {
-  return (
-    target instanceof HTMLInputElement ||
-    target instanceof HTMLTextAreaElement ||
-    target instanceof HTMLSelectElement
-  );
 }
 
 export function ReviewView({ project, onNavigate }: ReviewViewProps) {
@@ -289,61 +250,19 @@ export function ReviewView({ project, onNavigate }: ReviewViewProps) {
   }
 
   const detail = selected === null ? undefined : details.get(selected.chunk_id);
-  const block = detail?.blocks.find((candidate) => candidate.id === selected?.block_id);
-  const current =
-    block === undefined || detail === undefined
-      ? (selected?.original ?? "")
-      : (currentTextByBlock(detail.translations).get(block.id) ?? selected?.original ?? "");
 
   return (
     <div className="section-stack">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="font-serif text-2xl font-medium text-ink">Rivedi</h1>
-          <p className="text-sm text-muted">
-            {formatNumber(pending.length)} proposte da decidere, di cui{" "}
-            {formatNumber(importantCount)} importanti.
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <select
-            className="select"
-            style={{ width: "auto" }}
-            aria-label="Passaggi da eseguire"
-            value={pass}
-            onChange={(event) => {
-              setPass(event.target.value);
-            }}
-          >
-            {PASSES.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-          <label className="flex items-center gap-1.5 text-sm text-ink-soft">
-            <input
-              type="checkbox"
-              checked={withQa}
-              onChange={(event) => {
-                setWithQa(event.target.checked);
-              }}
-            />
-            Rilancia QA
-          </label>
-          <button
-            type="button"
-            className="btn btn-primary"
-            disabled={starting}
-            onClick={() => {
-              void handleStart();
-            }}
-          >
-            {starting ? <span className="spinner" aria-hidden="true" /> : null}
-            Avvia revisione
-          </button>
-        </div>
-      </div>
+      <ReviewHeader
+        pendingCount={pending.length}
+        importantCount={importantCount}
+        pass={pass}
+        onPass={setPass}
+        withQa={withQa}
+        onWithQa={setWithQa}
+        starting={starting}
+        onStart={() => void handleStart()}
+      />
 
       {error !== null ? (
         <div className="banner banner-error" role="alert">
@@ -358,242 +277,41 @@ export function ReviewView({ project, onNavigate }: ReviewViewProps) {
         </div>
       ) : null}
 
-      <div className="flex flex-wrap items-center gap-3">
-        <div role="tablist" aria-label="Sezione" className="segmented">
-          {(
-            [
-              ["open", `Da decidere · ${formatNumber(pending.length)}`],
-              ["decided", `Decise · ${formatNumber(decided.length)}`],
-              ["qa", `Controlli QA · ${formatNumber(findings.length)}`],
-            ] as const
-          ).map(([id, label]) => (
-            <button
-              key={id}
-              type="button"
-              role="tab"
-              aria-selected={tab === id}
-              className="segmented-item"
-              onClick={() => {
-                setTab(id);
-                setSelectedId(null);
-              }}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-        {tab === "qa" ? null : (
-          <div className="flex flex-wrap gap-2">
-            {tab === "open"
-              ? (
-                  [
-                    ["important", "Importanti"],
-                    ["minor", "Minori"],
-                    ["all", "Tutte"],
-                  ] as const
-                ).map(([id, label]) => (
-                  <button
-                    key={id}
-                    type="button"
-                    className="chip"
-                    aria-pressed={severity === id}
-                    onClick={() => {
-                      setSeverity(id);
-                    }}
-                  >
-                    {label}
-                  </button>
-                ))
-              : null}
-            <select
-              className="select"
-              style={{ width: "auto" }}
-              aria-label="Passaggio"
-              value={passFilter}
-              onChange={(event) => {
-                const value = event.target.value;
-                setPassFilter(value === "editor" || value === "proofreader" ? value : "all");
-              }}
-            >
-              <option value="all">Editor e proofreader</option>
-              <option value="editor">Solo editor</option>
-              <option value="proofreader">Solo proofreader</option>
-            </select>
-          </div>
-        )}
-        {tab === "open" ? (
-          <span className="ml-auto text-xs text-muted">
-            <kbd className="kbd">J</kbd> <kbd className="kbd">K</kbd> scorri ·{" "}
-            <kbd className="kbd">A</kbd> accetta · <kbd className="kbd">R</kbd> rifiuta
-          </span>
-        ) : null}
-      </div>
+      <ReviewTabs
+        tab={tab}
+        onTab={(next) => {
+          setTab(next);
+          setSelectedId(null);
+        }}
+        pendingCount={pending.length}
+        decidedCount={decided.length}
+        findingsCount={findings.length}
+        severity={severity}
+        onSeverity={setSeverity}
+        passFilter={passFilter}
+        onPassFilter={setPassFilter}
+      />
 
       {loading ? (
         <EmptyState tone="loading" title="Lettura delle proposte…" />
       ) : tab === "qa" ? (
         <QaList findings={findings} chapterOf={chunkChapter} />
       ) : (
-        <div className="flex flex-wrap items-start gap-4">
-          <section aria-label="Elenco" className="panel inbox-list">
-            {visible.length === 0 ? (
-              <p className="p-6 text-center text-sm text-muted">
-                {tab === "open"
-                  ? pending.length === 0
-                    ? "Niente da decidere. Avvia la revisione sui capitoli tradotti."
-                    : "Nessuna proposta con questi filtri."
-                  : "Nessuna decisione ancora."}
-              </p>
-            ) : (
-              visible.map((item) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  className="inbox-item"
-                  aria-current={item.id === selectedId ? "true" : undefined}
-                  onClick={() => {
-                    setSelectedId(item.id);
-                  }}
-                >
-                  <span className="flex flex-wrap items-center gap-2">
-                    <span className={severityClass(item.severity)}>
-                      {SEVERITY_LABEL[item.severity ?? ""] ?? "Nota"}
-                    </span>
-                    <span className="text-xs text-muted">{chunkChapter.get(item.chunk_id)}</span>
-                    <span className="ml-auto text-xs text-faint">
-                      {tab === "decided"
-                        ? item.status === "accepted"
-                          ? "accettata"
-                          : "rifiutata"
-                        : passLabel(item.pass)}
-                    </span>
-                  </span>
-                  <span className="mt-1 line-clamp-2 block text-sm text-ink">
-                    {item.reason ?? item.quote ?? item.proposed ?? ""}
-                  </span>
-                </button>
-              ))
-            )}
-          </section>
-
-          <section aria-label="Dettaglio" className="panel inbox-detail">
-            {selected === null ? (
-              <p className="p-6 text-center text-sm text-muted">Seleziona una voce.</p>
-            ) : (
-              <div className="section-stack p-6">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className={severityClass(selected.severity)}>
-                    {SEVERITY_LABEL[selected.severity ?? ""] ?? "Nota"}
-                  </span>
-                  <span className="text-sm text-muted">
-                    {chunkChapter.get(selected.chunk_id)} · {passLabel(selected.pass)}
-                  </span>
-                  {selected.decided_at === null ? null : (
-                    <span className="ml-auto text-xs text-faint">
-                      decisa il {formatDateTime(selected.decided_at)}
-                    </span>
-                  )}
-                </div>
-
-                <div>
-                  <div className="field-label">Originale</div>
-                  <p className="reading reading-source">
-                    {block === undefined ? (detail === undefined ? "…" : "—") : readableText(block.source_md)}
-                  </p>
-                </div>
-
-                <div>
-                  <div className="field-label">
-                    {selected.status === "pending" ? "Traduzione con la correzione" : "Correzione"}
-                  </div>
-                  <p className="reading">
-                    {proposalSegments(
-                      selected.status === "pending" ? current : (selected.original ?? ""),
-                      selected,
-                    ).map((segment, index) => (
-                      <span key={index} className={`diff-${segment.kind}`}>
-                        {segment.text}
-                      </span>
-                    ))}
-                  </p>
-                </div>
-
-                {selected.reason === null ? null : (
-                  <div className="banner">
-                    <span>
-                      <strong className="font-semibold text-ink">Perché:</strong> {selected.reason}
-                    </span>
-                  </div>
-                )}
-
-                {selected.status === "pending" ? (
-                  <div className="flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      className="btn btn-primary btn-lg"
-                      disabled={deciding}
-                      onClick={() => {
-                        void decide(true);
-                      }}
-                    >
-                      Accetta <kbd className="kbd">A</kbd>
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-lg"
-                      disabled={deciding}
-                      onClick={() => {
-                        void decide(false);
-                      }}
-                    >
-                      Rifiuta <kbd className="kbd">R</kbd>
-                    </button>
-                  </div>
-                ) : null}
-              </div>
-            )}
-          </section>
-        </div>
+        <SuggestionInbox
+          tab={tab}
+          visible={visible}
+          selected={selected}
+          selectedId={selectedId}
+          pendingCount={pending.length}
+          chunkChapter={chunkChapter}
+          detail={detail}
+          deciding={deciding}
+          onSelect={setSelectedId}
+          onDecide={(accept) => {
+            void decide(accept);
+          }}
+        />
       )}
     </div>
-  );
-}
-
-function QaList({
-  findings,
-  chapterOf,
-}: {
-  findings: readonly QaFinding[];
-  chapterOf: ReadonlyMap<string, string>;
-}) {
-  if (findings.length === 0) {
-    return (
-      <EmptyState
-        title="Nessun controllo aperto"
-        description="I controlli girano dopo ogni capitolo tradotto e con «Rilancia QA»."
-      />
-    );
-  }
-  return (
-    <ul className="panel divide-y divide-line">
-      {findings.map((finding) => (
-        <li key={finding.id} className="flex flex-wrap items-start gap-3 px-5 py-3">
-          <span className={severityClass(finding.severity)}>
-            {SEVERITY_LABEL[finding.severity] ?? finding.severity}
-          </span>
-          <span className="min-w-0 flex-1">
-            <span className="block text-sm font-medium text-ink">
-              {QA_KIND_LABEL[finding.kind] ?? finding.kind}
-            </span>
-            <span className="block text-xs text-muted">
-              {finding.chunk_id === null ? "Tutto il libro" : chapterOf.get(finding.chunk_id)}
-            </span>
-            <span className="mt-1 block font-mono text-[0.7rem] break-all text-faint">
-              {finding.details_json}
-            </span>
-          </span>
-        </li>
-      ))}
-    </ul>
   );
 }
