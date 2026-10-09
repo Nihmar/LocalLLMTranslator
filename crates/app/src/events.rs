@@ -86,8 +86,14 @@ pub fn emit_event<T: Serialize>(emitter: &dyn EventEmitter, event: &str, payload
 }
 
 /// Emit the serialized [`Job`] row on `job://progress`.
+/// Emit the serialized [`Job`] row on `job://progress`, with its payload decoded so the
+/// UI never parses the column.
 pub fn emit_job(emitter: &dyn EventEmitter, job: &Job) {
-    emit_event(emitter, EVENT_JOB_PROGRESS, job);
+    emit_event(
+        emitter,
+        EVENT_JOB_PROGRESS,
+        crate::views::JobView::from(job.clone()),
+    );
 }
 
 /// Emit a structured log line on `log://line`.

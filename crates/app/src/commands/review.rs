@@ -5,11 +5,12 @@ use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use super::{pipeline_deps, Ack};
-use crate::db::models::{QaFinding, Suggestion};
+use crate::db::models::Suggestion;
 use crate::db::repo;
 use crate::error::{AppError, Result};
 use crate::pipeline::review;
 use crate::scheduler::queue;
+use crate::views::QaFindingView;
 use crate::AppState;
 
 #[derive(Debug, Clone, Deserialize, ts_rs::TS)]
@@ -205,12 +206,12 @@ pub struct QaReportRequest {
 pub async fn qa_report_command(
     state: State<'_, AppState>,
     req: QaReportRequest,
-) -> Result<Vec<QaFinding>> {
+) -> Result<Vec<QaFindingView>> {
     qa_report(&state, req).await
 }
 
-pub async fn qa_report(state: &AppState, req: QaReportRequest) -> Result<Vec<QaFinding>> {
-    repo::list_qa_findings_filtered(
+pub async fn qa_report(state: &AppState, req: QaReportRequest) -> Result<Vec<QaFindingView>> {
+    let findings = repo::list_qa_findings_filtered(
         &state.pool,
         &req.project_id,
         req.kind.as_deref(),
@@ -218,7 +219,8 @@ pub async fn qa_report(state: &AppState, req: QaReportRequest) -> Result<Vec<QaF
         req.chunk_id.as_deref(),
         req.status.as_deref(),
     )
-    .await
+    .await?;
+    Ok(findings.into_iter().map(QaFindingView::from).collect())
 }
 
 #[derive(Debug, Clone, Deserialize, ts_rs::TS)]

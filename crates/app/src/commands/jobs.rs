@@ -3,9 +3,10 @@
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
-use crate::db::{models::Job, repo};
+use crate::db::repo;
 use crate::error::Result;
 use crate::scheduler::queue;
+use crate::views::JobView;
 use crate::AppState;
 
 #[derive(Debug, Clone, Default, Deserialize, ts_rs::TS)]
@@ -20,18 +21,22 @@ pub struct JobListRequest {
 }
 
 #[tauri::command(rename = "job_list", rename_all = "snake_case")]
-pub async fn job_list_command(state: State<'_, AppState>, req: JobListRequest) -> Result<Vec<Job>> {
+pub async fn job_list_command(
+    state: State<'_, AppState>,
+    req: JobListRequest,
+) -> Result<Vec<JobView>> {
     job_list(&state, req).await
 }
 
-pub async fn job_list(state: &AppState, req: JobListRequest) -> Result<Vec<Job>> {
-    queue::list_jobs(
+pub async fn job_list(state: &AppState, req: JobListRequest) -> Result<Vec<JobView>> {
+    let jobs = queue::list_jobs(
         &state.pool,
         req.project_id.as_deref(),
         req.state.as_deref(),
         req.limit.unwrap_or(200).clamp(1, 1000),
     )
-    .await
+    .await?;
+    Ok(jobs.into_iter().map(JobView::from).collect())
 }
 
 /// Request for `job_cancel`.

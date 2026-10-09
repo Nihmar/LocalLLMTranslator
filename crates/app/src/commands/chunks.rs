@@ -5,13 +5,13 @@ use std::collections::HashSet;
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
-use crate::db::models::{Block, BlockTranslation, Chunk, LlmCall};
+use crate::db::models::{Block, BlockTranslation, LlmCall};
 use crate::db::repo;
 use crate::error::{AppError, Result};
+use crate::views::ChunkView;
 use crate::AppState;
 
-#[derive(Debug, Clone, Deserialize, ts_rs::TS)]
-#[ts(export, optional_fields = nullable)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct ChunkListRequest {
     pub project_id: String,
     #[serde(default)]
@@ -21,7 +21,7 @@ pub struct ChunkListRequest {
 #[derive(Debug, Clone, Serialize, ts_rs::TS)]
 #[ts(export)]
 pub struct ChunkDetail {
-    pub chunk: Chunk,
+    pub chunk: ChunkView,
     pub blocks: Vec<Block>,
     pub translations: Vec<BlockTranslation>,
     pub llm_calls: Vec<LlmCall>,
@@ -31,12 +31,14 @@ pub struct ChunkDetail {
 pub async fn chunk_list_command(
     state: State<'_, AppState>,
     req: ChunkListRequest,
-) -> Result<Vec<Chunk>> {
+) -> Result<Vec<ChunkView>> {
     chunk_list(&state, req).await
 }
 
-pub async fn chunk_list(state: &AppState, req: ChunkListRequest) -> Result<Vec<Chunk>> {
-    repo::list_chunks_by_project(&state.pool, &req.project_id, req.status.as_deref()).await
+pub async fn chunk_list(state: &AppState, req: ChunkListRequest) -> Result<Vec<ChunkView>> {
+    let chunks =
+        repo::list_chunks_by_project(&state.pool, &req.project_id, req.status.as_deref()).await?;
+    Ok(chunks.into_iter().map(ChunkView::from).collect())
 }
 
 #[tauri::command(rename = "chunk_get", rename_all = "snake_case")]
@@ -70,7 +72,7 @@ pub async fn chunk_get(state: &AppState, chunk_id: String) -> Result<ChunkDetail
     .await?;
 
     Ok(ChunkDetail {
-        chunk,
+        chunk: ChunkView::from(chunk),
         blocks,
         translations,
         llm_calls,

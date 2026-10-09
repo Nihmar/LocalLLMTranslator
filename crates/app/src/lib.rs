@@ -17,6 +17,7 @@ pub mod resources;
 pub mod scheduler;
 pub mod sidecar;
 pub mod util;
+pub mod views;
 
 use std::path::PathBuf;
 use std::sync::Arc;
