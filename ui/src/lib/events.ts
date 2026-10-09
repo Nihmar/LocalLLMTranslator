@@ -1,5 +1,5 @@
 /**
- * Typed `listen()` helpers for the frozen Tauri event surface (`AGENTS.md` -> "UI -> Tauri").
+ * Typed `listen()` helpers for the frozen Tauri event surface (`PLAN.md` §12.2).
  *
  * This module is the **only** place in the frontend where an event name appears as a string
  * literal. Every helper returns an unsubscribe function so React effects can clean up:
@@ -23,7 +23,7 @@ import type {
   SidecarStatus,
 } from "./types";
 
-/** Frozen event surface (`AGENTS.md` -> "UI -> Tauri"). */
+/** Frozen event surface (`PLAN.md` §12.2). */
 export const EVENTS = {
   jobProgress: "job://progress",
   logLine: "log://line",

@@ -2,7 +2,7 @@
 
 These dataclasses are the frozen interface between the parser, the chunker and the JSON-RPC
 surface. The wire shape of each one is defined by :meth:`to_json` and must match the ``Block``,
-``Chunk`` and ``Chapter`` definitions in ``AGENTS.md``.
+``Chunk`` and ``Chapter`` definitions in ``PLAN.md`` §12.1.
 """
 
 from __future__ import annotations

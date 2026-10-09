@@ -37,7 +37,7 @@ from .errors import (
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
-#: RPC error code carried on :class:`PandocError` (see ``AGENTS.md``).
+#: RPC error code carried on :class:`PandocError` (see ``PLAN.md`` §12.1).
 PANDOC_FAILURE_CODE = PANDOC_FAILURE
 
 #: RPC error code carried on :class:`MissingDependencyError`.
@@ -162,7 +162,7 @@ def _combine_units(units: Sequence[Mapping[str, Any]]) -> str:
     return "\n\n".join(parts) + "\n"
 
 
-def build(  # noqa: PLR0913 - the keyword signature is frozen by AGENTS.md
+def build(  # noqa: PLR0913 - the keyword signature is frozen by PLAN.md §12.1
     *,
     units: Sequence[Mapping[str, Any]],
     metadata: Mapping[str, Any],

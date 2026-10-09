@@ -272,7 +272,7 @@ fn shorten(line: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Typed results mirrored from AGENTS.md
+// Typed results mirrored from PLAN.md §12.1
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

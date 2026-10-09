@@ -293,7 +293,7 @@ pub struct TranslationMemoryRow {
 }
 
 // ---------------------------------------------------------------------------
-// Intermediate representation exchanged with the Python sidecar (AGENTS.md).
+// Intermediate representation exchanged with the Python sidecar (PLAN.md §12.1).
 // ---------------------------------------------------------------------------
 
 fn default_true() -> bool {

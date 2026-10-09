@@ -19,7 +19,7 @@ use tauri::{AppHandle, Emitter};
 use crate::db::models::Job;
 use crate::sidecar::EventSink;
 
-// Event names (frozen, AGENTS.md section "UI -> Tauri").
+// Event names (frozen, PLAN.md §12.2).
 pub const EVENT_JOB_PROGRESS: &str = "job://progress";
 pub const EVENT_LOG_LINE: &str = "log://line";
 pub const EVENT_METRICS_TICK: &str = "metrics://tick";

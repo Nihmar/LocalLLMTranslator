@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 #: JSON-RPC protocol version carried on every frame.
 JSONRPC_VERSION = "2.0"
 
-#: JSON-RPC error codes plus the sidecar's domain codes (see AGENTS.md).
+#: JSON-RPC error codes plus the sidecar's domain codes (see PLAN.md §12.1).
 PARSE_ERROR = -32700
 INVALID_REQUEST = -32600
 METHOD_NOT_FOUND = -32601

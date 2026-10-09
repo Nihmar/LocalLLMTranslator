@@ -2,7 +2,7 @@
 
 The RPC layer maps these onto JSON-RPC errors **by class name** (see ``rpc.py``), so how
 they are named and the numbers they carry are part of the frozen IPC surface
-(``AGENTS.md``): :class:`ExtractionError` -> ``1001``, :class:`PandocError` -> ``1002``,
+(``PLAN.md`` §12.1): :class:`ExtractionError` -> ``1001``, :class:`PandocError` -> ``1002``,
 :class:`MissingDependencyError` -> ``1003``. Both the extractor backends and the pandoc
 bridge raise the very same classes from here, so a caller can catch a single
 :class:`MissingDependencyError` and handle every backend, whichever module raised it.
@@ -10,7 +10,7 @@ bridge raise the very same classes from here, so a caller can catch a single
 
 from __future__ import annotations
 
-#: JSON-RPC error code for a failed ingestion (``AGENTS.md`` IPC contract).
+#: JSON-RPC error code for a failed ingestion (``PLAN.md`` §12.1).
 INGESTION_FAILED = 1001
 
 #: JSON-RPC error code for a failed pandoc build.

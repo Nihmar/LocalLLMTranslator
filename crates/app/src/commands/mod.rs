@@ -1,5 +1,5 @@
 //! Tauri IPC surface: one module per command group, every command named in
-//! AGENTS.md section "UI -> Tauri".
+//! PLAN.md §12.2.
 
 pub mod chunks;
 pub mod endpoint;
@@ -27,7 +27,7 @@ use crate::pipeline::PipelineDeps;
 use crate::scheduler::NewJob;
 use crate::AppState;
 
-// Event names (AGENTS.md, frozen). Defined once in `crate::events`; re-exported
+// Event names (PLAN.md §12.2, frozen). Defined once in `crate::events`; re-exported
 // here so command modules keep importing them from this namespace.
 pub use crate::events::{
     EVENT_EXPORT_PROGRESS, EVENT_JOB_PROGRESS, EVENT_LOG_LINE, EVENT_METRICS_TICK,

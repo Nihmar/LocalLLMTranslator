@@ -2,8 +2,8 @@
  * Typed wrappers over Tauri `invoke()`.
  *
  * This module is the **only** place in the frontend where a Tauri command name appears as a
- * string literal. Command names and their argument keys are frozen by `AGENTS.md`
- * ("UI -> Tauri"); the argument keys are derived from the Rust command signatures in
+ * string literal. Command names and their argument keys are frozen by `PLAN.md`
+ * §12.2; the argument keys are derived from the Rust command signatures in
  * `crates/app/src/commands/*.rs`, which is the source of truth.
  *
  * Every argument key is spelled exactly as in the Rust signature: each command is declared with
@@ -88,7 +88,7 @@ import type {
   TranslationStartResult,
 } from "./types";
 
-/** Frozen command surface (`AGENTS.md` -> "UI -> Tauri"). */
+/** Frozen command surface (`PLAN.md` §12.2). */
 const COMMANDS = {
   projectList: "project_list",
   projectCreate: "project_create",

@@ -53,7 +53,7 @@ export type JobKind =
   | "qa_scan"
   | "export_unit";
 
-/** `block.kind`, identical in AGENTS.md and `PLAN.md` §4.1. */
+/** `block.kind`, as in `PLAN.md` §4.1 and §12.1. */
 export type BlockKind =
   | "heading"
   | "para"
