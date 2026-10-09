@@ -9,17 +9,24 @@ use crate::pipeline::export::{
 };
 use crate::AppState;
 
-#[tauri::command(rename_all = "snake_case")]
-pub async fn export_build(state: State<'_, AppState>, req: ExportRequest) -> Result<ExportOutcome> {
+#[tauri::command(rename = "export_build", rename_all = "snake_case")]
+pub async fn export_build_command(
+    state: State<'_, AppState>,
+    req: ExportRequest,
+) -> Result<ExportOutcome> {
+    export_build(&state, req).await
+}
+
+pub async fn export_build(state: &AppState, req: ExportRequest) -> Result<ExportOutcome> {
     emit(
-        &state,
+        state,
         EVENT_EXPORT_PROGRESS,
         serde_json::json!({ "state": "started", "format": req.output_format }),
     );
-    let deps = pipeline_deps(&state);
+    let deps = pipeline_deps(state);
     let outcome = export::run_export(&deps, &req).await?;
     emit(
-        &state,
+        state,
         EVENT_EXPORT_PROGRESS,
         serde_json::json!({
             "state": "done",
@@ -33,19 +40,30 @@ pub async fn export_build(state: State<'_, AppState>, req: ExportRequest) -> Res
 
 /// The composed units and the `metadata.yaml` a build would use, without
 /// invoking Pandoc.
-#[tauri::command(rename_all = "snake_case")]
-pub async fn export_preview(
+#[tauri::command(rename = "export_preview", rename_all = "snake_case")]
+pub async fn export_preview_command(
     state: State<'_, AppState>,
     req: ExportPreviewRequest,
 ) -> Result<ExportPreview> {
-    let deps = pipeline_deps(&state);
+    export_preview(&state, req).await
+}
+
+pub async fn export_preview(state: &AppState, req: ExportPreviewRequest) -> Result<ExportPreview> {
+    let deps = pipeline_deps(state);
     export::run_export_preview(&deps, &req).await
 }
 
 /// The recent build records, newest first.
-#[tauri::command(rename_all = "snake_case")]
-pub async fn export_history(
+#[tauri::command(rename = "export_history", rename_all = "snake_case")]
+pub async fn export_history_command(
     state: State<'_, AppState>,
+    project_id: String,
+) -> Result<Vec<ExportBuildRecord>> {
+    export_history(&state, project_id).await
+}
+
+pub async fn export_history(
+    state: &AppState,
     project_id: String,
 ) -> Result<Vec<ExportBuildRecord>> {
     export::export_history(&state.pool, &project_id).await

@@ -19,16 +19,24 @@ pub struct ProjectDetail {
     pub chunks_done: i64,
 }
 
-#[tauri::command(rename_all = "snake_case")]
-pub async fn project_list(state: State<'_, AppState>) -> Result<Vec<Project>> {
+#[tauri::command(rename = "project_list", rename_all = "snake_case")]
+pub async fn project_list_command(state: State<'_, AppState>) -> Result<Vec<Project>> {
+    project_list(&state).await
+}
+
+pub async fn project_list(state: &AppState) -> Result<Vec<Project>> {
     repo::list_projects(&state.pool).await
 }
 
-#[tauri::command(rename_all = "snake_case")]
-pub async fn project_create(
+#[tauri::command(rename = "project_create", rename_all = "snake_case")]
+pub async fn project_create_command(
     state: State<'_, AppState>,
     req: CreateProjectRequest,
 ) -> Result<Project> {
+    project_create(&state, req).await
+}
+
+pub async fn project_create(state: &AppState, req: CreateProjectRequest) -> Result<Project> {
     let source_hash = match tokio::fs::read(&req.source_path).await {
         Ok(bytes) => sha256_hex(&bytes),
         Err(_) => sha256_hex_str(&req.source_path),
@@ -58,8 +66,12 @@ pub async fn project_create(
     Ok(project)
 }
 
-#[tauri::command(rename_all = "snake_case")]
-pub async fn project_get(state: State<'_, AppState>, id: String) -> Result<ProjectDetail> {
+#[tauri::command(rename = "project_get", rename_all = "snake_case")]
+pub async fn project_get_command(state: State<'_, AppState>, id: String) -> Result<ProjectDetail> {
+    project_get(&state, id).await
+}
+
+pub async fn project_get(state: &AppState, id: String) -> Result<ProjectDetail> {
     let project = repo::get_project(&state.pool, &id)
         .await?
         .ok_or_else(|| crate::error::AppError::NotFound(format!("project {id}")))?;
@@ -98,8 +110,12 @@ pub async fn project_get(state: State<'_, AppState>, id: String) -> Result<Proje
     })
 }
 
-#[tauri::command(rename_all = "snake_case")]
-pub async fn project_delete(state: State<'_, AppState>, id: String) -> Result<Ack> {
+#[tauri::command(rename = "project_delete", rename_all = "snake_case")]
+pub async fn project_delete_command(state: State<'_, AppState>, id: String) -> Result<Ack> {
+    project_delete(&state, id).await
+}
+
+pub async fn project_delete(state: &AppState, id: String) -> Result<Ack> {
     // Queued work for a project that is about to disappear would only fail later.
     let cancelled = queue::cancel_project_jobs(&state.pool, &id).await?;
     for job in &cancelled {
@@ -128,9 +144,16 @@ pub struct ExportBundleRequest {
 }
 
 /// Write the project as a `.llmtz` bundle (PLAN.md §6).
-#[tauri::command(rename_all = "snake_case")]
-pub async fn project_export(
+#[tauri::command(rename = "project_export", rename_all = "snake_case")]
+pub async fn project_export_command(
     state: State<'_, AppState>,
+    req: ExportBundleRequest,
+) -> Result<crate::pipeline::bundle::ExportBundleOutcome> {
+    project_export(&state, req).await
+}
+
+pub async fn project_export(
+    state: &AppState,
     req: ExportBundleRequest,
 ) -> Result<crate::pipeline::bundle::ExportBundleOutcome> {
     crate::pipeline::bundle::export_project(
@@ -148,10 +171,14 @@ pub struct ImportBundleRequest {
 }
 
 /// Import a `.llmtz` bundle as a new project; an existing id is rejected.
-#[tauri::command(rename_all = "snake_case")]
-pub async fn project_import(
+#[tauri::command(rename = "project_import", rename_all = "snake_case")]
+pub async fn project_import_command(
     state: State<'_, AppState>,
     req: ImportBundleRequest,
 ) -> Result<Project> {
+    project_import(&state, req).await
+}
+
+pub async fn project_import(state: &AppState, req: ImportBundleRequest) -> Result<Project> {
     crate::pipeline::bundle::import_project(&state.pool, &state.data_dir, &req.archive_path).await
 }

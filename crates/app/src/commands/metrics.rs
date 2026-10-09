@@ -41,8 +41,12 @@ pub struct Metrics {
     pub worker_paused: bool,
 }
 
-#[tauri::command(rename_all = "snake_case")]
-pub async fn metrics_get(state: State<'_, AppState>) -> Result<Metrics> {
+#[tauri::command(rename = "metrics_get", rename_all = "snake_case")]
+pub async fn metrics_get_command(state: State<'_, AppState>) -> Result<Metrics> {
+    metrics_get(&state).await
+}
+
+pub async fn metrics_get(state: &AppState) -> Result<Metrics> {
     // VRAM probing shells out; keep it off the async worker thread.
     let detected = tokio::task::spawn_blocking(vram::detect)
         .await

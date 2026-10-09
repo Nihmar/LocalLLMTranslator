@@ -77,9 +77,16 @@ pub fn enqueue_candidates<'a>(
         .collect()
 }
 
-#[tauri::command(rename_all = "snake_case")]
-pub async fn translation_start(
+#[tauri::command(rename = "translation_start", rename_all = "snake_case")]
+pub async fn translation_start_command(
     state: State<'_, AppState>,
+    req: TranslationStartRequest,
+) -> Result<TranslationStartResult> {
+    translation_start(&state, req).await
+}
+
+pub async fn translation_start(
+    state: &AppState,
     req: TranslationStartRequest,
 ) -> Result<TranslationStartResult> {
     // Collect the chunks that need work. Priority follows the chapter order, so
@@ -96,7 +103,7 @@ pub async fn translation_start(
         let payload = serde_json::json!({ "chunk_id": chunk.id });
         let job = NewJob::new(&project_id, "translate_chunk", payload)
             .with_priority(100 + chunk.order_index);
-        enqueue_and_emit(&state, &job).await?;
+        enqueue_and_emit(state, &job).await?;
         enqueued += 1;
     }
 
@@ -107,8 +114,12 @@ pub async fn translation_start(
     })
 }
 
-#[tauri::command(rename_all = "snake_case")]
-pub async fn translation_pause(state: State<'_, AppState>) -> Result<Ack> {
+#[tauri::command(rename = "translation_pause", rename_all = "snake_case")]
+pub async fn translation_pause_command(state: State<'_, AppState>) -> Result<Ack> {
+    translation_pause(&state).await
+}
+
+pub async fn translation_pause(state: &AppState) -> Result<Ack> {
     state.worker.pause();
     // Persist the explicit pause so it survives a relaunch: `build_state` used to
     // start the pool unconditionally, silently resuming LLM work the user had
@@ -124,9 +135,16 @@ pub async fn translation_pause(state: State<'_, AppState>) -> Result<Ack> {
 /// `pending`; without it every project is cancelled. Previously the command took
 /// no argument and cancelled *every* unfinished job in the database, so one
 /// project's "Annulla" destroyed another project's queued work.
-#[tauri::command(rename_all = "snake_case")]
-pub async fn translation_cancel(
+#[tauri::command(rename = "translation_cancel", rename_all = "snake_case")]
+pub async fn translation_cancel_command(
     state: State<'_, AppState>,
+    req: Option<TranslationCancelRequest>,
+) -> Result<Ack> {
+    translation_cancel(&state, req).await
+}
+
+pub async fn translation_cancel(
+    state: &AppState,
     req: Option<TranslationCancelRequest>,
 ) -> Result<Ack> {
     let project_id = req.and_then(|request| request.project_id);

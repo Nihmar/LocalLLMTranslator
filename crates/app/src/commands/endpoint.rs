@@ -39,16 +39,24 @@ pub struct EndpointModelsRequest {
     pub base_url: Option<String>,
 }
 
-#[tauri::command(rename_all = "snake_case")]
-pub async fn endpoint_list(state: State<'_, AppState>) -> Result<Vec<LlmEndpoint>> {
+#[tauri::command(rename = "endpoint_list", rename_all = "snake_case")]
+pub async fn endpoint_list_command(state: State<'_, AppState>) -> Result<Vec<LlmEndpoint>> {
+    endpoint_list(&state).await
+}
+
+pub async fn endpoint_list(state: &AppState) -> Result<Vec<LlmEndpoint>> {
     repo::list_endpoints(&state.pool).await
 }
 
-#[tauri::command(rename_all = "snake_case")]
-pub async fn endpoint_upsert(
+#[tauri::command(rename = "endpoint_upsert", rename_all = "snake_case")]
+pub async fn endpoint_upsert_command(
     state: State<'_, AppState>,
     req: EndpointUpsert,
 ) -> Result<LlmEndpoint> {
+    endpoint_upsert(&state, req).await
+}
+
+pub async fn endpoint_upsert(state: &AppState, req: EndpointUpsert) -> Result<LlmEndpoint> {
     let endpoint = LlmEndpoint {
         id: req.id.unwrap_or_else(new_id),
         name: req.name,
@@ -64,14 +72,25 @@ pub async fn endpoint_upsert(
     Ok(endpoint)
 }
 
-#[tauri::command(rename_all = "snake_case")]
-pub async fn endpoint_delete(state: State<'_, AppState>, id: String) -> Result<Ack> {
+#[tauri::command(rename = "endpoint_delete", rename_all = "snake_case")]
+pub async fn endpoint_delete_command(state: State<'_, AppState>, id: String) -> Result<Ack> {
+    endpoint_delete(&state, id).await
+}
+
+pub async fn endpoint_delete(state: &AppState, id: String) -> Result<Ack> {
     repo::delete_endpoint(&state.pool, &id).await?;
     Ok(Ack::done())
 }
 
-#[tauri::command(rename_all = "snake_case")]
-pub async fn endpoint_test(state: State<'_, AppState>, id: String) -> Result<EndpointTestResult> {
+#[tauri::command(rename = "endpoint_test", rename_all = "snake_case")]
+pub async fn endpoint_test_command(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<EndpointTestResult> {
+    endpoint_test(&state, id).await
+}
+
+pub async fn endpoint_test(state: &AppState, id: String) -> Result<EndpointTestResult> {
     let endpoint = repo::get_endpoint(&state.pool, &id)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("endpoint {id}")))?;
@@ -100,9 +119,16 @@ pub async fn endpoint_test(state: State<'_, AppState>, id: String) -> Result<End
     })
 }
 
-#[tauri::command(rename_all = "snake_case")]
-pub async fn endpoint_models(
+#[tauri::command(rename = "endpoint_models", rename_all = "snake_case")]
+pub async fn endpoint_models_command(
     state: State<'_, AppState>,
+    req: EndpointModelsRequest,
+) -> Result<Vec<ModelInfo>> {
+    endpoint_models(&state, req).await
+}
+
+pub async fn endpoint_models(
+    state: &AppState,
     req: EndpointModelsRequest,
 ) -> Result<Vec<ModelInfo>> {
     let base_url = match (req.base_url, req.endpoint_id) {

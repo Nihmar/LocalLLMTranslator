@@ -23,16 +23,24 @@ pub struct RoleBindingSet {
     pub priority: Option<i64>,
 }
 
-#[tauri::command(rename_all = "snake_case")]
-pub async fn role_binding_list(state: State<'_, AppState>) -> Result<Vec<RoleBinding>> {
+#[tauri::command(rename = "role_binding_list", rename_all = "snake_case")]
+pub async fn role_binding_list_command(state: State<'_, AppState>) -> Result<Vec<RoleBinding>> {
+    role_binding_list(&state).await
+}
+
+pub async fn role_binding_list(state: &AppState) -> Result<Vec<RoleBinding>> {
     repo::list_role_bindings(&state.pool).await
 }
 
-#[tauri::command(rename_all = "snake_case")]
-pub async fn role_binding_set(
+#[tauri::command(rename = "role_binding_set", rename_all = "snake_case")]
+pub async fn role_binding_set_command(
     state: State<'_, AppState>,
     req: RoleBindingSet,
 ) -> Result<RoleBinding> {
+    role_binding_set(&state, req).await
+}
+
+pub async fn role_binding_set(state: &AppState, req: RoleBindingSet) -> Result<RoleBinding> {
     let params_json = match &req.params {
         Value::Null => "{}".to_string(),
         other => serde_json::to_string(other)?,
@@ -62,8 +70,12 @@ pub async fn role_binding_set(
 ///
 /// The counterpart of `role_binding_set`: without it an assignment made once could never be
 /// undone through the UI, and the row kept deciding which endpoint a role used.
-#[tauri::command(rename_all = "snake_case")]
-pub async fn role_binding_delete(state: State<'_, AppState>, id: String) -> Result<Ack> {
+#[tauri::command(rename = "role_binding_delete", rename_all = "snake_case")]
+pub async fn role_binding_delete_command(state: State<'_, AppState>, id: String) -> Result<Ack> {
+    role_binding_delete(&state, id).await
+}
+
+pub async fn role_binding_delete(state: &AppState, id: String) -> Result<Ack> {
     repo::delete_role_binding(&state.pool, &id).await?;
     Ok(Ack::done())
 }

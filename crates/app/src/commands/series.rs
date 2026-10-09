@@ -124,13 +124,24 @@ fn normalize_status(raw: &str) -> &'static str {
     }
 }
 
-#[tauri::command(rename_all = "snake_case")]
-pub async fn series_list(state: State<'_, AppState>) -> Result<Vec<Series>> {
+#[tauri::command(rename = "series_list", rename_all = "snake_case")]
+pub async fn series_list_command(state: State<'_, AppState>) -> Result<Vec<Series>> {
+    series_list(&state).await
+}
+
+pub async fn series_list(state: &AppState) -> Result<Vec<Series>> {
     repo::list_series(&state.pool).await
 }
 
-#[tauri::command(rename_all = "snake_case")]
-pub async fn series_create(state: State<'_, AppState>, req: SeriesCreate) -> Result<Series> {
+#[tauri::command(rename = "series_create", rename_all = "snake_case")]
+pub async fn series_create_command(
+    state: State<'_, AppState>,
+    req: SeriesCreate,
+) -> Result<Series> {
+    series_create(&state, req).await
+}
+
+pub async fn series_create(state: &AppState, req: SeriesCreate) -> Result<Series> {
     let name = req.name.trim().to_string();
     if name.is_empty() {
         return Err(AppError::Invalid("series name is required".into()));
@@ -149,8 +160,12 @@ pub async fn series_create(state: State<'_, AppState>, req: SeriesCreate) -> Res
     Ok(series)
 }
 
-#[tauri::command(rename_all = "snake_case")]
-pub async fn series_get(state: State<'_, AppState>, id: String) -> Result<SeriesDetail> {
+#[tauri::command(rename = "series_get", rename_all = "snake_case")]
+pub async fn series_get_command(state: State<'_, AppState>, id: String) -> Result<SeriesDetail> {
+    series_get(&state, id).await
+}
+
+pub async fn series_get(state: &AppState, id: String) -> Result<SeriesDetail> {
     let series = repo::get_series(&state.pool, &id)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("series {id}")))?;
@@ -167,8 +182,15 @@ pub async fn series_get(state: State<'_, AppState>, id: String) -> Result<Series
     })
 }
 
-#[tauri::command(rename_all = "snake_case")]
-pub async fn series_update(state: State<'_, AppState>, req: SeriesUpdate) -> Result<Series> {
+#[tauri::command(rename = "series_update", rename_all = "snake_case")]
+pub async fn series_update_command(
+    state: State<'_, AppState>,
+    req: SeriesUpdate,
+) -> Result<Series> {
+    series_update(&state, req).await
+}
+
+pub async fn series_update(state: &AppState, req: SeriesUpdate) -> Result<Series> {
     let mut series = repo::get_series(&state.pool, &req.id)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("series {}", req.id)))?;
@@ -202,19 +224,27 @@ pub async fn series_update(state: State<'_, AppState>, req: SeriesUpdate) -> Res
     Ok(series)
 }
 
-#[tauri::command(rename_all = "snake_case")]
-pub async fn series_delete(state: State<'_, AppState>, id: String) -> Result<Ack> {
+#[tauri::command(rename = "series_delete", rename_all = "snake_case")]
+pub async fn series_delete_command(state: State<'_, AppState>, id: String) -> Result<Ack> {
+    series_delete(&state, id).await
+}
+
+pub async fn series_delete(state: &AppState, id: String) -> Result<Ack> {
     repo::delete_series(&state.pool, &id).await?;
     Ok(Ack::done())
 }
 
 /// Place a project in a series (or detach it). The language pair must match: a book
 /// translated into another target language cannot share the series canon.
-#[tauri::command(rename_all = "snake_case")]
-pub async fn project_set_series(
+#[tauri::command(rename = "project_set_series", rename_all = "snake_case")]
+pub async fn project_set_series_command(
     state: State<'_, AppState>,
     req: ProjectSetSeries,
 ) -> Result<Project> {
+    project_set_series(&state, req).await
+}
+
+pub async fn project_set_series(state: &AppState, req: ProjectSetSeries) -> Result<Project> {
     let project = repo::get_project(&state.pool, &req.project_id)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("project {}", req.project_id)))?;
@@ -255,17 +285,31 @@ pub async fn project_set_series(
         .ok_or_else(|| AppError::NotFound(format!("project {}", req.project_id)))
 }
 
-#[tauri::command(rename_all = "snake_case")]
-pub async fn series_glossary_list(
+#[tauri::command(rename = "series_glossary_list", rename_all = "snake_case")]
+pub async fn series_glossary_list_command(
     state: State<'_, AppState>,
+    series_id: String,
+) -> Result<Vec<SeriesGlossaryTerm>> {
+    series_glossary_list(&state, series_id).await
+}
+
+pub async fn series_glossary_list(
+    state: &AppState,
     series_id: String,
 ) -> Result<Vec<SeriesGlossaryTerm>> {
     repo::list_series_terms(&state.pool, &series_id).await
 }
 
-#[tauri::command(rename_all = "snake_case")]
-pub async fn series_glossary_upsert(
+#[tauri::command(rename = "series_glossary_upsert", rename_all = "snake_case")]
+pub async fn series_glossary_upsert_command(
     state: State<'_, AppState>,
+    req: SeriesGlossaryUpsert,
+) -> Result<SeriesGlossaryTerm> {
+    series_glossary_upsert(&state, req).await
+}
+
+pub async fn series_glossary_upsert(
+    state: &AppState,
     req: SeriesGlossaryUpsert,
 ) -> Result<SeriesGlossaryTerm> {
     let series = repo::get_series(&state.pool, &req.series_id)
@@ -345,15 +389,26 @@ pub async fn series_glossary_upsert(
     Ok(term)
 }
 
-#[tauri::command(rename_all = "snake_case")]
-pub async fn series_glossary_delete(state: State<'_, AppState>, id: String) -> Result<Ack> {
+#[tauri::command(rename = "series_glossary_delete", rename_all = "snake_case")]
+pub async fn series_glossary_delete_command(state: State<'_, AppState>, id: String) -> Result<Ack> {
+    series_glossary_delete(&state, id).await
+}
+
+pub async fn series_glossary_delete(state: &AppState, id: String) -> Result<Ack> {
     repo::delete_series_term(&state.pool, &id).await?;
     Ok(Ack::done())
 }
 
-#[tauri::command(rename_all = "snake_case")]
-pub async fn series_variant_upsert(
+#[tauri::command(rename = "series_variant_upsert", rename_all = "snake_case")]
+pub async fn series_variant_upsert_command(
     state: State<'_, AppState>,
+    req: SeriesVariantUpsert,
+) -> Result<SeriesGlossaryVariant> {
+    series_variant_upsert(&state, req).await
+}
+
+pub async fn series_variant_upsert(
+    state: &AppState,
     req: SeriesVariantUpsert,
 ) -> Result<SeriesGlossaryVariant> {
     let text = req.text.trim().to_string();
@@ -372,19 +427,25 @@ pub async fn series_variant_upsert(
     Ok(variant)
 }
 
-#[tauri::command(rename_all = "snake_case")]
-pub async fn series_variant_delete(state: State<'_, AppState>, id: String) -> Result<Ack> {
+#[tauri::command(rename = "series_variant_delete", rename_all = "snake_case")]
+pub async fn series_variant_delete_command(state: State<'_, AppState>, id: String) -> Result<Ack> {
+    series_variant_delete(&state, id).await
+}
+
+pub async fn series_variant_delete(state: &AppState, id: String) -> Result<Ack> {
     repo::delete_series_variant(&state.pool, &id).await?;
     Ok(Ack::done())
 }
 
-/// Copy a book term into its series. A differing series rendering is kept and flagged,
-/// never overwritten.
-#[tauri::command(rename_all = "snake_case")]
-pub async fn series_promote_term(
+#[tauri::command(rename = "series_promote_term", rename_all = "snake_case")]
+pub async fn series_promote_term_command(
     state: State<'_, AppState>,
     req: SeriesPromote,
 ) -> Result<PromoteOutcome> {
+    series_promote_term(&state, req).await
+}
+
+pub async fn series_promote_term(state: &AppState, req: SeriesPromote) -> Result<PromoteOutcome> {
     let outcome = glossary::promote_term(&state.pool, &req.project_id, &req.term_id).await?;
     Ok(PromoteOutcome { outcome })
 }
@@ -403,9 +464,16 @@ pub struct SeriesImportRequest {
 }
 
 /// Write the series canon as a `.llmtsz` bundle.
-#[tauri::command(rename_all = "snake_case")]
-pub async fn series_export(
+#[tauri::command(rename = "series_export", rename_all = "snake_case")]
+pub async fn series_export_command(
     state: State<'_, AppState>,
+    req: SeriesExportRequest,
+) -> Result<series_bundle::SeriesExportOutcome> {
+    series_export(&state, req).await
+}
+
+pub async fn series_export(
+    state: &AppState,
     req: SeriesExportRequest,
 ) -> Result<series_bundle::SeriesExportOutcome> {
     series_bundle::export_series(
@@ -419,9 +487,16 @@ pub async fn series_export(
 
 /// Merge a series bundle into the local database (never overwriting a rendering, never
 /// overwriting an existing book).
-#[tauri::command(rename_all = "snake_case")]
-pub async fn series_import(
+#[tauri::command(rename = "series_import", rename_all = "snake_case")]
+pub async fn series_import_command(
     state: State<'_, AppState>,
+    req: SeriesImportRequest,
+) -> Result<series_bundle::SeriesImportOutcome> {
+    series_import(&state, req).await
+}
+
+pub async fn series_import(
+    state: &AppState,
     req: SeriesImportRequest,
 ) -> Result<series_bundle::SeriesImportOutcome> {
     series_bundle::import_series(&state.pool, &state.data_dir, &req.archive_path).await
@@ -435,11 +510,15 @@ pub struct SeriesQaScanResult {
 /// Re-run the QA scan on every translated chunk of every member book, for example after a
 /// canon change. Uses the existing `qa_scan` job, so the worker pool and the events are the
 /// usual ones.
-#[tauri::command(rename_all = "snake_case")]
-pub async fn series_qa_scan(
+#[tauri::command(rename = "series_qa_scan", rename_all = "snake_case")]
+pub async fn series_qa_scan_command(
     state: State<'_, AppState>,
     series_id: String,
 ) -> Result<SeriesQaScanResult> {
+    series_qa_scan(&state, series_id).await
+}
+
+pub async fn series_qa_scan(state: &AppState, series_id: String) -> Result<SeriesQaScanResult> {
     repo::get_series(&state.pool, &series_id)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("series {series_id}")))?;
@@ -471,7 +550,7 @@ pub async fn series_qa_scan(
             let job =
                 crate::scheduler::NewJob::new(&project.id, crate::pipeline::qa::JOB_KIND, payload)
                     .with_priority(60 + chunk.order_index);
-            super::enqueue_and_emit(&state, &job).await?;
+            super::enqueue_and_emit(state, &job).await?;
             enqueued += 1;
         }
     }
@@ -493,9 +572,16 @@ pub struct SeriesReconStart {
 /// books' confirmed profiles and the canon glossary. The job belongs to the first member
 /// book (the queue is project-scoped) and carries the `series_id` in its payload. Without
 /// `force`, a run whose books and canon are unchanged completes without calling the model.
-#[tauri::command(rename_all = "snake_case")]
-pub async fn series_recon_start(
+#[tauri::command(rename = "series_recon_start", rename_all = "snake_case")]
+pub async fn series_recon_start_command(
     state: State<'_, AppState>,
+    req: SeriesReconStart,
+) -> Result<super::ingest::JobStarted> {
+    series_recon_start(&state, req).await
+}
+
+pub async fn series_recon_start(
+    state: &AppState,
     req: SeriesReconStart,
 ) -> Result<super::ingest::JobStarted> {
     let series = repo::get_series(&state.pool, &req.series_id)
@@ -519,7 +605,7 @@ pub async fn series_recon_start(
     let job =
         crate::scheduler::NewJob::new(&first.id, crate::pipeline::series_recon::JOB_KIND, payload)
             .with_priority(20);
-    let job = super::enqueue_and_emit(&state, &job).await?;
+    let job = super::enqueue_and_emit(state, &job).await?;
     state.worker.start();
     Ok(super::ingest::JobStarted { job_id: job.id })
 }
@@ -527,9 +613,16 @@ pub async fn series_recon_start(
 /// Apply the user's decisions on the candidate series profile: accepted fields land in the
 /// series memory, accepted characters become approved canon terms, rejected sources are
 /// remembered so a later run skips them.
-#[tauri::command(rename_all = "snake_case")]
-pub async fn series_recon_confirm(
+#[tauri::command(rename = "series_recon_confirm", rename_all = "snake_case")]
+pub async fn series_recon_confirm_command(
     state: State<'_, AppState>,
+    req: crate::pipeline::series_recon::ConfirmRequest,
+) -> Result<crate::pipeline::series_recon::ConfirmOutcome> {
+    series_recon_confirm(&state, req).await
+}
+
+pub async fn series_recon_confirm(
+    state: &AppState,
     req: crate::pipeline::series_recon::ConfirmRequest,
 ) -> Result<crate::pipeline::series_recon::ConfirmOutcome> {
     crate::pipeline::series_recon::confirm(&state.pool, &req).await

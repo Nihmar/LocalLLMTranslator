@@ -55,19 +55,27 @@ fn normalize_status(raw: &str) -> &'static str {
     }
 }
 
-#[tauri::command(rename_all = "snake_case")]
-pub async fn glossary_list(
+#[tauri::command(rename = "glossary_list", rename_all = "snake_case")]
+pub async fn glossary_list_command(
     state: State<'_, AppState>,
     project_id: String,
 ) -> Result<Vec<GlossaryTerm>> {
+    glossary_list(&state, project_id).await
+}
+
+pub async fn glossary_list(state: &AppState, project_id: String) -> Result<Vec<GlossaryTerm>> {
     repo::list_glossary_terms(&state.pool, &project_id).await
 }
 
-#[tauri::command(rename_all = "snake_case")]
-pub async fn glossary_upsert(
+#[tauri::command(rename = "glossary_upsert", rename_all = "snake_case")]
+pub async fn glossary_upsert_command(
     state: State<'_, AppState>,
     req: GlossaryUpsert,
 ) -> Result<GlossaryTerm> {
+    glossary_upsert(&state, req).await
+}
+
+pub async fn glossary_upsert(state: &AppState, req: GlossaryUpsert) -> Result<GlossaryTerm> {
     let project = repo::get_project(&state.pool, &req.project_id)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("project {}", req.project_id)))?;
@@ -141,8 +149,12 @@ pub async fn glossary_upsert(
     Ok(term)
 }
 
-#[tauri::command(rename_all = "snake_case")]
-pub async fn glossary_delete(state: State<'_, AppState>, id: String) -> Result<Ack> {
+#[tauri::command(rename = "glossary_delete", rename_all = "snake_case")]
+pub async fn glossary_delete_command(state: State<'_, AppState>, id: String) -> Result<Ack> {
+    glossary_delete(&state, id).await
+}
+
+pub async fn glossary_delete(state: &AppState, id: String) -> Result<Ack> {
     repo::delete_glossary_term(&state.pool, &id).await?;
     Ok(Ack::done())
 }

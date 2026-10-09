@@ -25,13 +25,27 @@ pub struct ChunkDetail {
     pub llm_calls: Vec<LlmCall>,
 }
 
-#[tauri::command(rename_all = "snake_case")]
-pub async fn chunk_list(state: State<'_, AppState>, req: ChunkListRequest) -> Result<Vec<Chunk>> {
+#[tauri::command(rename = "chunk_list", rename_all = "snake_case")]
+pub async fn chunk_list_command(
+    state: State<'_, AppState>,
+    req: ChunkListRequest,
+) -> Result<Vec<Chunk>> {
+    chunk_list(&state, req).await
+}
+
+pub async fn chunk_list(state: &AppState, req: ChunkListRequest) -> Result<Vec<Chunk>> {
     repo::list_chunks_by_project(&state.pool, &req.project_id, req.status.as_deref()).await
 }
 
-#[tauri::command(rename_all = "snake_case")]
-pub async fn chunk_get(state: State<'_, AppState>, chunk_id: String) -> Result<ChunkDetail> {
+#[tauri::command(rename = "chunk_get", rename_all = "snake_case")]
+pub async fn chunk_get_command(
+    state: State<'_, AppState>,
+    chunk_id: String,
+) -> Result<ChunkDetail> {
+    chunk_get(&state, chunk_id).await
+}
+
+pub async fn chunk_get(state: &AppState, chunk_id: String) -> Result<ChunkDetail> {
     let chunk = repo::get_chunk(&state.pool, &chunk_id)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("chunk {chunk_id}")))?;

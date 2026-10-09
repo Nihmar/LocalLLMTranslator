@@ -21,9 +21,16 @@ pub struct IngestStartRequest {
 
 /// Format and hints of a document the user is about to add, before any project exists:
 /// the new-book form pre-fills its name and source language from them.
-#[tauri::command(rename_all = "snake_case")]
-pub async fn document_inspect(
+#[tauri::command(rename = "document_inspect", rename_all = "snake_case")]
+pub async fn document_inspect_command(
     state: State<'_, AppState>,
+    path: String,
+) -> Result<crate::sidecar::DetectFormatResult> {
+    document_inspect(&state, path).await
+}
+
+pub async fn document_inspect(
+    state: &AppState,
     path: String,
 ) -> Result<crate::sidecar::DetectFormatResult> {
     state.sidecar.detect_format(&path).await
@@ -34,11 +41,15 @@ pub struct JobStarted {
     pub job_id: String,
 }
 
-#[tauri::command(rename_all = "snake_case")]
-pub async fn ingest_start(
+#[tauri::command(rename = "ingest_start", rename_all = "snake_case")]
+pub async fn ingest_start_command(
     state: State<'_, AppState>,
     req: IngestStartRequest,
 ) -> Result<JobStarted> {
+    ingest_start(&state, req).await
+}
+
+pub async fn ingest_start(state: &AppState, req: IngestStartRequest) -> Result<JobStarted> {
     let project = repo::get_project(&state.pool, &req.project_id)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("project {}", req.project_id)))?;
@@ -50,7 +61,7 @@ pub async fn ingest_start(
     });
 
     let job = NewJob::new(&req.project_id, "ingest", payload).with_priority(0);
-    let job = enqueue_and_emit(&state, &job).await?;
+    let job = enqueue_and_emit(state, &job).await?;
 
     // Ensure the worker pool is running to pick the job up.
     state.worker.start();
