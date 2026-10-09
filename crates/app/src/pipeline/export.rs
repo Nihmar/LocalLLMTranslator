@@ -680,7 +680,7 @@ fn translated_text(chunk: &Chunk) -> Option<&str> {
 }
 
 /// Whether a chunk carries translated output.
-fn chunk_has_translation(chunk: &Chunk) -> bool {
+pub(crate) fn chunk_has_translation(chunk: &Chunk) -> bool {
     translated_text(chunk).is_some()
 }
 

@@ -9,6 +9,7 @@ use super::{enqueue_and_emit, Ack};
 use crate::db::models::Chunk;
 use crate::db::repo;
 use crate::error::{AppError, Result};
+use crate::pipeline::export::chunk_has_translation;
 use crate::scheduler::{queue, NewJob};
 use crate::AppState;
 
@@ -38,18 +39,22 @@ pub struct TranslationCancelRequest {
     pub project_id: Option<String>,
 }
 
-/// Whether `translation_start` may enqueue a `translate_chunk` job for a chunk in
-/// the given state.
+/// Whether `translation_start` may enqueue a `translate_chunk` job for a chunk.
 ///
 /// `running` is deliberately excluded: a chunk in that state has a live job, and
 /// re-enqueuing it would duplicate work. Chunks left `running` by a crash are
 /// returned to `pending` at boot (`repo::reset_running_chunks`) or on cancel, so
 /// they become eligible again through the normal `pending` path.
-pub fn chunk_is_eligible(status: &str, only_retry: bool) -> bool {
-    if only_retry {
-        matches!(status, "failed" | "needs_review")
-    } else {
-        matches!(status, "pending" | "failed" | "needs_review")
+///
+/// A `needs_review` chunk that kept a translation is redone only on an explicit
+/// retry: resuming must not spend a model call replacing text the user may already
+/// have read. One without a translation (a block-count mismatch) is still owed one.
+pub fn chunk_is_eligible(chunk: &Chunk, only_retry: bool) -> bool {
+    match chunk.status.as_str() {
+        "failed" => true,
+        "needs_review" => only_retry || !chunk_has_translation(chunk),
+        "pending" => !only_retry,
+        _ => false,
     }
 }
 
@@ -67,7 +72,7 @@ pub fn enqueue_candidates<'a>(
 ) -> Vec<&'a Chunk> {
     chunks
         .iter()
-        .filter(|chunk| chunk_is_eligible(&chunk.status, only_retry))
+        .filter(|chunk| chunk_is_eligible(chunk, only_retry))
         .filter(|chunk| !queued.contains(&chunk.id))
         .collect()
 }
@@ -143,6 +148,13 @@ pub async fn translation_cancel(
 mod tests {
     use super::{chunk_is_eligible, enqueue_candidates, Chunk, HashSet, TranslationCancelRequest};
 
+    fn translated(id: &str, status: &str) -> Chunk {
+        Chunk {
+            target_md: Some("text".to_string()),
+            ..chunk(id, status)
+        }
+    }
+
     fn chunk(id: &str, status: &str) -> Chunk {
         Chunk {
             id: id.to_string(),
@@ -185,24 +197,26 @@ mod tests {
             chunk("c-queued", "pending"),
             chunk("c-running", "running"),
             chunk("c-review", "needs_review"),
+            translated("c-flagged", "needs_review"),
             chunk("c-failed", "failed"),
             chunk("c-done", "done"),
         ];
         let queued = HashSet::from(["c-queued".to_string(), "c-running".to_string()]);
 
-        // "Avvia / Riprendi": everything eligible and not already waiting.
+        // "Avvia / Riprendi": everything eligible and not already waiting; a flagged
+        // chunk that kept its translation is left alone.
         let fresh: Vec<&str> = enqueue_candidates(&chunks, false, &queued)
             .iter()
             .map(|chunk| chunk.id.as_str())
             .collect();
         assert_eq!(fresh, ["c-pending", "c-review", "c-failed"]);
 
-        // "Riprova falliti" only re-queues what failed, and still not a queued chunk.
+        // "Riprova falliti" re-queues what failed or was flagged, still not a queued chunk.
         let retry: Vec<&str> = enqueue_candidates(&chunks, true, &queued)
             .iter()
             .map(|chunk| chunk.id.as_str())
             .collect();
-        assert_eq!(retry, ["c-review", "c-failed"]);
+        assert_eq!(retry, ["c-review", "c-flagged", "c-failed"]);
 
         // A chunk already waiting is never queued twice, whatever its status.
         let all_queued: HashSet<String> = chunks.iter().map(|chunk| chunk.id.clone()).collect();
@@ -212,17 +226,20 @@ mod tests {
     #[test]
     fn eligibility_matches_chunk_lifecycle() {
         // A running chunk has a live job: never re-enqueued.
-        assert!(!chunk_is_eligible("running", false));
-        assert!(!chunk_is_eligible("running", true));
+        assert!(!chunk_is_eligible(&chunk("c", "running"), false));
+        assert!(!chunk_is_eligible(&chunk("c", "running"), true));
         // Fresh and retryable states.
-        assert!(chunk_is_eligible("pending", false));
-        assert!(chunk_is_eligible("failed", false));
-        assert!(chunk_is_eligible("needs_review", false));
+        assert!(chunk_is_eligible(&chunk("c", "pending"), false));
+        assert!(chunk_is_eligible(&chunk("c", "failed"), false));
+        assert!(chunk_is_eligible(&chunk("c", "needs_review"), false));
         // Completed chunks are only re-enqueued on an explicit retry.
-        assert!(!chunk_is_eligible("done", false));
-        assert!(!chunk_is_eligible("done", true));
-        assert!(!chunk_is_eligible("pending", true));
-        assert!(chunk_is_eligible("failed", true));
-        assert!(chunk_is_eligible("needs_review", true));
+        assert!(!chunk_is_eligible(&chunk("c", "done"), false));
+        assert!(!chunk_is_eligible(&chunk("c", "done"), true));
+        assert!(!chunk_is_eligible(&chunk("c", "pending"), true));
+        assert!(chunk_is_eligible(&chunk("c", "failed"), true));
+        assert!(chunk_is_eligible(&chunk("c", "needs_review"), true));
+        // A flagged chunk that kept its translation waits for an explicit retry.
+        assert!(!chunk_is_eligible(&translated("c", "needs_review"), false));
+        assert!(chunk_is_eligible(&translated("c", "needs_review"), true));
     }
 }
