@@ -128,11 +128,14 @@ export function IngestView({ project, onNavigate }: IngestViewProps) {
   }, []);
 
   // Reload the stored result whenever the project changes, and drop the previous run's state.
+  // The project already knows its document: the field starts from it, so re-importing is one
+  // click and only a different file needs typing.
   useEffect(() => {
     setJobId(null);
     setJob(null);
     setDetail(null);
     setError(null);
+    setPath(project?.source_path ?? "");
     if (project !== null) {
       void refreshOutcome(project.id, null);
     }

@@ -6,6 +6,7 @@ import { basename, fileExtension, formatBytes, formatDateTime, formatRelative } 
 import { pickBundleFile, pickDocumentFile } from "../lib/dialog";
 import {
   openPath,
+  ingestStart,
   projectCreate,
   projectDelete,
   projectExport,
@@ -194,6 +195,10 @@ export function ProjectsView({ currentProjectId, onOpenProject, onDeleteProject,
       setDetectedFormat(null);
       setFormOpen(false);
       onOpenProject(created);
+      // Creating a book and importing it are one step: the file was just chosen, asking for it
+      // again on the ingestion page was busywork. A failed start is shown there, on the job.
+      await ingestStart({ project_id: created.id, pdf_backend: null }).catch(() => null);
+      onNavigate("ingest");
     } catch (submitError) {
       setFormError(toErrorMessage(submitError));
     } finally {
@@ -482,7 +487,7 @@ export function ProjectsView({ currentProjectId, onOpenProject, onDeleteProject,
             <div className="flex items-center gap-2">
               <button type="submit" className="btn btn-primary" disabled={submitting}>
                 {submitting ? <span className="spinner" aria-hidden="true" /> : null}
-                Crea progetto
+                Crea e importa
               </button>
               <button
                 type="button"
