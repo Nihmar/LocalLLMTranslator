@@ -8,7 +8,6 @@ import {
   isImportant,
   proposalSegments,
   severityClass,
-  suggestionSnippet,
 } from "./review.ts";
 import type { Suggestion } from "./types.ts";
 
@@ -30,28 +29,6 @@ function suggestion(overrides: Partial<Suggestion>): Suggestion {
     ...overrides,
   };
 }
-
-test("suggestionSnippet quotes the replaced fragment", () => {
-  assert.equal(suggestionSnippet(suggestion({})), "«vecchio» → «Il nuovo porto»");
-});
-
-test("suggestionSnippet falls back to the rewritten block without a quote", () => {
-  assert.equal(
-    suggestionSnippet(suggestion({ quote: null, pass: "proofreader", proposed: "Il porto." })),
-    "blocco riscritto dal proofreader",
-  );
-  assert.equal(
-    suggestionSnippet(suggestion({ quote: null, proposed: "Il nuovo porto" })),
-    "blocco riscritto: «Il nuovo porto»",
-  );
-});
-
-test("suggestionSnippet survives a proposal with no text", () => {
-  assert.equal(
-    suggestionSnippet(suggestion({ quote: null, proposed: null })),
-    "proposta senza testo",
-  );
-});
 
 test("severityClass maps every severity to its badge", () => {
   assert.equal(severityClass("critical"), "badge badge-danger");

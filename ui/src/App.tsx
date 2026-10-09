@@ -6,7 +6,6 @@ import { projectGet, sidecarStatus, toErrorMessage } from "./lib/ipc";
 import type { JobCount, Project, SidecarStatus } from "./lib/types";
 import { ExportView } from "./routes/ExportView";
 import { GlossaryView } from "./routes/GlossaryView";
-import { HistoryView } from "./routes/HistoryView";
 import { IngestView } from "./routes/IngestView";
 import { JobsView } from "./routes/JobsView";
 import { ModelsView } from "./routes/ModelsView";
@@ -40,7 +39,6 @@ export type ViewId =
   | "translate"
   | "review"
   | "glossary"
-  | "history"
   | "export"
   | "jobs"
   | "series";
@@ -60,11 +58,6 @@ const BOOK_STEPS: readonly NavEntry[] = [
   { id: "export", label: "Esporta", hint: "EPUB, PDF, DOCX" },
 ];
 
-/** Book pages that are not steps: reachable from the step bar, after the steps. */
-const BOOK_EXTRA: readonly NavEntry[] = [
-  { id: "history", label: "Storico", hint: "Correzioni accettate e rifiutate" },
-];
-
 /** Application-wide destinations, independent of any book. */
 const APP_LINKS: readonly NavEntry[] = [
   { id: "projects", label: "Libreria", hint: "I tuoi libri: apri, crea, importa" },
@@ -73,7 +66,7 @@ const APP_LINKS: readonly NavEntry[] = [
 ];
 
 const PROJECT_VIEWS: ReadonlySet<ViewId> = new Set(
-  [...BOOK_STEPS, ...BOOK_EXTRA].map((entry) => entry.id),
+  BOOK_STEPS.map((entry) => entry.id),
 );
 
 const STORAGE_KEY = "llmtranslator.current_project_id";
@@ -268,22 +261,6 @@ export default function App() {
                 {entry.label}
               </button>
             ))}
-            <span className="ml-auto flex gap-x-2">
-              {BOOK_EXTRA.map((entry) => (
-                <button
-                  key={entry.id}
-                  type="button"
-                  className="step-tab step-tab-extra"
-                  title={entry.hint}
-                  aria-current={entry.id === view ? "page" : undefined}
-                  onClick={() => {
-                    setView(entry.id);
-                  }}
-                >
-                  {entry.label}
-                </button>
-              ))}
-            </span>
           </nav>
         )}
       </header>
@@ -329,8 +306,6 @@ export default function App() {
             <ReviewView project={project} onNavigate={setView} />
           ) : view === "glossary" ? (
             <GlossaryView project={project} onNavigate={setView} />
-          ) : view === "history" ? (
-            <HistoryView project={project} onNavigate={setView} />
           ) : view === "export" ? (
             <ExportView project={project} onNavigate={setView} />
           ) : (

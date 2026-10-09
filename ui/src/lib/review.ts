@@ -1,6 +1,6 @@
 /**
- * Review presentation helpers (`PLAN.md` §11.4), shared by the review page and the
- * correction history.
+ * Review inbox helpers (`PLAN.md` §11.4): ordering, the proposal applied to its paragraph and
+ * the text currently in effect, pure so they are unit-tested.
  */
 
 import type { Suggestion } from "./types.ts";
@@ -17,24 +17,6 @@ export function severityClass(severity: string | null): string {
     default:
       return "badge badge-neutral";
   }
-}
-
-/**
- * One line describing a proposal: the replaced fragment when the pass quoted one,
- * the rewritten block otherwise.
- */
-export function suggestionSnippet(suggestion: Suggestion): string {
-  const quote = suggestion.quote ?? "";
-  const proposed = suggestion.proposed ?? "";
-  if (quote.length > 0) {
-    return `«${quote}» → «${proposed}»`;
-  }
-  if (proposed.length === 0) {
-    return "proposta senza testo";
-  }
-  return suggestion.pass === "proofreader"
-    ? "blocco riscritto dal proofreader"
-    : `blocco riscritto: «${proposed}»`;
 }
 
 /** `critical` and `major`: what the inbox shows by default. */
