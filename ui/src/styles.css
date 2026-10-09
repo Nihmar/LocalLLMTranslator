@@ -413,6 +413,116 @@
     background-color: #2e2d2a;
   }
 
+  /* --- review inbox --- */
+  .segmented {
+    display: inline-flex;
+    gap: 0.25rem;
+    padding: 0.25rem;
+    border-radius: 0.6rem;
+    background-color: var(--color-surface-3);
+  }
+
+  .segmented-item {
+    min-height: 2.1rem;
+    padding: 0 0.85rem;
+    border: 0;
+    border-radius: 0.45rem;
+    background: transparent;
+    color: var(--color-ink-soft);
+    font-size: 0.85rem;
+    cursor: pointer;
+  }
+
+  .segmented-item[aria-selected="true"] {
+    background-color: var(--color-surface);
+    color: var(--color-ink);
+    font-weight: 600;
+  }
+
+  .chip {
+    min-height: 2rem;
+    padding: 0 0.8rem;
+    border-radius: 999px;
+    border: 1px solid var(--color-line-strong);
+    background-color: var(--color-surface);
+    color: var(--color-ink);
+    font-size: 0.8rem;
+    cursor: pointer;
+  }
+
+  .chip[aria-pressed="true"] {
+    background-color: var(--color-ink);
+    border-color: var(--color-ink);
+    color: var(--color-surface);
+  }
+
+  .inbox-list {
+    flex: 1 1 20rem;
+    max-width: 26rem;
+    max-height: calc(100vh - 19rem);
+    min-width: 0;
+    overflow-y: auto;
+  }
+
+  .inbox-item {
+    display: block;
+    width: 100%;
+    min-height: 2.75rem;
+    padding: 0.8rem 1rem;
+    border: 0;
+    border-bottom: 1px solid var(--color-line);
+    background-color: var(--color-surface);
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .inbox-item:hover {
+    background-color: var(--color-surface-2);
+  }
+
+  .inbox-item[aria-current="true"] {
+    background-color: var(--color-accent-soft);
+    box-shadow: inset 3px 0 0 var(--color-accent);
+  }
+
+  .inbox-detail {
+    flex: 999 1 32rem;
+    min-width: 0;
+  }
+
+  .reading {
+    margin: 0;
+    font-family: var(--font-serif);
+    font-size: 1.08rem;
+    line-height: 1.7;
+    color: var(--color-ink);
+    white-space: pre-wrap;
+  }
+
+  .reading-source {
+    color: var(--color-muted);
+    font-size: 1rem;
+  }
+
+  .diff-removed {
+    background-color: var(--color-danger-soft);
+    color: var(--color-danger-strong);
+    text-decoration: line-through;
+  }
+
+  .diff-added {
+    background-color: var(--color-ok-soft);
+    color: var(--color-ok-strong);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+
+  .btn.btn-lg {
+    min-height: 2.75rem;
+    padding: 0 1.1rem;
+    font-size: 0.9rem;
+  }
+
   /* --- buttons --- */
   .btn {
     display: inline-flex;

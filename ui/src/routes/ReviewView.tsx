@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { MergeDiff, ReadOnlyCode } from "../components/CodeEditor";
 import { EmptyState } from "../components/EmptyState";
 import { onJobProgress } from "../lib/events";
-import { formatNumber } from "../lib/format";
+import { formatDateTime, formatNumber } from "../lib/format";
 import {
   chunkGet,
   chunkList,
@@ -10,30 +9,30 @@ import {
   qaReport,
   reviewStart,
   suggestionAccept,
+  suggestionHistory,
   suggestionList,
   suggestionReject,
   toErrorMessage,
 } from "../lib/ipc";
-import { severityClass, suggestionSnippet } from "../lib/review";
-import type {
-  BlockTranslation,
-  Chapter,
-  Chunk,
-  ChunkDetail,
-  Project,
-  QaFinding,
-  Suggestion,
-} from "../lib/types";
+import {
+  currentTextByBlock,
+  inboxOrder,
+  isImportant,
+  proposalSegments,
+  severityClass,
+} from "../lib/review";
+import type { ChunkDetail, Project, QaFinding, Suggestion } from "../lib/types";
 import type { ViewId } from "../App";
 
 /**
- * Review page (`PLAN.md` §11.4): the bilingual editor.
+ * "Rivedi": the review as an inbox of decisions (issue #14).
  *
- * Three columns per block — original, translated, corrected — with a diff rendered by the
- * CodeMirror 6 merge view (`components/CodeEditor.tsx`). Suggestions come from the editor
- * and proofreader passes; accepting one rewrites the block translation and recomposes the
- * chunk on the control plane, rejecting one only changes its status. The QA report below is
- * advisory and filterable.
+ * Every proposal of the editor and proofreader passes is one item: the serious ones first, in
+ * the reading order of the book. The detail shows the source paragraph and the translation with
+ * the correction inside it; Accetta / Rifiuta decide and move to the next item, also from the
+ * keyboard (J/K to move, A to accept, R to reject). "Decise" is the correction history, "Controlli
+ * QA" the advisory findings. Accepting rewrites the block on the control plane and recomposes
+ * the chunk, so an export right after sees the decision.
  */
 
 export interface ReviewViewProps {
@@ -41,154 +40,92 @@ export interface ReviewViewProps {
   onNavigate: (view: ViewId) => void;
 }
 
+type Tab = "open" | "decided" | "qa";
+type SeverityFilter = "important" | "all" | "minor";
+type PassFilter = "all" | "editor" | "proofreader";
+
 const PASSES: ReadonlyArray<{ value: string; label: string }> = [
   { value: "both", label: "Editor + proofreader" },
   { value: "editor", label: "Solo editor" },
   { value: "proofreader", label: "Solo proofreader" },
 ];
 
-const PASS_FILTERS: ReadonlyArray<{ value: string; label: string }> = [
-  { value: "all", label: "Tutti i passaggi" },
-  { value: "editor", label: "Editor" },
-  { value: "proofreader", label: "Proofreader" },
-];
+const SEVERITY_LABEL: Record<string, string> = {
+  critical: "Critica",
+  major: "Importante",
+  minor: "Minore",
+};
 
-const STATUS_FILTERS: ReadonlyArray<{ value: string; label: string }> = [
-  { value: "pending", label: "Da decidere" },
-  { value: "accepted", label: "Accettate" },
-  { value: "rejected", label: "Rifiutate" },
-  { value: "superseded", label: "Superate" },
-  { value: "all", label: "Tutte" },
-];
+const QA_KIND_LABEL: Record<string, string> = {
+  untranslated: "Non tradotto",
+  glossary_mismatch: "Glossario non rispettato",
+  glossary_conflict: "Conflitto di glossario",
+  placeholder_broken: "Segnaposto rotti",
+  markdown_malformed: "Struttura alterata",
+  length_anomaly: "Lunghezza anomala",
+  duplicate: "Duplicato",
+  empty: "Vuoto",
+  latin_leftover: "Testo non tradotto rimasto",
+};
 
-const QA_KINDS: ReadonlyArray<string> = [
-  "untranslated",
-  "glossary_mismatch",
-  "placeholder_broken",
-  "markdown_malformed",
-  "length_anomaly",
-  "duplicate",
-  "empty",
-  "latin_leftover",
-  "glossary_conflict",
-];
-
-function originRank(origin: string): number {
-  switch (origin) {
-    case "user":
-      return 3;
-    case "proofreader":
-      return 2;
-    case "editor":
-      return 1;
-    default:
-      return 0;
-  }
+function passLabel(pass: string): string {
+  return pass === "proofreader" ? "proofreader" : "editor";
 }
 
-/** The text currently in effect per block: newest wins, pass order breaks ties. */
-function preferredByBlock(translations: readonly BlockTranslation[]): Map<string, string> {
-  const best = new Map<string, { text: string; updatedAt: string; rank: number }>();
-  for (const row of translations) {
-    if (row.text_md.trim().length === 0) {
-      continue;
-    }
-    const candidate = {
-      text: row.text_md,
-      updatedAt: row.updated_at,
-      rank: originRank(row.origin),
-    };
-    const current = best.get(row.block_id);
-    if (
-      current === undefined ||
-      candidate.updatedAt > current.updatedAt ||
-      (candidate.updatedAt === current.updatedAt && candidate.rank > current.rank)
-    ) {
-      best.set(row.block_id, candidate);
-    }
-  }
-  const texts = new Map<string, string>();
-  for (const [blockId, value] of best) {
-    texts.set(blockId, value.text);
-  }
-  return texts;
-}
-
-/** Mirrors `pipeline::review::accept_suggestion`: quote replacement, fallback to the whole proposal. */
-function applyProposal(current: string, suggestion: Suggestion): string {
-  const proposed = suggestion.proposed ?? "";
-  if (suggestion.pass === "proofreader") {
-    return proposed.trim().length > 0 ? proposed : current;
-  }
-  const quote = suggestion.quote ?? "";
-  if (quote.length > 0 && current.includes(quote)) {
-    return current.replace(quote, proposed);
-  }
-  return proposed.trim().length > 0 ? proposed : current;
-}
-
-function findingSeverityClass(severity: string): string {
-  switch (severity) {
-    case "critical":
-      return "badge badge-danger";
-    case "major":
-      return "badge badge-warning";
-    default:
-      return "badge badge-neutral";
-  }
+function isTypingTarget(target: EventTarget | null): boolean {
+  return (
+    target instanceof HTMLInputElement ||
+    target instanceof HTMLTextAreaElement ||
+    target instanceof HTMLSelectElement
+  );
 }
 
 export function ReviewView({ project, onNavigate }: ReviewViewProps) {
-  const [chapters, setChapters] = useState<Chapter[]>([]);
-  const [chunks, setChunks] = useState<Chunk[]>([]);
-  const [chunkId, setChunkId] = useState<string | null>(null);
-  const [detail, setDetail] = useState<ChunkDetail | null>(null);
-  const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
+  const projectId = project?.id ?? null;
+  const [tab, setTab] = useState<Tab>("open");
+  const [severity, setSeverity] = useState<SeverityFilter>("important");
+  const [passFilter, setPassFilter] = useState<PassFilter>("all");
+  const [pending, setPending] = useState<Suggestion[]>([]);
+  const [decided, setDecided] = useState<Suggestion[]>([]);
   const [findings, setFindings] = useState<QaFinding[]>([]);
-  const [selectedSuggestionId, setSelectedSuggestionId] = useState<string | null>(null);
-  const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
-  const [passFilter, setPassFilter] = useState("all");
-  const [statusFilter, setStatusFilter] = useState("pending");
-  const [qaKindFilter, setQaKindFilter] = useState("all");
-  const [qaSeverityFilter, setQaSeverityFilter] = useState("all");
-  const [pass, setPass] = useState("both");
-  const [withQa, setWithQa] = useState(true);
+  const [chunkOrder, setChunkOrder] = useState<Map<string, number>>(new Map());
+  const [chunkChapter, setChunkChapter] = useState<Map<string, string>>(new Map());
+  const [details, setDetails] = useState<Map<string, ChunkDetail>>(new Map());
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [deciding, setDeciding] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [busy, setBusy] = useState<string | null>(null);
-  const [reloadToken, setReloadToken] = useState(0);
+  const [pass, setPass] = useState("both");
+  const [withQa, setWithQa] = useState(true);
+  const [starting, setStarting] = useState(false);
 
-  const projectId = project?.id ?? null;
-
-  const loadWorld = useCallback(async () => {
+  const load = useCallback(async () => {
     if (projectId === null) {
       return;
     }
-    setLoading(true);
-    setError(null);
     try {
-      const [detailRow, chunkRows, suggestionRows, findingRows] = await Promise.all([
-        projectGet(projectId),
+      const [open, history, qa, chunks, detail] = await Promise.all([
+        suggestionList({ project_id: projectId, status: "pending" }),
+        suggestionHistory({ project_id: projectId, limit: 500 }),
+        qaReport({ project_id: projectId, status: "open" }),
         chunkList({ project_id: projectId }),
-        suggestionList({ project_id: projectId }),
-        qaReport({ project_id: projectId }),
+        projectGet(projectId),
       ]);
-      setChapters(detailRow.chapters);
-      const reviewable = chunkRows.filter(
-        (chunk) =>
-          (chunk.status === "done" || chunk.status === "needs_review") &&
-          chunk.target_md !== null &&
-          chunk.target_md.trim().length > 0,
+      const titles = new Map(detail.chapters.map((chapter) => [chapter.id, chapter.title]));
+      setPending(open);
+      setDecided(history);
+      setFindings(qa);
+      setChunkOrder(new Map(chunks.map((chunk) => [chunk.id, chunk.order_index])));
+      setChunkChapter(
+        new Map(
+          chunks.map((chunk) => [
+            chunk.id,
+            (chunk.chapter_id === null ? undefined : titles.get(chunk.chapter_id)) ?? "",
+          ]),
+        ),
       );
-      setChunks(reviewable);
-      setSuggestions(suggestionRows);
-      setFindings(findingRows);
-      setChunkId((current) =>
-        current !== null && reviewable.some((chunk) => chunk.id === current)
-          ? current
-          : (reviewable[0]?.id ?? null),
-      );
+      setError(null);
     } catch (loadError) {
       setError(toErrorMessage(loadError));
     } finally {
@@ -196,186 +133,189 @@ export function ReviewView({ project, onNavigate }: ReviewViewProps) {
     }
   }, [projectId]);
 
-  const loadDetail = useCallback(async () => {
-    if (chunkId === null) {
-      setDetail(null);
-      return;
-    }
-    try {
-      setDetail(await chunkGet(chunkId));
-    } catch (loadError) {
-      setError(toErrorMessage(loadError));
-      setDetail(null);
-    }
-  }, [chunkId]);
-
   useEffect(() => {
-    void loadWorld();
-  }, [loadWorld, reloadToken]);
+    setLoading(true);
+    setSelectedId(null);
+    setDetails(new Map());
+    void load();
+  }, [load]);
 
-  useEffect(() => {
-    void loadDetail();
-  }, [loadDetail, reloadToken]);
+  useEffect(() => onJobProgress(() => void load()), [load]);
 
-  useEffect(
-    () =>
-      onJobProgress(() => {
-        setReloadToken((current) => current + 1);
-      }),
-    [],
-  );
-
-  const chapterTitles = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const chapter of chapters) {
-      map.set(chapter.id, chapter.title);
-    }
-    return map;
-  }, [chapters]);
-
-  const visibleSuggestions = useMemo(
-    () =>
-      suggestions.filter(
-        (suggestion) =>
-          (passFilter === "all" || suggestion.pass === passFilter) &&
-          (statusFilter === "all" || suggestion.status === statusFilter),
-      ),
-    [suggestions, passFilter, statusFilter],
-  );
-
-  useEffect(() => {
-    if (visibleSuggestions.length === 0) {
-      setSelectedSuggestionId(null);
-      return;
-    }
-    if (!visibleSuggestions.some((suggestion) => suggestion.id === selectedSuggestionId)) {
-      setSelectedSuggestionId(visibleSuggestions[0]?.id ?? null);
-    }
-  }, [visibleSuggestions, selectedSuggestionId]);
-
-  const visibleFindings = useMemo(
-    () =>
-      findings.filter(
-        (finding) =>
-          (qaKindFilter === "all" || finding.kind === qaKindFilter) &&
-          (qaSeverityFilter === "all" || finding.severity === qaSeverityFilter),
-      ),
-    [findings, qaKindFilter, qaSeverityFilter],
-  );
-
-  const selectedSuggestion = useMemo(
-    () => suggestions.find((suggestion) => suggestion.id === selectedSuggestionId) ?? null,
-    [suggestions, selectedSuggestionId],
-  );
-
-  const blockTexts = useMemo(() => preferredByBlock(detail?.translations ?? []), [detail]);
-
-  const blocks = useMemo(() => detail?.blocks ?? [], [detail]);
-  useEffect(() => {
-    if (blocks.length === 0) {
-      setSelectedBlockId(null);
-      return;
-    }
-    if (selectedBlockId === null || !blocks.some((block) => block.id === selectedBlockId)) {
-      setSelectedBlockId(blocks[0]?.id ?? null);
-    }
-  }, [blocks, selectedBlockId]);
-
-  if (project === null) {
-    return (
-      <div className="section-stack">
-        <h2 className="text-lg font-semibold text-ink">Revisione</h2>
-        <EmptyState
-          title="Nessun progetto aperto"
-          description="La revisione lavora sulle traduzioni di un progetto: aprine uno e traducilo."
-          actionLabel="Vai ai progetti"
-          onAction={() => {
-            onNavigate("projects");
-          }}
-        />
-      </div>
+  const visible = useMemo(() => {
+    const source = tab === "decided" ? decided : pending;
+    const filtered = source.filter(
+      (item) =>
+        (passFilter === "all" || item.pass === passFilter) &&
+        (tab === "decided" ||
+          severity === "all" ||
+          (severity === "important" ? isImportant(item) : !isImportant(item))),
     );
-  }
+    return tab === "decided" ? filtered : inboxOrder(filtered, chunkOrder);
+  }, [tab, decided, pending, passFilter, severity, chunkOrder]);
 
-  async function runStart() {
+  const importantCount = useMemo(() => pending.filter(isImportant).length, [pending]);
+
+  // Keep a valid selection: the first item when nothing (or a vanished item) is selected.
+  useEffect(() => {
+    if (tab === "qa") {
+      return;
+    }
+    if (selectedId === null || !visible.some((item) => item.id === selectedId)) {
+      setSelectedId(visible[0]?.id ?? null);
+    }
+  }, [tab, visible, selectedId]);
+
+  const selected = visible.find((item) => item.id === selectedId) ?? null;
+  const selectedChunk = selected?.chunk_id ?? null;
+
+  useEffect(() => {
+    if (selectedChunk === null || details.has(selectedChunk)) {
+      return;
+    }
+    void chunkGet(selectedChunk)
+      .then((detail) => {
+        setDetails((current) => new Map(current).set(selectedChunk, detail));
+      })
+      .catch((detailError: unknown) => {
+        setError(toErrorMessage(detailError));
+      });
+  }, [selectedChunk, details]);
+
+  const move = useCallback(
+    (step: number) => {
+      const index = visible.findIndex((item) => item.id === selectedId);
+      const next = visible[Math.min(Math.max(index + step, 0), visible.length - 1)];
+      if (next !== undefined) {
+        setSelectedId(next.id);
+      }
+    },
+    [visible, selectedId],
+  );
+
+  const decide = useCallback(
+    async (accept: boolean) => {
+      if (selected === null || selected.status !== "pending" || deciding) {
+        return;
+      }
+      const index = visible.findIndex((item) => item.id === selected.id);
+      const following = visible[index + 1] ?? visible[index - 1] ?? null;
+      setDeciding(true);
+      setNotice(null);
+      try {
+        await (accept ? suggestionAccept(selected.id) : suggestionReject(selected.id));
+        setNotice(accept ? "Correzione applicata al testo." : "Proposta rifiutata.");
+        setDetails((current) => {
+          const next = new Map(current);
+          next.delete(selected.chunk_id);
+          return next;
+        });
+        setSelectedId(following?.id ?? null);
+        await load();
+      } catch (decideError) {
+        setError(toErrorMessage(decideError));
+      } finally {
+        setDeciding(false);
+      }
+    },
+    [selected, deciding, visible, load],
+  );
+
+  useEffect(() => {
+    if (tab === "qa") {
+      return;
+    }
+    function onKey(event: KeyboardEvent) {
+      if (event.ctrlKey || event.metaKey || event.altKey || isTypingTarget(event.target)) {
+        return;
+      }
+      const key = event.key.toLowerCase();
+      if (key === "j") {
+        move(1);
+      } else if (key === "k") {
+        move(-1);
+      } else if (key === "a") {
+        void decide(true);
+      } else if (key === "r") {
+        void decide(false);
+      } else {
+        return;
+      }
+      event.preventDefault();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [tab, move, decide]);
+
+  async function handleStart() {
     if (projectId === null) {
       return;
     }
-    setBusy("starting");
-    setError(null);
+    setStarting(true);
     setNotice(null);
     try {
       const result = await reviewStart({ project_id: projectId, pass, with_qa: withQa });
       setNotice(
         result.enqueued === 0
-          ? "Nessun chunk da revisionare: traduzione già revisionata o ancora da fare."
-          : `${result.enqueued} job di revisione accodati. I suggerimenti compariranno qui.`,
+          ? "Niente da accodare: i capitoli tradotti hanno già una revisione in corso."
+          : `${formatNumber(result.enqueued)} revisioni accodate: le proposte arrivano capitolo per capitolo.`,
       );
     } catch (startError) {
       setError(toErrorMessage(startError));
     } finally {
-      setBusy(null);
+      setStarting(false);
     }
   }
 
-  async function runDecision(action: "accept" | "reject", id: string) {
-    setBusy(`${action}:${id}`);
-    setError(null);
-    setNotice(null);
-    try {
-      if (action === "accept") {
-        await suggestionAccept(id);
-        setNotice("Modifica accettata: il blocco è stato riscritto.");
-      } else {
-        await suggestionReject(id);
-        setNotice("Modifica rifiutata.");
-      }
-      setReloadToken((current) => current + 1);
-    } catch (decisionError) {
-      setError(toErrorMessage(decisionError));
-    } finally {
-      setBusy(null);
-    }
+  if (project === null) {
+    return (
+      <EmptyState
+        title="Nessun libro aperto"
+        description="La revisione lavora sul libro aperto."
+        actionLabel="Vai alla libreria"
+        onAction={() => {
+          onNavigate("projects");
+        }}
+      />
+    );
   }
 
-  const selected = selectedSuggestion;
-  const selectedBlock = blocks.find((block) => block.id === selectedBlockId) ?? null;
-  const selectedBlockIndex = blocks.findIndex((block) => block.id === selectedBlockId);
-  const currentText =
-    selectedBlock === null ? "" : (blockTexts.get(selectedBlock.id) ?? selectedBlock.source_md);
-  const proposalActive = selected !== null && selectedBlock !== null && selected.block_id === selectedBlock.id;
-  const proposedText = proposalActive && selected !== null ? applyProposal(currentText, selected) : currentText;
+  const detail = selected === null ? undefined : details.get(selected.chunk_id);
+  const block = detail?.blocks.find((candidate) => candidate.id === selected?.block_id);
+  const current =
+    block === undefined || detail === undefined
+      ? (selected?.original ?? "")
+      : (currentTextByBlock(detail.translations).get(block.id) ?? selected?.original ?? "");
 
   return (
     <div className="section-stack">
-      <div className="flex flex-wrap items-start justify-between gap-3">
+      <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h2 className="text-lg font-semibold text-ink">Revisione</h2>
-          <p className="mt-0.5 text-xs text-muted">
-            Progetto <span className="font-semibold text-ink-soft">{project.name}</span> —{" "}
-            {formatNumber(chunks.length)} chunk revisionabili,{" "}
-            {formatNumber(visibleSuggestions.length)} suggerimenti visibili.
+          <h1 className="font-serif text-2xl font-medium text-ink">Rivedi</h1>
+          <p className="text-sm text-muted">
+            {formatNumber(pending.length)} proposte da decidere, di cui{" "}
+            {formatNumber(importantCount)} importanti.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <label className="flex items-center gap-1 text-xs text-muted">
-            Passaggio
-            <select
-              className="select"
-              style={{ width: "auto" }}
-              value={pass}
-              onChange={(event) => {
-                setPass(event.target.value);
-              }}
-            >
-              {PASSES.map((entry) => (
-                <option key={entry.value} value={entry.value}>
-                  {entry.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="flex items-center gap-1 text-xs text-muted">
+          <select
+            className="select"
+            style={{ width: "auto" }}
+            aria-label="Passaggi da eseguire"
+            value={pass}
+            onChange={(event) => {
+              setPass(event.target.value);
+            }}
+          >
+            {PASSES.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+          <label className="flex items-center gap-1.5 text-sm text-ink-soft">
             <input
               type="checkbox"
               checked={withQa}
@@ -388,21 +328,13 @@ export function ReviewView({ project, onNavigate }: ReviewViewProps) {
           <button
             type="button"
             className="btn btn-primary"
-            disabled={busy !== null}
-            onClick={() => void runStart()}
-          >
-            {busy === "starting" ? <span className="spinner" aria-hidden="true" /> : null}
-            Avvia revisione
-          </button>
-          <button
-            type="button"
-            className="btn"
-            disabled={loading}
+            disabled={starting}
             onClick={() => {
-              setReloadToken((current) => current + 1);
+              void handleStart();
             }}
           >
-            Aggiorna
+            {starting ? <span className="spinner" aria-hidden="true" /> : null}
+            Avvia revisione
           </button>
         </div>
       </div>
@@ -420,326 +352,242 @@ export function ReviewView({ project, onNavigate }: ReviewViewProps) {
         </div>
       ) : null}
 
-      <div className="grid grid-cols-1 gap-3 xl:grid-cols-[minmax(0,1fr)_22rem]">
-        <div className="section-stack min-w-0">
-          <div className="panel">
-            <div className="panel-head">
-              <span className="panel-title">Editor bilingue</span>
-              <label className="flex items-center gap-1 text-xs text-muted">
-                Chunk
-                <select
-                  className="select"
-                  style={{ width: "auto", maxWidth: "22rem" }}
-                  value={chunkId ?? ""}
-                  disabled={chunks.length === 0}
-                  onChange={(event) => {
-                    setChunkId(event.target.value === "" ? null : event.target.value);
-                    setSelectedSuggestionId(null);
+      <div className="flex flex-wrap items-center gap-3">
+        <div role="tablist" aria-label="Sezione" className="segmented">
+          {(
+            [
+              ["open", `Da decidere · ${formatNumber(pending.length)}`],
+              ["decided", `Decise · ${formatNumber(decided.length)}`],
+              ["qa", `Controlli QA · ${formatNumber(findings.length)}`],
+            ] as const
+          ).map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              aria-selected={tab === id}
+              className="segmented-item"
+              onClick={() => {
+                setTab(id);
+                setSelectedId(null);
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        {tab === "qa" ? null : (
+          <div className="flex flex-wrap gap-2">
+            {tab === "open"
+              ? (
+                  [
+                    ["important", "Importanti"],
+                    ["minor", "Minori"],
+                    ["all", "Tutte"],
+                  ] as const
+                ).map(([id, label]) => (
+                  <button
+                    key={id}
+                    type="button"
+                    className="chip"
+                    aria-pressed={severity === id}
+                    onClick={() => {
+                      setSeverity(id);
+                    }}
+                  >
+                    {label}
+                  </button>
+                ))
+              : null}
+            <select
+              className="select"
+              style={{ width: "auto" }}
+              aria-label="Passaggio"
+              value={passFilter}
+              onChange={(event) => {
+                const value = event.target.value;
+                setPassFilter(value === "editor" || value === "proofreader" ? value : "all");
+              }}
+            >
+              <option value="all">Editor e proofreader</option>
+              <option value="editor">Solo editor</option>
+              <option value="proofreader">Solo proofreader</option>
+            </select>
+          </div>
+        )}
+        {tab === "open" ? (
+          <span className="ml-auto text-xs text-muted">
+            <kbd className="kbd">J</kbd> <kbd className="kbd">K</kbd> scorri ·{" "}
+            <kbd className="kbd">A</kbd> accetta · <kbd className="kbd">R</kbd> rifiuta
+          </span>
+        ) : null}
+      </div>
+
+      {loading ? (
+        <EmptyState tone="loading" title="Lettura delle proposte…" />
+      ) : tab === "qa" ? (
+        <QaList findings={findings} chapterOf={chunkChapter} />
+      ) : (
+        <div className="flex flex-wrap items-start gap-4">
+          <section aria-label="Elenco" className="panel inbox-list">
+            {visible.length === 0 ? (
+              <p className="p-6 text-center text-sm text-muted">
+                {tab === "open"
+                  ? pending.length === 0
+                    ? "Niente da decidere. Avvia la revisione sui capitoli tradotti."
+                    : "Nessuna proposta con questi filtri."
+                  : "Nessuna decisione ancora."}
+              </p>
+            ) : (
+              visible.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  className="inbox-item"
+                  aria-current={item.id === selectedId ? "true" : undefined}
+                  onClick={() => {
+                    setSelectedId(item.id);
                   }}
                 >
-                  {chunks.length === 0 ? <option value="">nessun chunk</option> : null}
-                  {chunks.map((chunk) => (
-                    <option key={chunk.id} value={chunk.id}>
-                      {chunk.chapter_id === null
-                        ? chunk.id
-                        : `${chapterTitles.get(chunk.chapter_id) ?? chunk.chapter_id} · ${chunk.id}`}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
-
-            {chunks.length === 0 ? (
-              <div className="panel-pad">
-                <EmptyState
-                  compact
-                  title="Nessun chunk da revisionare"
-                  description="La revisione lavora sui chunk tradotti: avvia la traduzione, poi torna qui."
-                  actionLabel="Vai alla traduzione"
-                  onAction={() => {
-                    onNavigate("translate");
-                  }}
-                />
-              </div>
-            ) : detail === null ? (
-              <div className="panel-pad">
-                <EmptyState tone="loading" compact title="Lettura del chunk…" />
-              </div>
-            ) : blocks.length === 0 ? (
-              <div className="panel-pad">
-                <EmptyState compact title="Il chunk non ha blocchi leggibili" />
-              </div>
-            ) : selectedBlock === null ? (
-              <div className="panel-pad">
-                <EmptyState tone="loading" compact title="Selezione del blocco…" />
-              </div>
-            ) : (
-              <div className="panel-pad section-stack">
-                <div className="flex flex-wrap items-center gap-1">
-                  {blocks.map((block, index) => (
-                    <button
-                      key={block.id}
-                      type="button"
-                      className="btn btn-sm"
-                      data-selected={block.id === selectedBlockId}
-                      style={{ fontWeight: block.id === selectedBlockId ? 700 : 400 }}
-                      onClick={() => {
-                        setSelectedBlockId(block.id);
-                      }}
-                    >
-                      {index + 1}. {block.kind}
-                      {block.translatable ? "" : " · fisso"}
-                    </button>
-                  ))}
-                  <span className="ml-auto flex items-center gap-1">
-                    <button
-                      type="button"
-                      className="btn btn-sm"
-                      disabled={selectedBlockIndex <= 0}
-                      onClick={() => {
-                        setSelectedBlockId(blocks[selectedBlockIndex - 1]?.id ?? selectedBlockId);
-                      }}
-                    >
-                      ◀
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-sm"
-                      disabled={selectedBlockIndex < 0 || selectedBlockIndex >= blocks.length - 1}
-                      onClick={() => {
-                        setSelectedBlockId(blocks[selectedBlockIndex + 1]?.id ?? selectedBlockId);
-                      }}
-                    >
-                      ▶
-                    </button>
+                  <span className="flex flex-wrap items-center gap-2">
+                    <span className={severityClass(item.severity)}>
+                      {SEVERITY_LABEL[item.severity ?? ""] ?? "Nota"}
+                    </span>
+                    <span className="text-xs text-muted">{chunkChapter.get(item.chunk_id)}</span>
+                    <span className="ml-auto text-xs text-faint">
+                      {tab === "decided"
+                        ? item.status === "accepted"
+                          ? "accettata"
+                          : "rifiutata"
+                        : passLabel(item.pass)}
+                    </span>
                   </span>
-                </div>
+                  <span className="mt-1 line-clamp-2 block text-sm text-ink">
+                    {item.reason ?? item.quote ?? item.proposed ?? ""}
+                  </span>
+                </button>
+              ))
+            )}
+          </section>
 
-                <div className="flex flex-wrap items-center gap-2 text-[0.68rem] text-faint">
-                  <span className="mono-chip">{selectedBlock.id}</span>
-                  <span>{selectedBlock.kind}</span>
-                  {proposalActive && selected !== null ? (
-                    <>
-                      <span className={severityClass(selected.severity)}>
-                        {selected.severity ?? "nota"}
-                      </span>
-                      <span className="badge badge-warning">modifica selezionata</span>
-                    </>
-                  ) : (
-                    <span className="badge badge-neutral">nessun suggerimento su questo blocco</span>
+          <section aria-label="Dettaglio" className="panel inbox-detail">
+            {selected === null ? (
+              <p className="p-6 text-center text-sm text-muted">Seleziona una voce.</p>
+            ) : (
+              <div className="section-stack p-6">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className={severityClass(selected.severity)}>
+                    {SEVERITY_LABEL[selected.severity ?? ""] ?? "Nota"}
+                  </span>
+                  <span className="text-sm text-muted">
+                    {chunkChapter.get(selected.chunk_id)} · {passLabel(selected.pass)}
+                  </span>
+                  {selected.decided_at === null ? null : (
+                    <span className="ml-auto text-xs text-faint">
+                      decisa il {formatDateTime(selected.decided_at)}
+                    </span>
                   )}
                 </div>
 
-                <div className="grid grid-cols-3 gap-3">
+                <div>
                   <div className="field-label">Originale</div>
-                  <div className="field-label col-span-2">
-                    Tradotto (sinistra) → Corretto (destra), diff a caratteri
-                  </div>
-                </div>
-                <div className="grid grid-cols-3 gap-3">
-                  <ReadOnlyCode text={selectedBlock.source_md} />
-                  <div className="col-span-2">
-                    <MergeDiff before={currentText} after={proposedText} />
-                  </div>
+                  <p className="reading reading-source">
+                    {block?.source_md ?? (detail === undefined ? "…" : "—")}
+                  </p>
                 </div>
 
-                {proposalActive && selected !== null ? (
-                  <div className="rounded border border-line p-2">
-                    <div className="flex flex-wrap items-center gap-1">
-                      <span className="field-label">Perché questa modifica</span>
-                      <span className={severityClass(selected.severity)}>
-                        {selected.severity ?? "nota"}
+                <div>
+                  <div className="field-label">
+                    {selected.status === "pending" ? "Traduzione con la correzione" : "Correzione"}
+                  </div>
+                  <p className="reading">
+                    {proposalSegments(
+                      selected.status === "pending" ? current : (selected.original ?? ""),
+                      selected,
+                    ).map((segment, index) => (
+                      <span key={index} className={`diff-${segment.kind}`}>
+                        {segment.text}
                       </span>
-                      <span className="badge badge-neutral">{selected.pass}</span>
-                    </div>
-                    <p className="field-hint">
-                      {selected.reason ??
-                        (selected.pass === "proofreader"
-                          ? "Il proofreader riscrive il blocco: nessuna spiegazione allegata."
-                          : "Nessuna spiegazione per questa proposta.")}
-                    </p>
+                    ))}
+                  </p>
+                </div>
+
+                {selected.reason === null ? null : (
+                  <div className="banner">
+                    <span>
+                      <strong className="font-semibold text-ink">Perché:</strong> {selected.reason}
+                    </span>
+                  </div>
+                )}
+
+                {selected.status === "pending" ? (
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      className="btn btn-primary btn-lg"
+                      disabled={deciding}
+                      onClick={() => {
+                        void decide(true);
+                      }}
+                    >
+                      Accetta <kbd className="kbd">A</kbd>
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-lg"
+                      disabled={deciding}
+                      onClick={() => {
+                        void decide(false);
+                      }}
+                    >
+                      Rifiuta <kbd className="kbd">R</kbd>
+                    </button>
                   </div>
                 ) : null}
               </div>
             )}
-          </div>
+          </section>
         </div>
-
-        <div className="section-stack">
-          <div className="panel">
-            <div className="panel-head">
-              <span className="panel-title">Suggerimenti</span>
-              <span className="mono-chip">{formatNumber(visibleSuggestions.length)}</span>
-            </div>
-            <div className="panel-pad section-stack">
-              <div className="flex flex-wrap items-center gap-2">
-                <select
-                  className="select"
-                  style={{ width: "auto" }}
-                  value={passFilter}
-                  onChange={(event) => {
-                    setPassFilter(event.target.value);
-                  }}
-                >
-                  {PASS_FILTERS.map((entry) => (
-                    <option key={entry.value} value={entry.value}>
-                      {entry.label}
-                    </option>
-                  ))}
-                </select>
-                <select
-                  className="select"
-                  style={{ width: "auto" }}
-                  value={statusFilter}
-                  onChange={(event) => {
-                    setStatusFilter(event.target.value);
-                  }}
-                >
-                  {STATUS_FILTERS.map((entry) => (
-                    <option key={entry.value} value={entry.value}>
-                      {entry.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              {visibleSuggestions.length === 0 ? (
-                <p className="field-hint">
-                  Nessun suggerimento con questi filtri. Avvia la revisione per generarne.
-                </p>
-              ) : (
-                <ul className="section-stack" style={{ maxHeight: "28rem", overflowY: "auto" }}>
-                  {visibleSuggestions.map((suggestion) => {
-                    const isSelected = suggestion.id === selectedSuggestionId;
-                    return (
-                      <li
-                        key={suggestion.id}
-                        className="rounded border border-line p-2"
-                        data-selected={isSelected}
-                        style={{ borderColor: isSelected ? "var(--accent)" : undefined }}
-                      >
-                        <button
-                          type="button"
-                          className="w-full text-left"
-                          onClick={() => {
-                            setSelectedSuggestionId(suggestion.id);
-                            if (suggestion.chunk_id !== chunkId) {
-                              setChunkId(suggestion.chunk_id);
-                            }
-                            if (suggestion.block_id !== null) {
-                              setSelectedBlockId(suggestion.block_id);
-                            }
-                          }}
-                        >
-                          <span className="flex flex-wrap items-center gap-1">
-                            <span className={severityClass(suggestion.severity)}>
-                              {suggestion.severity ?? "nota"}
-                            </span>
-                            <span className="badge badge-neutral">{suggestion.pass}</span>
-                            <span className="badge badge-neutral">{suggestion.status}</span>
-                          </span>
-                          <p className="mt-1 text-xs text-ink-soft">
-                            {suggestionSnippet(suggestion)}
-                          </p>
-                          {suggestion.reason !== null ? (
-                            <p className="field-hint">{suggestion.reason}</p>
-                          ) : null}
-                          <p className="mt-1 text-[0.68rem] text-faint">
-                            chunk <span className="mono-chip">{suggestion.chunk_id}</span>
-                            {suggestion.block_id === null ? "" : ` · blocco ${suggestion.block_id}`}
-                          </p>
-                        </button>
-                        {suggestion.status === "pending" ? (
-                          <span className="mt-2 flex items-center gap-2">
-                            <button
-                              type="button"
-                              className="btn btn-sm btn-primary"
-                              disabled={busy !== null}
-                              onClick={() => void runDecision("accept", suggestion.id)}
-                            >
-                              Accetta
-                            </button>
-                            <button
-                              type="button"
-                              className="btn btn-sm"
-                              disabled={busy !== null}
-                              onClick={() => void runDecision("reject", suggestion.id)}
-                            >
-                              Rifiuta
-                            </button>
-                          </span>
-                        ) : null}
-                      </li>
-                    );
-                  })}
-                </ul>
-              )}
-            </div>
-          </div>
-
-          <div className="panel">
-            <div className="panel-head">
-              <span className="panel-title">Report QA</span>
-              <span className="mono-chip">{formatNumber(visibleFindings.length)}</span>
-            </div>
-            <div className="panel-pad section-stack">
-              <div className="flex flex-wrap items-center gap-2">
-                <select
-                  className="select"
-                  style={{ width: "auto" }}
-                  value={qaKindFilter}
-                  onChange={(event) => {
-                    setQaKindFilter(event.target.value);
-                  }}
-                >
-                  <option value="all">Tutti i tipi</option>
-                  {QA_KINDS.map((kind) => (
-                    <option key={kind} value={kind}>
-                      {kind}
-                    </option>
-                  ))}
-                </select>
-                <select
-                  className="select"
-                  style={{ width: "auto" }}
-                  value={qaSeverityFilter}
-                  onChange={(event) => {
-                    setQaSeverityFilter(event.target.value);
-                  }}
-                >
-                  <option value="all">Tutte le gravità</option>
-                  <option value="critical">Critica</option>
-                  <option value="major">Grave</option>
-                  <option value="minor">Minore</option>
-                </select>
-              </div>
-
-              {visibleFindings.length === 0 ? (
-                <p className="field-hint">Nessun rilievo con questi filtri.</p>
-              ) : (
-                <ul className="section-stack" style={{ maxHeight: "20rem", overflowY: "auto" }}>
-                  {visibleFindings.map((finding) => (
-                    <li key={finding.id} className="rounded border border-line p-2 text-xs">
-                      <span className="flex flex-wrap items-center gap-1">
-                        <span className={findingSeverityClass(finding.severity)}>
-                          {finding.severity}
-                        </span>
-                        <span className="badge badge-neutral">{finding.kind}</span>
-                      </span>
-                      <p className="mt-1 text-[0.68rem] text-faint">
-                        chunk <span className="mono-chip">{finding.chunk_id ?? "—"}</span>
-                      </p>
-                      <p className="mt-1 font-mono text-[0.65rem] break-all text-muted">
-                        {finding.details_json}
-                      </p>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          </div>
-        </div>
-      </div>
+      )}
     </div>
+  );
+}
+
+function QaList({
+  findings,
+  chapterOf,
+}: {
+  findings: readonly QaFinding[];
+  chapterOf: ReadonlyMap<string, string>;
+}) {
+  if (findings.length === 0) {
+    return (
+      <EmptyState
+        title="Nessun controllo aperto"
+        description="I controlli girano dopo ogni capitolo tradotto e con «Rilancia QA»."
+      />
+    );
+  }
+  return (
+    <ul className="panel divide-y divide-line">
+      {findings.map((finding) => (
+        <li key={finding.id} className="flex flex-wrap items-start gap-3 px-5 py-3">
+          <span className={severityClass(finding.severity)}>
+            {SEVERITY_LABEL[finding.severity] ?? finding.severity}
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-sm font-medium text-ink">
+              {QA_KIND_LABEL[finding.kind] ?? finding.kind}
+            </span>
+            <span className="block text-xs text-muted">
+              {finding.chunk_id === null ? "Tutto il libro" : chapterOf.get(finding.chunk_id)}
+            </span>
+            <span className="mt-1 block font-mono text-[0.7rem] break-all text-faint">
+              {finding.details_json}
+            </span>
+          </span>
+        </li>
+      ))}
+    </ul>
   );
 }
