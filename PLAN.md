@@ -404,7 +404,7 @@ CREATE TABLE series_memory (
 CREATE TABLE project_memory (
   project_id TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL,
   revision INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL,
-  PRIMARY KEY (project_id, key)             -- synopsis, style_guide, rolling_summary, decisions
+  PRIMARY KEY (project_id, key)             -- synopsis, style_guide, rolling_summary:<chapter_id>, decisions
 );
 
 CREATE TABLE llm_endpoint (
@@ -734,8 +734,10 @@ that satisfies "memory of the terminological choices already made".
 
 Mechanics: a `summarize` job runs on the `orchestrator` role after every 5 completed chunks of a
 chapter and once when the chapter has no unfinished chunk left. A rolling run writes
-`project_memory['rolling_summary']`; the final run writes `chapter.summary` (the value the
-context assembler reads for the next chapters) and clears the rolling one. `style_notes` are
+`project_memory['rolling_summary:<chapter_id>']` (per chapter, so a concurrent summary of
+another chapter can never leak into the prompt); the final run writes `chapter.summary` (the
+value the context assembler reads for the next chapters) and clears that chapter's rolling
+value. `style_notes` are
 stored as candidates under `project_memory['style_notes']` and only reach the style guide when
 the user adds them. With no orchestrator binding the jobs are not enqueued at all and
 translation continues exactly as before.

@@ -141,9 +141,13 @@ async fn rolling_summary_lands_in_project_memory_and_candidates() -> Result<()> 
     assert_eq!(state, "done");
 
     assert_eq!(
-        repo::get_memory(&pool, &seeded.project_id, summarize::ROLLING_SUMMARY_KEY)
-            .await?
-            .as_deref(),
+        repo::get_memory(
+            &pool,
+            &seeded.project_id,
+            &summarize::rolling_summary_key(Some(&seeded.chapter_id))
+        )
+        .await?
+        .as_deref(),
         Some(SUMMARY_TEXT)
     );
     // A rolling run does not close the chapter.
@@ -222,9 +226,13 @@ async fn final_summary_closes_the_chapter_and_never_demotes_a_term() -> Result<(
     assert_eq!(chapter.status, "done");
     // The chapter summary takes over, so the rolling one is cleared.
     assert_eq!(
-        repo::get_memory(&pool, &seeded.project_id, summarize::ROLLING_SUMMARY_KEY)
-            .await?
-            .as_deref(),
+        repo::get_memory(
+            &pool,
+            &seeded.project_id,
+            &summarize::rolling_summary_key(Some(&seeded.chapter_id))
+        )
+        .await?
+        .as_deref(),
         Some("")
     );
 

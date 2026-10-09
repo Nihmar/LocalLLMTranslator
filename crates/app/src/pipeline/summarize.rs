@@ -4,9 +4,9 @@
 //! A `summarize` job runs on the `orchestrator` role after every
 //! [`ROLLING_EVERY`] completed chunks of a chapter and once when the chapter has
 //! no unfinished chunk left. A rolling run writes
-//! `project_memory['rolling_summary']`; the final run writes `chapter.summary`
-//! (what the context assembler reads for the next chapters) and clears the
-//! rolling one. Nothing is imposed: candidate terms keep `status='candidate'`
+//! `project_memory['rolling_summary:<chapter_id>']`; the final run writes `chapter.summary`
+//! (what the context assembler reads for the next chapters) and clears the rolling one
+//! for that chapter. Nothing is imposed: candidate terms keep `status='candidate'`
 //! and style notes wait for the user, so the confirmed book profile stays the
 //! one authoritative head of the prompt.
 
@@ -30,8 +30,21 @@ pub const ROLE: &str = "orchestrator";
 pub const JOB_KIND: &str = "summarize";
 /// A rolling update every this many completed chunks of a chapter.
 pub const ROLLING_EVERY: i64 = 5;
-/// Project memory key the translator prompt already reads.
-pub const ROLLING_SUMMARY_KEY: &str = "rolling_summary";
+/// Prefix of the per-chapter rolling summary key. The value is stored per chapter because
+/// the translator injects it as "the current chapter so far": a project-wide key would let
+/// a concurrent summary of another chapter leak into the prompt.
+pub const ROLLING_SUMMARY_PREFIX: &str = "rolling_summary:";
+
+/// Key of the rolling summary of one chapter. Chunks outside any chapter share a sentinel.
+pub fn rolling_summary_key(chapter_id: Option<&str>) -> String {
+    format!(
+        "{ROLLING_SUMMARY_PREFIX}{}",
+        chapter_id.unwrap_or(NO_CHAPTER_KEY)
+    )
+}
+
+/// Chapter id used by chunks that sit outside any chapter (the preamble).
+const NO_CHAPTER_KEY: &str = "__none__";
 /// Project memory key holding style-note candidates (a JSON array of strings).
 pub const STYLE_NOTES_KEY: &str = "style_notes";
 /// `response_format.json_schema.name` the model sees.
@@ -488,10 +501,14 @@ pub async fn run_summarize(
             &sha256_hex_str(&excerpt),
         )
         .await?;
-        // The chapter summary takes over for the next chapters.
-        repo::set_memory(pool, project_id, ROLLING_SUMMARY_KEY, "").await?;
+        // The chapter summary takes over for the next chapters, so this chapter's rolling
+        // summary is cleared. Only its own key is touched: another chapter's summary must
+        // survive a concurrent final run.
+        let key = rolling_summary_key(Some(&payload.chapter_id));
+        repo::set_memory(pool, project_id, &key, "").await?;
     } else {
-        repo::set_memory(pool, project_id, ROLLING_SUMMARY_KEY, &summary.text).await?;
+        let key = rolling_summary_key(Some(&payload.chapter_id));
+        repo::set_memory(pool, project_id, &key, &summary.text).await?;
     }
 
     let proposed = summary.terms.len();
@@ -600,6 +617,17 @@ mod tests {
             created_at: String::new(),
             updated_at: String::new(),
         }
+    }
+
+    #[test]
+    fn rolling_summary_key_is_scoped_to_the_chapter() {
+        assert_ne!(
+            rolling_summary_key(Some("ch1")),
+            rolling_summary_key(Some("ch2"))
+        );
+        assert_eq!(rolling_summary_key(Some("ch1")), "rolling_summary:ch1");
+        // A chunk outside any chapter still gets a deterministic, distinct key.
+        assert_eq!(rolling_summary_key(None), "rolling_summary:__none__");
     }
 
     #[test]

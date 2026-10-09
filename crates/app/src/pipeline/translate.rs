@@ -217,7 +217,7 @@ async fn translate_chunk_inner(
         rolling_summary: repo::get_memory(
             pool,
             &project_id,
-            crate::pipeline::summarize::ROLLING_SUMMARY_KEY,
+            &crate::pipeline::summarize::rolling_summary_key(chunk.chapter_id.as_deref()),
         )
         .await?
         .unwrap_or_default(),
