@@ -263,6 +263,14 @@ export interface IngestStartRequest {
   pdf_backend?: string | null;
 }
 
+/** Result of `document_inspect` (`sidecar::DetectFormatResult`). */
+export interface DocumentInspection {
+  format: string;
+  backends: string[];
+  /** Read from the file before ingestion; the language is guessed from the text. */
+  metadata: { title?: string | null; author?: string | null; language?: string | null };
+}
+
 /** Result of `ingest_start` (`commands::ingest::JobStarted`). */
 export interface JobStarted {
   job_id: string;

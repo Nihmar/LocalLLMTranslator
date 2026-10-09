@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Dialog } from "../components/Dialog";
 import { EmptyState } from "../components/EmptyState";
 import { FormField } from "../components/FormField";
 import { StatusBadge } from "../components/StatusBadge";
@@ -6,6 +7,7 @@ import { basename, fileExtension, formatBytes, formatDateTime, formatRelative } 
 import { pickBundleFile, pickDocumentFile } from "../lib/dialog";
 import {
   openPath,
+  documentInspect,
   ingestStart,
   projectCreate,
   projectDelete,
@@ -44,6 +46,26 @@ interface FormState {
   source_format: SourceFormat;
   source_lang: string;
   target_lang: string;
+}
+
+/** Languages offered in the new-book form; any other ISO 639-1 code can still be typed. */
+const LANGUAGES: ReadonlyArray<{ code: string; name: string }> = [
+  { code: "it", name: "Italiano" },
+  { code: "en", name: "Inglese" },
+  { code: "fr", name: "Francese" },
+  { code: "de", name: "Tedesco" },
+  { code: "es", name: "Spagnolo" },
+  { code: "pt", name: "Portoghese" },
+  { code: "nl", name: "Olandese" },
+  { code: "ru", name: "Russo" },
+];
+
+function languageName(code: string): string {
+  return LANGUAGES.find((language) => language.code === code)?.name.toLowerCase() ?? code;
+}
+
+function isSourceFormat(value: string): value is SourceFormat {
+  return value === "epub" || value === "pdf" || value === "markdown";
 }
 
 const FORMAT_OPTIONS: ReadonlyArray<{ value: SourceFormat; label: string }> = [
@@ -102,7 +124,12 @@ export function ProjectsView({ currentProjectId, onOpenProject, onDeleteProject,
   const [formErrors, setFormErrors] = useState<FormErrors>({});
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
-  const [detectedFormat, setDetectedFormat] = useState<SourceFormat | null>(null);
+  /** What the file said about itself, as one line ("EPUB · francese · Pierre Bottero"). */
+  const [inspection, setInspection] = useState<string | null>(null);
+  const [inspecting, setInspecting] = useState(false);
+  // Only the answer for the latest path may fill the form: a slow read of an earlier file
+  // must not overwrite the one the user picked after it.
+  const inspectToken = useRef(0);
 
   const [busyId, setBusyId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
@@ -132,7 +159,6 @@ export function ProjectsView({ currentProjectId, onOpenProject, onDeleteProject,
 
   function updatePath(path: string) {
     const detected = detectFormatFromPath(path);
-    setDetectedFormat(detected);
     setForm((current) => {
       const next: FormState = { ...current, source_path: path };
       if (detected !== null) {
@@ -148,12 +174,70 @@ export function ProjectsView({ currentProjectId, onOpenProject, onDeleteProject,
     });
   }
 
+  async function inspectPath(path: string) {
+    if (!looksAbsolute(path.trim())) {
+      return;
+    }
+    const token = ++inspectToken.current;
+    setInspecting(true);
+    try {
+      const info = await documentInspect(path.trim());
+      if (token !== inspectToken.current) {
+        return;
+      }
+      const { title, author, language } = info.metadata;
+      const stem = basename(path).replace(/\.[^.]+$/, "");
+      setForm((current) => ({
+        ...current,
+        source_format: isSourceFormat(info.format) ? info.format : current.source_format,
+        // The file name is only a placeholder: the book's own title replaces it.
+        name:
+          title !== null && title !== undefined && (current.name === "" || current.name === stem)
+            ? title
+            : current.name,
+        source_lang:
+          current.source_lang === "" && language !== null && language !== undefined
+            ? language
+            : current.source_lang,
+      }));
+      setInspection(
+        [
+          info.format.toUpperCase(),
+          language === null || language === undefined ? null : languageName(language),
+          author ?? null,
+        ]
+          .filter((part): part is string => part !== null && part !== "")
+          .join(" · "),
+      );
+    } catch {
+      // Inspection only pre-fills the form; the ingestion reports a real problem.
+      if (token === inspectToken.current) {
+        setInspection(null);
+      }
+    } finally {
+      if (token === inspectToken.current) {
+        setInspecting(false);
+      }
+    }
+  }
+
   async function handlePickSource() {
     const picked = await pickDocumentFile();
     if (picked !== null) {
       updatePath(picked);
       setFormErrors((current) => ({ ...current, source_path: undefined }));
+      void inspectPath(picked);
     }
+  }
+
+  function closeForm() {
+    inspectToken.current += 1;
+    setFormOpen(false);
+    setForm(EMPTY_FORM);
+    setFormErrors({});
+    setFormError(null);
+    setInspection(null);
+    setInspecting(false);
   }
 
   function validate(state: FormState): FormErrors {
@@ -192,7 +276,6 @@ export function ProjectsView({ currentProjectId, onOpenProject, onDeleteProject,
       const created = await projectCreate(request);
       setProjects((current) => [created, ...current]);
       setForm(EMPTY_FORM);
-      setDetectedFormat(null);
       setFormOpen(false);
       onOpenProject(created);
       // Creating a book and importing it are one step: the file was just chosen, asking for it
@@ -306,10 +389,10 @@ export function ProjectsView({ currentProjectId, onOpenProject, onDeleteProject,
             type="button"
             className="btn btn-primary"
             onClick={() => {
-              setFormOpen((open) => !open);
+              setFormOpen(true);
             }}
           >
-            {formOpen ? "Chiudi" : "Nuovo libro"}
+            Nuovo libro
           </button>
         </div>
       </div>
@@ -354,25 +437,56 @@ export function ProjectsView({ currentProjectId, onOpenProject, onDeleteProject,
       ) : null}
 
       {formOpen ? (
-        <form
-          className="panel"
-          onSubmit={(event) => {
-            event.preventDefault();
-            void handleSubmit();
-          }}
-        >
-          <div className="panel-head">
-            <span className="panel-title">Nuovo libro</span>
-            {detectedFormat !== null ? (
-              <StatusBadge
-                status="ok"
-                tone="info"
-                label={`Formato rilevato dal percorso: ${formatLabel(detectedFormat)}`}
-              />
-            ) : null}
-          </div>
+        <Dialog title="Nuovo libro" size="compact" onClose={closeForm}>
+          <form
+            className="section-stack"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void handleSubmit();
+            }}
+          >
+            <FormField
+              label="Documento"
+              htmlFor="project-source"
+              required
+              hint="EPUB, PDF o Markdown: titolo e lingua vengono letti dal file."
+              error={formErrors.source_path}
+            >
+              <div className="flex items-center gap-2">
+                <input
+                  id="project-source"
+                  className="input"
+                  value={form.source_path}
+                  onChange={(event) => {
+                    updatePath(event.target.value);
+                  }}
+                  onBlur={(event) => {
+                    void inspectPath(event.target.value);
+                  }}
+                  placeholder="/home/utente/libri/il-nome-della-rosa.epub"
+                  spellCheck={false}
+                />
+                <button
+                  type="button"
+                  className="btn shrink-0"
+                  onClick={() => {
+                    void handlePickSource();
+                  }}
+                >
+                  Scegli il file…
+                </button>
+              </div>
+            </FormField>
 
-          <div className="panel-pad section-stack">
+            {inspecting ? (
+              <p className="text-sm text-muted">Lettura del file…</p>
+            ) : inspection !== null ? (
+              <p className="banner banner-ok">
+                <span aria-hidden="true">✓</span>
+                <span>Rilevato: {inspection}</span>
+              </p>
+            ) : null}
+
             <div className="grid grid-cols-2 gap-3">
               <FormField label="Nome del libro" htmlFor="project-name" required error={formErrors.name}>
                 <input
@@ -387,95 +501,73 @@ export function ProjectsView({ currentProjectId, onOpenProject, onDeleteProject,
               </FormField>
 
               <FormField
-                label="Lingua di destinazione"
+                label="Traduci in"
                 htmlFor="project-target"
                 required
-                hint="Codice ISO 639-1, es. it, en, fr."
                 error={formErrors.target_lang}
               >
-                <input
+                <select
                   id="project-target"
-                  className="input"
+                  className="select"
                   value={form.target_lang}
                   onChange={(event) => {
                     setForm((current) => ({ ...current, target_lang: event.target.value }));
                   }}
-                />
-              </FormField>
-            </div>
-
-            <FormField
-              label="Documento sorgente"
-              htmlFor="project-source"
-              required
-              hint="Percorso assoluto del file EPUB, PDF o Markdown. Usa «Sfoglia» oppure incollalo."
-              error={formErrors.source_path}
-            >
-              <div className="flex items-center gap-2">
-                <input
-                  id="project-source"
-                  className="input"
-                  value={form.source_path}
-                  onChange={(event) => {
-                    updatePath(event.target.value);
-                  }}
-                  placeholder="/home/utente/libri/il-nome-della-rosa.epub"
-                  spellCheck={false}
-                />
-                <button
-                  type="button"
-                  className="btn shrink-0"
-                  onClick={() => {
-                    void handlePickSource();
-                  }}
                 >
-                  Sfoglia…
-                </button>
-              </div>
-            </FormField>
-
-            <div className="grid grid-cols-2 gap-3">
-              <FormField
-                label="Formato sorgente"
-                htmlFor="project-format"
-                hint="Sovrascrivibile: il valore autorevole resta quello rilevato dal sidecar."
-              >
-                <select
-                  id="project-format"
-                  className="select"
-                  value={form.source_format}
-                  onChange={(event) => {
-                    const value = event.target.value;
-                    const matched = FORMAT_OPTIONS.find((option) => option.value === value);
-                    if (matched !== undefined) {
-                      setForm((current) => ({ ...current, source_format: matched.value }));
-                    }
-                  }}
-                >
-                  {FORMAT_OPTIONS.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
+                  {LANGUAGES.some((language) => language.code === form.target_lang) ? null : (
+                    <option value={form.target_lang}>{form.target_lang}</option>
+                  )}
+                  {LANGUAGES.map((language) => (
+                    <option key={language.code} value={language.code}>
+                      {language.name}
                     </option>
                   ))}
                 </select>
               </FormField>
-
-              <FormField
-                label="Lingua di partenza"
-                htmlFor="project-source-lang"
-                hint="Lascia vuoto per farla rilevare al modello."
-              >
-                <input
-                  id="project-source-lang"
-                  className="input"
-                  value={form.source_lang}
-                  onChange={(event) => {
-                    setForm((current) => ({ ...current, source_lang: event.target.value }));
-                  }}
-                  placeholder="en"
-                />
-              </FormField>
             </div>
+
+            <details>
+              <summary className="cursor-pointer text-sm text-accent">
+                Opzioni avanzate: lingua di partenza, formato
+              </summary>
+              <div className="mt-3 grid grid-cols-2 gap-3">
+                <FormField
+                  label="Lingua di partenza"
+                  htmlFor="project-source-lang"
+                  hint="Codice ISO 639-1. Vuoto: la rileva la ricognizione."
+                >
+                  <input
+                    id="project-source-lang"
+                    className="input"
+                    value={form.source_lang}
+                    onChange={(event) => {
+                      setForm((current) => ({ ...current, source_lang: event.target.value }));
+                    }}
+                    placeholder="fr"
+                  />
+                </FormField>
+
+                <FormField label="Formato" htmlFor="project-format">
+                  <select
+                    id="project-format"
+                    className="select"
+                    value={form.source_format}
+                    onChange={(event) => {
+                      const value = event.target.value;
+                      if (isSourceFormat(value)) {
+                        setForm((current) => ({ ...current, source_format: value }));
+                      }
+                    }}
+                  >
+                    {FORMAT_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </FormField>
+              </div>
+            </details>
 
             {formError !== null ? (
               <div className="banner banner-error" role="alert">
@@ -484,27 +576,17 @@ export function ProjectsView({ currentProjectId, onOpenProject, onDeleteProject,
               </div>
             ) : null}
 
-            <div className="flex items-center gap-2">
+            <div className="flex justify-end gap-2">
+              <button type="button" className="btn" onClick={closeForm} disabled={submitting}>
+                Annulla
+              </button>
               <button type="submit" className="btn btn-primary" disabled={submitting}>
                 {submitting ? <span className="spinner" aria-hidden="true" /> : null}
                 Crea e importa
               </button>
-              <button
-                type="button"
-                className="btn btn-ghost"
-                onClick={() => {
-                  setForm(EMPTY_FORM);
-                  setFormErrors({});
-                  setFormError(null);
-                  setDetectedFormat(null);
-                }}
-                disabled={submitting}
-              >
-                Azzera
-              </button>
             </div>
-          </div>
-        </form>
+          </form>
+        </Dialog>
       ) : null}
 
       {loading ? (
@@ -539,12 +621,13 @@ export function ProjectsView({ currentProjectId, onOpenProject, onDeleteProject,
                 l&apos;orchestratore serve alla ricognizione e alla memoria del libro.
               </li>
               <li>
-                Crea un progetto con il documento EPUB/PDF/Markdown, oppure importa un bundle{" "}
-                <span className="mono-chip">.llmtz</span> creato altrove.
+                Con <strong>Nuovo libro</strong> scegli il file EPUB, PDF o Markdown: titolo e lingua
+                vengono letti dal file e l&apos;importazione parte da sola. Un bundle{" "}
+                <span className="mono-chip">.llmtz</span> creato altrove si apre con «Importa».
               </li>
               <li>
-                Dalla pagina <strong>Ingestione</strong> estrai il documento, poi traduci dalla pagina{" "}
-                <strong>Traduzione</strong> e rivedi da <strong>Revisione</strong>.
+                Poi segui i passi del libro: <strong>Prepara</strong> (facoltativo),{" "}
+                <strong>Traduci</strong>, <strong>Rivedi</strong>, <strong>Esporta</strong>.
               </li>
             </ol>
             <div className="mt-2 flex items-center gap-2">

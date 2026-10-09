@@ -27,6 +27,7 @@ import type {
   ChunkListRequest,
   CreateProjectRequest,
   DiagnosticsOutcome,
+  DocumentInspection,
   DiagnosticsPaths,
   Endpoint,
   EndpointModelsRequest,
@@ -103,6 +104,7 @@ const COMMANDS = {
   roleBindingList: "role_binding_list",
   roleBindingSet: "role_binding_set",
   roleBindingDelete: "role_binding_delete",
+  documentInspect: "document_inspect",
   ingestStart: "ingest_start",
   translationStart: "translation_start",
   translationPause: "translation_pause",
@@ -302,6 +304,11 @@ export function roleBindingDelete(id: string): Promise<Ack> {
  * worker pool; follow it through `job_list` / `job://progress`, then read chapters from
  * `project_get` and chunks from `chunk_list`.
  */
+/** Format, title, author and source language of a file, before any project exists. */
+export function documentInspect(path: string): Promise<DocumentInspection> {
+  return call<DocumentInspection>(COMMANDS.documentInspect, { path });
+}
+
 export function ingestStart(request: IngestStartRequest): Promise<JobStarted> {
   return call<JobStarted>(COMMANDS.ingestStart, { req: request });
 }
