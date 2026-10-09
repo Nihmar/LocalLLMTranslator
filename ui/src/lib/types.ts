@@ -354,11 +354,22 @@ export interface ReconSnapshot {
   glossary: GlossaryTerm[];
   /** Style-note candidates proposed by the summarizer; the user decides. */
   style_notes: string[];
+  /** How the translator renders dialogue (`project_memory['dialogue_style']`). */
+  dialogue_style: DialogueStyle;
   orchestrator_bound: boolean;
   /** Id of a pending/running `book_recon` job, when there is one. */
   running_job: string | null;
   /** Last failure of a `book_recon` job, when there is one. */
   last_error: string | null;
+}
+
+/** `keep` = the source's dash, `quotes` = target-language quotation marks. */
+export type DialogueStyle = "keep" | "quotes";
+
+/** Request body of `project_set_dialogue_style` (`commands::recon::DialogueStyleRequest`). */
+export interface DialogueStyleRequest {
+  project_id: string;
+  dialogue_style: DialogueStyle;
 }
 
 /** Request body of `recon_start` (`commands::recon::ReconStartRequest`). */

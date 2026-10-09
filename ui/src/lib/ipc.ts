@@ -67,6 +67,7 @@ import type {
   ModelInfo,
   Project,
   ProjectDetail,
+  DialogueStyleRequest,
   ReconConfirmRequest,
   ReconSnapshot,
   ReconStartRequest,
@@ -107,6 +108,7 @@ const COMMANDS = {
   reconStart: "recon_start",
   reconGet: "recon_get",
   reconConfirm: "recon_confirm",
+  projectSetDialogueStyle: "project_set_dialogue_style",
   glossaryList: "glossary_list",
   glossaryUpsert: "glossary_upsert",
   glossaryDelete: "glossary_delete",
@@ -345,6 +347,11 @@ export function reconGet(projectId: string): Promise<ReconSnapshot> {
 /** Writes the fields the user confirmed into project memory and the glossary. */
 export function reconConfirm(request: ReconConfirmRequest): Promise<ReconSnapshot> {
   return call<ReconSnapshot>(COMMANDS.reconConfirm, { req: request });
+}
+
+/** Chooses how dialogue is rendered from the next translated chunk on. */
+export function projectSetDialogueStyle(request: DialogueStyleRequest): Promise<ReconSnapshot> {
+  return call<ReconSnapshot>(COMMANDS.projectSetDialogueStyle, { req: request });
 }
 
 // --- glossary (PLAN.md §5, §9.2) -------------------------------------------------------------

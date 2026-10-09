@@ -3,6 +3,7 @@ import { FormField } from "./FormField";
 import {
   glossaryDelete,
   glossaryUpsert,
+  projectSetDialogueStyle,
   reconConfirm,
   reconGet,
   reconStart,
@@ -10,6 +11,7 @@ import {
 } from "../lib/ipc";
 import type {
   BookProfile,
+  DialogueStyle,
   ConfirmedTerm,
   ProfileProvenance,
   ReconConfirmRequest,
@@ -375,6 +377,19 @@ export function BookProfilePanel({ projectId, reloadToken }: BookProfilePanelPro
     }));
   }
 
+  async function changeDialogueStyle(style: DialogueStyle) {
+    setActionError(null);
+    setNotice(null);
+    try {
+      setSnapshot(await projectSetDialogueStyle({ project_id: projectId, dialogue_style: style }));
+      setNotice(
+        "Convenzione dei dialoghi salvata: vale per i chunk tradotti da ora in poi (per i precedenti usa «Riprova»).",
+      );
+    } catch (styleError) {
+      setActionError(toErrorMessage(styleError));
+    }
+  }
+
   function appendStyleNote(note: string) {
     setForm((current) => {
       const existing = current.styleGuide.trim();
@@ -662,6 +677,25 @@ export function BookProfilePanel({ projectId, reloadToken }: BookProfilePanelPro
                   Componi dai campi confermati
                 </button>
               </div>
+            </FormField>
+
+            <FormField
+              label="Battute di dialogo"
+              htmlFor="recon-dialogue-style"
+              hint="Una scelta per tutto il libro: editor e proofreader non la correggono paragrafo per paragrafo."
+            >
+              <select
+                id="recon-dialogue-style"
+                className="select"
+                value={snapshot?.dialogue_style ?? "keep"}
+                disabled={snapshot === null}
+                onChange={(event) => {
+                  void changeDialogueStyle(event.target.value === "quotes" ? "quotes" : "keep");
+                }}
+              >
+                <option value="keep">Trattino, come l&apos;originale</option>
+                <option value="quotes">Virgolette della lingua di arrivo</option>
+              </select>
             </FormField>
 
             {form.terms.length > 0 ? (
