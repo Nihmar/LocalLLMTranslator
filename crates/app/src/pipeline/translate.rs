@@ -609,7 +609,15 @@ pub fn derive_seed(chunk_id: &str, role: &str) -> i64 {
     for (i, b) in bytes.iter().take(8).enumerate() {
         buf[i] = *b;
     }
-    i64::from_be_bytes(buf).abs()
+    seed_from_bytes(buf)
+}
+
+/// Map eight hash bytes onto a non-negative seed.
+///
+/// The sign bit is masked instead of calling `abs()`: `i64::MIN.abs()` panics in debug
+/// builds and returns `i64::MIN` in release, while the seed contract is non-negative.
+fn seed_from_bytes(buf: [u8; 8]) -> i64 {
+    (u64::from_be_bytes(buf) & i64::MAX as u64) as i64
 }
 
 fn format_placeholders(tokens: &[u32]) -> String {
@@ -954,6 +962,14 @@ mod tests {
         );
         assert_eq!(describe_chunk_flags("not json"), "");
         assert_eq!(describe_chunk_flags("[]"), "");
+    }
+
+    #[test]
+    fn seed_never_panics_on_the_sign_bit() {
+        // The `i64::MIN` byte pattern used to make `.abs()` panic in debug builds.
+        assert_eq!(seed_from_bytes([0x80, 0, 0, 0, 0, 0, 0, 0]), 0);
+        assert_eq!(seed_from_bytes([0xff; 8]), i64::MAX);
+        assert!(seed_from_bytes([0x80, 0, 0, 0, 0, 0, 0, 1]) > 0);
     }
 
     #[test]
