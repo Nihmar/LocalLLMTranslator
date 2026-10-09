@@ -67,11 +67,31 @@ pub async fn get_project(pool: &SqlitePool, id: &str) -> Result<Option<Project>>
     Ok(row)
 }
 
+/// Delete a project and everything that hangs off it.
+///
+/// `document` (and through it chapters, blocks, chunks, suggestions) cascades, but
+/// `qa_finding`, `glossary_term`, `project_memory` and `job` carry `project_id` without
+/// a foreign key, and `llm_call` only points at jobs and chunks: those are deleted
+/// explicitly, before the cascade removes the chunks `llm_call` is matched on. The
+/// model calls hold prompts and answers, i.e. the text of the book being deleted.
 pub async fn delete_project(pool: &SqlitePool, id: &str) -> Result<u64> {
+    let mut tx = pool.begin().await?;
+    for statement in [
+        "DELETE FROM llm_call WHERE job_id IN (SELECT id FROM job WHERE project_id = ?1) \
+         OR chunk_id IN (SELECT c.id FROM chunk c JOIN document d ON d.id = c.document_id \
+         WHERE d.project_id = ?1)",
+        "DELETE FROM qa_finding WHERE project_id = ?1",
+        "DELETE FROM glossary_term WHERE project_id = ?1",
+        "DELETE FROM project_memory WHERE project_id = ?1",
+        "DELETE FROM job WHERE project_id = ?1",
+    ] {
+        sqlx::query(statement).bind(id).execute(&mut *tx).await?;
+    }
     let res = sqlx::query("DELETE FROM project WHERE id = ?1")
         .bind(id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
+    tx.commit().await?;
     Ok(res.rows_affected())
 }
 
@@ -1410,6 +1430,51 @@ mod tests {
         .execute(pool)
         .await
         .expect("chunk");
+    }
+
+    #[tokio::test]
+    async fn delete_project_leaves_no_orphan_rows() {
+        let pool = connect_memory().await.expect("pool");
+        seed(&pool).await;
+        let ts = now();
+        for statement in [
+            "INSERT INTO job (id, project_id, kind, payload_json, created_at) \
+             VALUES ('j1','p','translate_chunk','{}',?1)",
+            "INSERT INTO llm_call (id, job_id, role, model, params_json, prompt_hash, created_at) \
+             VALUES ('l1','j1','translator','m','{}','h',?1)",
+            "INSERT INTO llm_call (id, chunk_id, role, model, params_json, prompt_hash, created_at) \
+             VALUES ('l2','c1','editor','m','{}','h',?1)",
+            "INSERT INTO qa_finding (id, project_id, kind, severity, details_json, created_at) \
+             VALUES ('q1','p','untranslated','major','{}',?1)",
+            "INSERT INTO glossary_term (id, project_id, source, target) VALUES ('g1','p','a','b')",
+            "INSERT INTO project_memory (project_id, key, value, updated_at) \
+             VALUES ('p','synopsis','x',?1)",
+        ] {
+            sqlx::query(statement)
+                .bind(&ts)
+                .execute(&pool)
+                .await
+                .expect(statement);
+        }
+
+        assert_eq!(delete_project(&pool, "p").await.expect("delete"), 1);
+
+        for count in [
+            "SELECT COUNT(*) FROM project",
+            "SELECT COUNT(*) FROM document",
+            "SELECT COUNT(*) FROM chunk",
+            "SELECT COUNT(*) FROM job",
+            "SELECT COUNT(*) FROM llm_call",
+            "SELECT COUNT(*) FROM qa_finding",
+            "SELECT COUNT(*) FROM glossary_term",
+            "SELECT COUNT(*) FROM project_memory",
+        ] {
+            let left: i64 = sqlx::query_scalar(count)
+                .fetch_one(&pool)
+                .await
+                .expect(count);
+            assert_eq!(left, 0, "{count}: rows of the deleted project are left");
+        }
     }
 
     #[tokio::test]
