@@ -131,6 +131,20 @@ invoke/listen or fetch/SSE at runtime. Picking a file in the browser uploads it 
 `<data-dir>/uploads/` and the path-based commands receive the stored path; exports and bundles are
 downloaded from `/api/download`, which only serves files under the data directory. See issue #17.
 
+The same pipeline is scriptable:
+
+```sh
+make build-ui
+cargo run -p local-llm-translator-server -- translate libro.epub --to it \
+  --endpoint http://127.0.0.1:8080 --model qwen2.5-32b-instruct
+# stdout: /home/utente/.local/share/org.localllmtranslator.app/projects/<id>/output/libro.epub
+
+cargo run -p local-llm-translator-server -- export <project-id> --format pdf
+```
+
+`--project <id>` resumes instead of creating; `--no-export` stops after translating; progress
+and warnings go to stderr and the exit code is non-zero on failure.
+
 ## `llama-server`
 
 The app does **not** start the servers: it detects them on endpoints you configure, and reads

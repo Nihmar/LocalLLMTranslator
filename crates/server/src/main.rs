@@ -6,6 +6,7 @@
 //! working; both share `app_lib::build_state`. See `PLAN.md` §12.3.
 
 mod api;
+mod cli;
 mod events;
 mod files;
 
@@ -48,6 +49,10 @@ struct Cli {
 enum Command {
     /// Run the control plane and serve the UI and the command API.
     Serve(ServeArgs),
+    /// Translate a document end to end and print the output path.
+    Translate(cli::TranslateArgs),
+    /// Build one output file of an existing project.
+    Export(cli::ExportArgs),
 }
 
 #[derive(Debug, Args)]
@@ -73,6 +78,8 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Command::Serve(args) => serve(args).await,
+        Command::Translate(args) => cli::translate(args).await,
+        Command::Export(args) => cli::export(args).await,
     }
 }
 
@@ -120,8 +127,14 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     // Release the worker pool and the sidecar child deterministically, like the desktop
     // shell does on exit.
     tracing::info!("shutting down: stopping worker pool and sidecar");
-    server_shutdown(&app_state);
+    shutdown_state(&app_state);
     Ok(())
+}
+
+/// Build the control plane without a UI: the CLI polls, so no event subscriber is needed.
+pub(crate) async fn build_headless_state(data_dir: PathBuf) -> anyhow::Result<AppState> {
+    let emitter: Arc<dyn app_lib::events::EventEmitter> = Arc::new(app_lib::events::NullEmitter);
+    Ok(app_lib::build_state(data_dir, None, emitter).await?)
 }
 
 #[derive(Clone)]
@@ -254,7 +267,7 @@ async fn shutdown_signal() {
 }
 
 /// Stop the worker pool and the sidecar. Idempotent, like the desktop shell's shutdown.
-fn server_shutdown(state: &AppState) {
+pub(crate) fn shutdown_state(state: &AppState) {
     state.worker.cancel();
     state.supervisor.shutdown();
 }
@@ -270,7 +283,7 @@ fn is_loopback(host: &str) -> bool {
 
 /// `$LLMTZ_DATA_DIR` when set, else the desktop app's data directory, so `llmtz serve`
 /// shows the same books by default.
-fn default_data_dir() -> PathBuf {
+pub(crate) fn default_data_dir() -> PathBuf {
     if let Ok(dir) = std::env::var("LLMTZ_DATA_DIR") {
         let trimmed = dir.trim();
         if !trimmed.is_empty() {

@@ -33,6 +33,16 @@ pub fn log_dir(data_dir: &Path) -> PathBuf {
 /// Idempotent: the file writer is created once per process. If the log file cannot be
 /// opened the process keeps running with stdout only, reported on stderr.
 pub fn init(data_dir: &Path) {
+    install(data_dir, true);
+}
+
+/// Like [`init`], but the console stays clean: the CLI writes its result to stdout and its
+/// progress to stderr, so the tracing output goes to the file only.
+pub fn init_file_only(data_dir: &Path) {
+    install(data_dir, false);
+}
+
+fn install(data_dir: &Path, stdout: bool) {
     static FILE_WRITER: OnceLock<Option<Arc<DailyFileWriter>>> = OnceLock::new();
 
     let dir = log_dir(data_dir);
@@ -47,7 +57,7 @@ pub fn init(data_dir: &Path) {
         .clone();
 
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-    let stdout_layer = tracing_subscriber::fmt::layer();
+    let stdout_layer = stdout.then(tracing_subscriber::fmt::layer);
     let file_layer = writer.clone().map(|writer| {
         tracing_subscriber::fmt::layer()
             .with_ansi(false)

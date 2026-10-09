@@ -1271,6 +1271,20 @@ path, the browser opens a hidden `<input type=file>` and uploads the choice; an 
 is revealed by the OS in the desktop and downloaded from `/api/download` in the browser. There is
 no other network call, and nothing is fetched remotely.
 
+The same functions are scriptable without a server:
+
+- `llmtz translate <file> --to <lang> [--from <lang>] [--name <title>]
+  [--endpoint <url> --model <name>] [--format pdf|epub|docx] [--output <path>]
+  [--no-export] [--allow-untranslated] [--data-dir <dir>]` creates the project, ingests,
+translates and exports. Without `--endpoint`/`--model` it uses the translator binding already
+configured; with them it registers the endpoint and binds the role first. stdout carries only
+the output path (or the project id with `--no-export`), progress goes to stderr, and the exit
+code is non-zero on a failed ingestion, a failed chunk or a refused export.
+- `llmtz translate --project <id>` resumes an existing project instead of creating one.
+- `llmtz export <project-id> [--format …] [--output <path>] [--force] [--no-toc]
+  [--allow-untranslated]` rebuilds one project and prints the output path; an unchanged build
+is reported as reused, exactly like the UI.
+
 ---
 
 ## 13. Milestones
