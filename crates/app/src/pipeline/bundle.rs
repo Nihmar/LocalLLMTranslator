@@ -148,6 +148,34 @@ pub async fn import_project(
     result
 }
 
+/// Reject a project id that is not a plain, single path component.
+///
+/// The id comes from an archive manifest, i.e. it is attacker-controlled: an absolute path,
+/// a `..` segment or any path separator would let `Path::join` escape `<data_dir>/projects`
+/// and write (or read) files elsewhere on the machine.
+pub(crate) fn validate_project_id(project_id: &str) -> Result<()> {
+    let path = Path::new(project_id);
+    let single_component = path.components().count() == 1
+        && !path.is_absolute()
+        && !matches!(
+            path.components().next(),
+            Some(std::path::Component::ParentDir)
+        )
+        && !project_id.contains(['/', '\\', '\0']);
+    if project_id.is_empty() || project_id == "." || !single_component {
+        return Err(AppError::Invalid(format!(
+            "the bundle carries an unsafe project id {project_id:?}"
+        )));
+    }
+    Ok(())
+}
+
+/// The on-disk directory of a project id read from an untrusted manifest.
+pub(crate) fn safe_project_dir(data_dir: &Path, project_id: &str) -> Result<PathBuf> {
+    validate_project_id(project_id)?;
+    Ok(data_dir.join("projects").join(project_id))
+}
+
 async fn import_staged(pool: &SqlitePool, data_dir: &Path, staging: &Path) -> Result<Project> {
     let manifest_text = tokio::fs::read_to_string(staging.join(MANIFEST_NAME))
         .await
@@ -170,7 +198,7 @@ async fn import_staged(pool: &SqlitePool, data_dir: &Path, staging: &Path) -> Re
     }
 
     let project_id = manifest.project_id.clone();
-    let project_dir = data_dir.join("projects").join(&project_id);
+    let project_dir = safe_project_dir(data_dir, &project_id)?;
     if project_dir.exists() {
         let _ = tokio::fs::remove_dir_all(&staging).await;
         return Err(AppError::Invalid(format!(
@@ -559,6 +587,23 @@ mod tests {
         let error = extract_archive_with_limits(&archive, &dir.path().join("out"), 2, 1024)
             .expect_err("the entry cap must reject the archive");
         assert!(error.to_string().contains("entries"), "{error}");
+    }
+
+    #[test]
+    fn unsafe_project_ids_are_refused_before_they_touch_the_filesystem() {
+        let data_dir = Path::new("/data");
+        for unsafe_id in ["", ".", "..", "../escape", "a/b", "a\\b", "/tmp/x"] {
+            assert!(
+                validate_project_id(unsafe_id).is_err(),
+                "{unsafe_id:?} must be refused"
+            );
+            assert!(safe_project_dir(data_dir, unsafe_id).is_err());
+        }
+        // A plain id stays under `<data_dir>/projects`.
+        assert_eq!(
+            safe_project_dir(data_dir, "p-123").expect("safe"),
+            data_dir.join("projects").join("p-123")
+        );
     }
 
     #[test]

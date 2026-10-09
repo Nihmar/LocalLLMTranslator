@@ -276,7 +276,7 @@ async fn import_staged(
                 continue;
             }
             let from = staging.join("projects").join(&book.project_id);
-            let project_dir = data_dir.join("projects").join(&book.project_id);
+            let project_dir = bundle::safe_project_dir(data_dir, &book.project_id)?;
             tokio::fs::create_dir_all(&project_dir).await?;
             for name in ["work", "output", "prompts"] {
                 let source = from.join(name);
@@ -656,6 +656,58 @@ mod tests {
             .expect("second import");
         assert_eq!(again.books_imported, 0);
         assert_eq!(again.books_skipped, 1);
+    }
+
+    #[tokio::test]
+    async fn an_unsafe_member_book_id_is_refused() {
+        let (pool, dir) = connect_temp_file().await.expect("pool");
+        let series = seed_series(&pool).await;
+
+        // The manifest is attacker-controlled: the book id tries to escape the projects dir.
+        let archive = dir.path().join("evil.llmtsz");
+        let manifest = SeriesBundleManifest {
+            format_version: FORMAT_VERSION,
+            app_version: "0".to_string(),
+            exported_at: now(),
+            series_id: series.id.clone(),
+            series_name: series.name.clone(),
+            books: vec![BundleBook {
+                project_id: "../escape".to_string(),
+                name: "Book".to_string(),
+                series_order: None,
+            }],
+        };
+        let bundle = SeriesBundle {
+            series,
+            terms: Vec::new(),
+            variants: Vec::new(),
+            memory: Vec::new(),
+        };
+        let mut zip = zip::ZipWriter::new(File::create(&archive).expect("create"));
+        let options = zip::write::SimpleFileOptions::default();
+        for (name, body) in [
+            (
+                MANIFEST_NAME,
+                serde_json::to_vec(&manifest).expect("manifest"),
+            ),
+            (SERIES_NAME, serde_json::to_vec(&bundle).expect("series")),
+        ] {
+            zip.start_file(name, options).expect("start");
+            zip.write_all(&body).expect("write");
+        }
+        zip.start_file(DATABASE_NAME, options).expect("start db");
+        zip.write_all(b"exists, but the import fails before reading it")
+            .expect("write db");
+        zip.finish().expect("finish");
+
+        let error = import_series(&pool, dir.path(), &archive.to_string_lossy())
+            .await
+            .expect_err("an unsafe id must be refused");
+        assert!(error.to_string().contains("unsafe project id"), "{error}");
+        assert!(
+            !dir.path().join("escape").exists(),
+            "the import must not write outside the data dir"
+        );
     }
 
     #[tokio::test]
