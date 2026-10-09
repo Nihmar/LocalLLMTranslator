@@ -155,6 +155,14 @@ async fn translate_chunk_inner(
             aliases: term.aliases,
         })
         .collect();
+    let dialogue_quotes = crate::pipeline::recon::wants_dialogue_quotes(
+        &crate::pipeline::glossary::memory_with_series(
+            pool,
+            &project,
+            crate::pipeline::recon::DIALOGUE_STYLE_KEY,
+        )
+        .await?,
+    );
     let inputs = ContextInputs {
         source_language: project.source_lang.clone().unwrap_or_default(),
         target_language: target_lang.clone(),
@@ -183,6 +191,7 @@ async fn translate_chunk_inner(
         chunk_flags: describe_chunk_flags(&chunk.flags_json),
         chunk_text: chunk.source_md.clone(),
         budget_tokens: crate::pipeline::resolve_endpoint_budget(&endpoint).await,
+        dialogue_quotes,
     };
 
     // Placeholder preparation happens on the sidecar (pure function).
@@ -246,16 +255,29 @@ async fn translate_chunk_inner(
     }
 
     // ---- Reinject + placeholder validation ------------------------------
+    // With quotation marks for dialogue the model is told to drop the dash token that
+    // opens a spoken line, so those tokens alone may go missing.
+    let optional_tokens = if dialogue_quotes {
+        dialogue_dash_tokens(&prepared.placeholders)
+    } else {
+        Vec::new()
+    };
     let mut reinject = deps
         .sidecar
         .reinject(&response_text, &prepared.placeholders, block_ids.len())
         .await?;
+    let mut placeholders_ok = placeholders_acceptable(&reinject, &optional_tokens);
 
-    if !reinject.placeholders_ok {
+    if !placeholders_ok {
         // One targeted retry naming the tokens that came back wrong (missing, duplicated
         // or invented by the model).
-        let broken =
-            describe_placeholders(&reinject.missing, &reinject.duplicated, &reinject.unknown);
+        let missing: Vec<u32> = reinject
+            .missing
+            .iter()
+            .copied()
+            .filter(|index| !optional_tokens.contains(index))
+            .collect();
+        let broken = describe_placeholders(&missing, &reinject.duplicated, &reinject.unknown);
         let retry_user = format!(
             "{}\n\nIMPORTANT: your previous answer was rejected because these placeholder tokens \
              were missing, duplicated or unknown: {broken}. Re-output the passage, including \
@@ -286,7 +308,8 @@ async fn translate_chunk_inner(
             .sidecar
             .reinject(&response_text, &prepared.placeholders, block_ids.len())
             .await?;
-        if !reinject.placeholders_ok {
+        placeholders_ok = placeholders_acceptable(&reinject, &optional_tokens);
+        if !placeholders_ok {
             needs_review_reason = Some(format!(
                 "placeholder validation failed after retry: missing {:?}, duplicated {:?}, unknown {:?}",
                 reinject.missing, reinject.duplicated, reinject.unknown
@@ -330,7 +353,6 @@ async fn translate_chunk_inner(
 
     // Persist block translations only when alignment is trustworthy.
     if block_count_ok {
-        let placeholders_ok = reinject.placeholders_ok;
         for (index, block) in chunk_blocks.iter().enumerate() {
             if !block.translatable {
                 continue;
@@ -351,7 +373,7 @@ async fn translate_chunk_inner(
             .await?;
         }
         // Refresh the translation memory for future identical blocks.
-        if reinject.placeholders_ok {
+        if placeholders_ok {
             for (index, block) in chunk_blocks.iter().enumerate() {
                 if !block.translatable {
                     continue;
@@ -601,6 +623,27 @@ fn format_placeholders(tokens: &[u32]) -> String {
         .join(", ")
 }
 
+/// Placeholder indices that stand for the dash opening a dialogue line (`\-`).
+fn dialogue_dash_tokens(placeholders: &[(u32, String)]) -> Vec<u32> {
+    placeholders
+        .iter()
+        .filter(|(_, literal)| literal == "\\-")
+        .map(|(index, _)| *index)
+        .collect()
+}
+
+/// Whether a reinjected answer kept its placeholders, allowing `optional` tokens to be
+/// missing (and only missing: a duplicated or invented token is still an error).
+fn placeholders_acceptable(reinject: &crate::sidecar::ReinjectResult, optional: &[u32]) -> bool {
+    reinject.placeholders_ok
+        || (reinject.duplicated.is_empty()
+            && reinject.unknown.is_empty()
+            && reinject
+                .missing
+                .iter()
+                .all(|index| optional.contains(index)))
+}
+
 /// One human-readable summary of every placeholder defect a reinject pass reported,
 /// for the targeted retry message. Categories with no tokens are omitted.
 fn describe_placeholders(missing: &[u32], duplicated: &[u32], unknown: &[u32]) -> String {
@@ -760,6 +803,41 @@ fn manifest_to_json(manifest: &crate::context::budget::BudgetedContext) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_dialogue_dash_tokens_may_go_missing() {
+        let placeholders = vec![
+            (1, "\\-".to_string()),
+            (2, "**".to_string()),
+            (3, "\\-".to_string()),
+        ];
+        let optional = dialogue_dash_tokens(&placeholders);
+        assert_eq!(optional, [1, 3]);
+
+        let result = |missing: Vec<u32>, duplicated: Vec<u32>| crate::sidecar::ReinjectResult {
+            placeholders_ok: missing.is_empty() && duplicated.is_empty(),
+            missing,
+            duplicated,
+            ..Default::default()
+        };
+        assert!(placeholders_acceptable(&result(vec![], vec![]), &optional));
+        // The dashes became quotation marks: fine.
+        assert!(placeholders_acceptable(
+            &result(vec![1, 3], vec![]),
+            &optional
+        ));
+        // Losing real markup is still an error, so is a duplicated dash.
+        assert!(!placeholders_acceptable(
+            &result(vec![2], vec![]),
+            &optional
+        ));
+        assert!(!placeholders_acceptable(
+            &result(vec![], vec![1]),
+            &optional
+        ));
+        // Without the quotes convention nothing is optional.
+        assert!(!placeholders_acceptable(&result(vec![1], vec![]), &[]));
+    }
     use crate::context::budget::{BudgetedContext, PieceKind, PieceReport};
     use crate::db::models::Block;
 

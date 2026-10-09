@@ -200,6 +200,7 @@ pub fn run() {
             commands::recon::recon_start,
             commands::recon::recon_get,
             commands::recon::recon_confirm,
+            commands::recon::project_set_dialogue_style,
             commands::glossary::glossary_list,
             commands::glossary::glossary_upsert,
             commands::glossary::glossary_delete,

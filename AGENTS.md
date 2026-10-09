@@ -137,7 +137,7 @@ Commands: `project_list`, `project_create`, `project_get`, `project_delete`,
 `project_export`, `project_import`,
 `endpoint_list`, `endpoint_upsert`, `endpoint_delete`, `endpoint_test`, `endpoint_models`,
 `role_binding_list`, `role_binding_set`, `role_binding_delete`, `ingest_start`, `translation_start`, `translation_pause`,
-`translation_cancel`, `recon_start`, `recon_get`, `recon_confirm`,
+`translation_cancel`, `recon_start`, `recon_get`, `recon_confirm`, `project_set_dialogue_style`,
 `glossary_list`, `glossary_upsert`, `glossary_delete`,
 `series_list`, `series_create`, `series_get`, `series_update`, `series_delete`,
 `project_set_series`,
@@ -221,6 +221,9 @@ never an undecided (pending or superseded) proposal. `qa_report` takes
 `recon_start` runs the `book_recon` job (candidate book profile, PLAN.md §9.4); `recon_get`
 reads it back together with the confirmed memory values and the glossary; `recon_confirm` writes
 the confirmed fields into `project_memory` and the accepted proper nouns into `glossary_term`.
+`project_set_dialogue_style` takes `{req: {project_id, dialogue_style}}` (`keep` or `quotes`),
+stores it in `project_memory['dialogue_style']` and returns the snapshot, which carries
+`dialogue_style`; it applies to the chunks translated from then on (PLAN.md §8).
 No new event: the job lifecycle is announced on `job://progress`.
 
 `export_build` takes `{req: {project_id, output_format, output_path?, template?, css?, toc?,

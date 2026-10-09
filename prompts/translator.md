@@ -2,7 +2,8 @@
 prompts/translator.md
 USER-EDITABLE DEFAULT. This is the shipped translator prompt: at ingestion its two halves
 are materialized into the project snapshot as translator.system.md and translator.user.md,
-and editing those copies is what changes a project (they are never overwritten). The loader
+and editing those copies is what changes a project (an edited copy is never overwritten; one
+still identical to an earlier shipped default follows the new default). The loader
 reads the two snapshot files; translator.md itself is accepted only as a legacy whole-file
 system override, so keep the `---USER---` line alone on a line.
 
@@ -10,7 +11,8 @@ Jinja2 format (minijinja in Rust, Jinja2 in Python — the same file syntax, the
 
 SYSTEM half variables (stable for the whole book; keep this half byte-identical so the
 llama-server KV prefix cache keeps hitting):
-  source_language, target_language, style_guide, book_title, book_author
+  source_language, target_language, style_guide, book_title, book_author,
+  dialogue_quotes (bool: render dialogue with target-language quotes, project_memory['dialogue_style'])
 The glossary and the synopsis deliberately live in the USER half: the glossary is filtered
 to the terms present in each chunk, so it changes from chunk to chunk, and a per-chunk
 system message would destroy the KV-cache prefix that makes the prefill cheap
@@ -30,7 +32,8 @@ HARD RULES
 5. Use the GLOSSARY exactly as given whenever the source term occurs.
 6. Do not summarise, do not omit sentences, do not merge or split paragraphs, do not add sentences that are not in the source.
 7. Keep the source's paragraph rhythm and register; translate idioms into natural {{ target_language }}, not word-for-word.
-
+{% if dialogue_quotes %}8. Dialogue: in the source a spoken line opens with a dash, which reaches you as the placeholder token at the very start of that line. Render dialogue with {{ target_language }} quotation marks instead and leave that one opening token out; keep every other token.
+{% endif %}
 STYLE GUIDE
 {{ style_guide }}
 

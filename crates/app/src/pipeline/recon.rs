@@ -35,6 +35,19 @@ pub const MEMORY_KEY: &str = "book_profile";
 /// Memory key holding the confirmed non-style-guide fields.
 pub const META_KEY: &str = "book_meta";
 pub const STYLE_GUIDE_KEY: &str = "style_guide";
+/// Project memory key of the dialogue convention: `keep` (the source's dash, the
+/// default) or `quotes` (target-language quotation marks). Series memory works as a
+/// fallback, like the style guide.
+pub const DIALOGUE_STYLE_KEY: &str = "dialogue_style";
+
+/// The dialogue conventions a project can choose, the default first.
+pub const DIALOGUE_STYLES: [&str; 2] = ["keep", "quotes"];
+
+/// Whether a stored dialogue style asks for quotation marks; anything else keeps
+/// the source's dash.
+pub fn wants_dialogue_quotes(style: &str) -> bool {
+    style.trim() == "quotes"
+}
 pub const SYNOPSIS_KEY: &str = "synopsis";
 
 /// `response_format.json_schema.name` the model sees.
@@ -181,6 +194,8 @@ pub struct ReconSnapshot {
     /// Style-note candidates proposed by the summarizer; the user decides which
     /// ones enter the style guide.
     pub style_notes: Vec<String>,
+    /// `keep` or `quotes` (see [`DIALOGUE_STYLE_KEY`]).
+    pub dialogue_style: String,
     pub orchestrator_bound: bool,
     /// Id of a pending/leased/running `book_recon` job, when there is one.
     pub running_job: Option<String>,
@@ -636,6 +651,10 @@ pub async fn snapshot(pool: &SqlitePool, project_id: &str) -> Result<ReconSnapsh
         .and_then(|json| serde_json::from_str::<Value>(&json).ok());
     let glossary = repo::list_glossary_terms(pool, project_id).await?;
     let style_notes = crate::pipeline::summarize::stored_style_notes(pool, project_id).await?;
+    let dialogue_style = repo::get_memory(pool, project_id, DIALOGUE_STYLE_KEY)
+        .await?
+        .filter(|style| DIALOGUE_STYLES.contains(&style.as_str()))
+        .unwrap_or_else(|| DIALOGUE_STYLES[0].to_string());
     let orchestrator_bound = repo::role_binding_for(pool, ROLE).await?.is_some();
 
     let latest: Option<LatestJob> = sqlx::query_as(
@@ -662,6 +681,7 @@ pub async fn snapshot(pool: &SqlitePool, project_id: &str) -> Result<ReconSnapsh
         book_meta,
         glossary,
         style_notes,
+        dialogue_style,
         orchestrator_bound,
         running_job,
         last_error,

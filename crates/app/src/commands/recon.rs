@@ -1,4 +1,5 @@
-//! `recon_start` / `recon_get` / `recon_confirm` (PLAN.md section 9.4).
+//! `recon_start` / `recon_get` / `recon_confirm` (PLAN.md section 9.4) and
+//! `project_set_dialogue_style`, the book convention that sits next to the profile.
 
 use serde::Deserialize;
 use tauri::State;
@@ -64,4 +65,38 @@ pub async fn recon_confirm(
     req: ConfirmRequest,
 ) -> Result<ReconSnapshot> {
     recon::confirm(&state.pool, &req).await
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct DialogueStyleRequest {
+    pub project_id: String,
+    /// `keep` or `quotes`.
+    pub dialogue_style: String,
+}
+
+/// Choose how the translator renders dialogue. It applies to the chunks translated
+/// from now on; already translated chunks keep their text until they are redone.
+#[tauri::command]
+pub async fn project_set_dialogue_style(
+    state: State<'_, AppState>,
+    req: DialogueStyleRequest,
+) -> Result<ReconSnapshot> {
+    let style = req.dialogue_style.trim();
+    if !recon::DIALOGUE_STYLES.contains(&style) {
+        return Err(AppError::Invalid(format!(
+            "unknown dialogue style {style:?}; expected one of {:?}",
+            recon::DIALOGUE_STYLES
+        )));
+    }
+    repo::get_project(&state.pool, &req.project_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("project {}", req.project_id)))?;
+    repo::set_memory(
+        &state.pool,
+        &req.project_id,
+        recon::DIALOGUE_STYLE_KEY,
+        style,
+    )
+    .await?;
+    recon::snapshot(&state.pool, &req.project_id).await
 }

@@ -696,6 +696,7 @@ REPRESENTATIVE_CONTEXTS: dict[str, dict[str, object]] = {
         "glossary": "lantern => lanterna",
         "book_title": "The Lantern Keeper",
         "book_author": "Fixture Author",
+        "dialogue_quotes": True,
         "synopsis": "A keeper guards a harbour light.",
         "chapter_title": "Chapter One",
         "heading_chain": "The Lantern Keeper / Chapter One / The Harbour",

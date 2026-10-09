@@ -578,7 +578,8 @@ HARD RULES
 5. Use the GLOSSARY exactly as given whenever the source term occurs.
 6. Do not summarise, do not omit sentences, do not merge or split paragraphs, do not add sentences that are not in the source.
 7. Keep the source's paragraph rhythm and register; translate idioms into natural {{ target_language }}, not word-for-word.
-
+{% if dialogue_quotes %}8. Dialogue: in the source a spoken line opens with a dash, which reaches you as the placeholder token at the very start of that line. Render dialogue with {{ target_language }} quotation marks instead and leave that one opening token out; keep every other token.
+{% endif %}
 STYLE GUIDE
 {{ style_guide }}
 
@@ -586,6 +587,16 @@ BOOK
 Title: {{ book_title }}
 Author: {{ book_author }}
 ```
+
+**Dialogue convention.** `project_memory['dialogue_style']` (series memory as a fallback) is
+`keep` — the source's dash, the default — or `quotes`. The extractor escapes a dialogue dash
+(`\-`) and `prepare_text` turns the escape into a placeholder the model must copy; with
+`quotes` rule 8 asks the model to drop exactly that token and use target-language quotation
+marks, and the validation accepts those tokens, and only those, as missing. The editor and
+proofreader prompts treat dialogue punctuation as a book-wide choice, never as a defect, so
+the review does not propose one conversion per paragraph. A shipped prompt file still
+identical to an earlier default in a project snapshot follows the new default; an edited one
+is kept.
 
 ### `prompts/translator.md` (user — volatile)
 
@@ -1020,7 +1031,7 @@ what makes it safe to restart it and re-send the in-flight requests.
 
 - Commands: `project_*`, `endpoint_*`, `role_binding_list`, `role_binding_set`, `role_binding_delete`,
   `ingest_start`, `translation_start/pause/resume/cancel`,
-  `recon_start`, `recon_get`, `recon_confirm`, `glossary_list`, `glossary_upsert`, `glossary_delete`,
+  `recon_start`, `recon_get`, `recon_confirm`, `project_set_dialogue_style`, `glossary_list`, `glossary_upsert`, `glossary_delete`,
   `series_list`, `series_create`, `series_get`, `series_update`, `series_delete`, `project_set_series`,
   `series_glossary_list`, `series_glossary_upsert`, `series_glossary_delete`,
   `series_variant_upsert`, `series_variant_delete`, `series_promote_term`,

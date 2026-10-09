@@ -35,7 +35,8 @@ HARD RULES
 5. Use the GLOSSARY exactly as given whenever the source term occurs.
 6. Do not summarise, do not omit sentences, do not merge or split paragraphs, do not add sentences that are not in the source.
 7. Keep the source's paragraph rhythm and register; translate idioms into natural {{ target_language }}, not word-for-word.
-
+{% if dialogue_quotes %}8. Dialogue: in the source a spoken line opens with a dash, which reaches you as the placeholder token at the very start of that line. Render dialogue with {{ target_language }} quotation marks instead and leave that one opening token out; keep every other token.
+{% endif %}
 STYLE GUIDE
 {{ style_guide }}
 
@@ -94,6 +95,9 @@ pub struct ContextInputs {
     pub chunk_flags: String,
     pub chunk_text: String,
     pub budget_tokens: usize,
+    /// Render dialogue with target-language quotation marks instead of the source's
+    /// dash (`project_memory['dialogue_style'] = 'quotes'`).
+    pub dialogue_quotes: bool,
 }
 
 /// Rendered prompt plus the manifest of what was injected.
@@ -170,6 +174,7 @@ impl ContextBuilder {
                 style_guide => &inputs.style_guide,
                 book_title => &inputs.book_title,
                 book_author => &inputs.book_author,
+                dialogue_quotes => inputs.dialogue_quotes,
             },
         )?;
         Ok(rendered)
@@ -313,22 +318,27 @@ fn read_first(dir: &Path, names: &[&str]) -> Option<String> {
     None
 }
 
+/// SHA-256 of the translator system templates earlier releases shipped.
+const SHIPPED_SYSTEM_HASHES: &[&str] =
+    &["be149aef0a1ee1134a7d88e8ff14d9ef7c83713ec56847a0fe3d1fe13efc12b8"];
+
 /// Write the shipped translator prompt halves into a project snapshot, but never
-/// overwrite a file that already exists.
+/// overwrite one the user edited.
 ///
 /// The prompts are user data: a re-ingest must not silently discard an edit the
-/// user made in the project snapshot. The other prompt families (editor,
-/// proofreader, summarizer, reconnaissance) already follow this rule.
+/// user made in the project snapshot. A file still identical to an earlier shipped
+/// default follows the current one (`util::ensure_prompt_file`).
 pub async fn ensure_prompt_files(dir: &Path) -> Result<()> {
     tokio::fs::create_dir_all(dir).await?;
-    for (name, content) in [
-        ("translator.system.md", DEFAULT_SYSTEM_TEMPLATE),
-        ("translator.user.md", DEFAULT_USER_TEMPLATE),
+    for (name, content, shipped) in [
+        (
+            "translator.system.md",
+            DEFAULT_SYSTEM_TEMPLATE,
+            SHIPPED_SYSTEM_HASHES,
+        ),
+        ("translator.user.md", DEFAULT_USER_TEMPLATE, &[]),
     ] {
-        let path = dir.join(name);
-        if !path.exists() {
-            tokio::fs::write(&path, content).await?;
-        }
+        crate::util::ensure_prompt_file(&dir.join(name), content, shipped).await?;
     }
     Ok(())
 }
@@ -368,7 +378,28 @@ mod tests {
             chunk_flags: String::new(),
             chunk_text: "The king spoke to the court.".into(),
             budget_tokens: 1000,
+            dialogue_quotes: false,
         }
+    }
+
+    #[test]
+    fn the_dialogue_rule_is_absent_by_default_and_stated_when_asked() {
+        let builder = ContextBuilder::embedded();
+        let keep = builder.render_system(&base_inputs()).expect("render");
+        assert!(!keep.contains("Dialogue"));
+        assert!(
+            keep.contains("not word-for-word.\n\nSTYLE GUIDE"),
+            "without the rule the system message is unchanged"
+        );
+
+        let quotes = builder
+            .render_system(&ContextInputs {
+                dialogue_quotes: true,
+                ..base_inputs()
+            })
+            .expect("render");
+        assert!(quotes.contains("8. Dialogue:"));
+        assert!(quotes.contains("Italian quotation marks"));
     }
 
     #[test]
