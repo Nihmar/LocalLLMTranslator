@@ -1,19 +1,12 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { EmptyState } from "../components/EmptyState";
-import { FormField } from "../components/FormField";
-import { StatusBadge } from "../components/StatusBadge";
-import { chunkTranslated } from "../lib/chapters";
-import { onExportProgress, onJobProgress } from "../lib/events";
-import { basename, countLabel, formatDuration, formatNumber } from "../lib/format";
+import { onExportProgress } from "../lib/events";
 import {
-  chunkList,
   exportBuild,
   exportHistory,
   exportPreview,
   openPath,
   projectGet,
-  qaReport,
-  suggestionList,
   toErrorMessage,
 } from "../lib/ipc";
 import type {
@@ -26,6 +19,14 @@ import type {
   Project,
 } from "../lib/types";
 import type { ViewId } from "../App";
+import { BuildProgressPanel } from "./export/BuildProgressPanel";
+import { BuildSettingsPanel } from "./export/BuildSettingsPanel";
+import { ExportChecklist } from "./export/ExportChecklist";
+import { ExportHistoryPanel } from "./export/ExportHistoryPanel";
+import { ExportPreviewPanel } from "./export/ExportPreviewPanel";
+import { ExportResultPanel } from "./export/ExportResultPanel";
+import { ExportUnitsPanel } from "./export/ExportUnitsPanel";
+import { FORMATS, looksAbsolute } from "./export/shared";
 
 /**
  * Export page (`PLAN.md` §11.5): format, template and CSS selection, build, preview and build
@@ -36,81 +37,14 @@ import type { ViewId } from "../App";
  * assets, and skips the build when nothing changed. `export_preview` composes the same units for
  * an in-app look at the content, `export_history` returns the recent builds. The build is followed
  * through `export://progress` and the artifact is revealed with `open_path`.
+ *
+ * The panels in `./export/` own the presentation; this component keeps the choices, the loaded
+ * chapters/history and the build lifecycle.
  */
 
 export interface ExportViewProps {
   project: Project | null;
   onNavigate: (view: ViewId) => void;
-}
-
-const FORMATS: ReadonlyArray<{
-  value: ExportFormat | "html";
-  label: string;
-  extension: string;
-  templateHint: string;
-  cssHint: string;
-  note: string;
-}> = [
-  {
-    value: "pdf",
-    label: "PDF",
-    extension: "pdf",
-    templateHint: "pandoc/templates/book.tex",
-    cssHint: "",
-    note: "Impaginazione LaTeX con indice, filtro note e suddivisione in capitoli.",
-  },
-  {
-    value: "epub",
-    label: "EPUB",
-    extension: "epub",
-    templateHint: "pandoc/templates/book.html",
-    cssHint: "pandoc/styles/book.css",
-    note: "Indice, note e immagini generati da Pandoc.",
-  },
-  {
-    value: "html",
-    label: "HTML",
-    extension: "html",
-    templateHint: "pandoc/templates/book.html",
-    cssHint: "pandoc/styles/book.css",
-    note: "Utile per l'anteprima impaginata nel browser.",
-  },
-  {
-    value: "docx",
-    label: "DOCX",
-    extension: "docx",
-    templateHint: "",
-    cssHint: "",
-    note: "Nessun template: Pandoc usa il documento di riferimento predefinito.",
-  },
-];
-
-function parentDirectory(path: string): string {
-  const trimmed = path.replace(/[\\/]+$/, "");
-  const index = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
-  if (index <= 0) {
-    return trimmed;
-  }
-  return trimmed.slice(0, index);
-}
-
-function looksAbsolute(path: string): boolean {
-  return path.startsWith("/") || /^[A-Za-z]:[\\/]/.test(path) || path.startsWith("\\\\");
-}
-
-/** Italian description of the last `export://progress` state. */
-function progressLabel(event: ExportProgressEvent): string {
-  if (event.state === "started") {
-    return `Build avviata${event.format === undefined ? "" : ` (${event.format.toUpperCase()})`}.`;
-  }
-  if (event.state === "done") {
-    return `Build conclusa${event.output_path === undefined ? "" : `: ${event.output_path}`}.`;
-  }
-  return `Stato: ${event.state}.`;
-}
-
-function timestampLabel(value: string): string {
-  return value.replace("T", " ").slice(0, 19);
 }
 
 export function ExportView({ project, onNavigate }: ExportViewProps) {
@@ -141,13 +75,9 @@ export function ExportView({ project, onNavigate }: ExportViewProps) {
   const [preview, setPreview] = useState<ExportPreview | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
-  const [previewUnit, setPreviewUnit] = useState(0);
 
   const projectId = project?.id ?? null;
-  const formatSpec = useMemo(
-    () => FORMATS.find((entry) => entry.value === format) ?? FORMATS[0],
-    [format],
-  );
+  const formatSpec = FORMATS.find((entry) => entry.value === format) ?? FORMATS[0];
 
   const loadContext = useCallback(async () => {
     if (projectId === null) {
@@ -188,15 +118,7 @@ export function ExportView({ project, onNavigate }: ExportViewProps) {
     setChapterScope("all");
   }, [projectId]);
 
-  useEffect(
-    () =>
-      onExportProgress((event) => {
-        setProgress(event);
-      }),
-    [],
-  );
-
-  const selectedPreviewUnit = preview?.units[previewUnit] ?? null;
+  useEffect(() => onExportProgress(setProgress), []);
 
   async function handlePreview() {
     if (projectId === null) {
@@ -210,7 +132,6 @@ export function ExportView({ project, onNavigate }: ExportViewProps) {
         chapter_id: chapterScope === "all" ? null : chapterScope,
       });
       setPreview(composed);
-      setPreviewUnit(0);
     } catch (previewFailure) {
       setPreviewError(toErrorMessage(previewFailure));
       setPreview(null);
@@ -378,607 +299,70 @@ export function ExportView({ project, onNavigate }: ExportViewProps) {
       ) : (
         <div className="grid grid-cols-1 gap-3 xl:grid-cols-[minmax(0,1fr)_24rem]">
           <div className="section-stack min-w-0">
-            {preview !== null ? (
-              <div className="panel">
-                <div className="panel-head">
-                  <span className="panel-title">Anteprima</span>
-                  <span className="flex items-center gap-2">
-                    <select
-                      className="select"
-                      style={{ width: "auto", maxWidth: "20rem" }}
-                      value={String(previewUnit)}
-                      onChange={(event) => {
-                        setPreviewUnit(Number(event.target.value));
-                      }}
-                    >
-                      {preview.units.map((unit, index) => (
-                        <option key={unit.key} value={String(index)}>
-                          {unit.title}
-                        </option>
-                      ))}
-                    </select>
-                    <span className="mono-chip">
-                      {formatNumber(preview.total_chunks - preview.untranslated_chunks)}/
-                      {formatNumber(preview.total_chunks)} tradotti
-                    </span>
-                    <button
-                      type="button"
-                      className="btn btn-sm"
-                      onClick={() => {
-                        setPreview(null);
-                      }}
-                    >
-                      Chiudi
-                    </button>
-                  </span>
-                </div>
-                <div className="panel-pad section-stack">
-                  {previewError !== null ? (
-                    <div className="banner banner-error" role="alert">
-                      <span aria-hidden="true">⚠</span>
-                      <span>{previewError}</span>
-                    </div>
-                  ) : null}
-                  {selectedPreviewUnit !== null ? (
-                    <>
-                      <div className="grid grid-cols-3 gap-2">
-                        <div className="stat-tile">
-                          <div className="stat-label">Unità</div>
-                          <div className="truncate text-xs text-ink-soft">
-                            {selectedPreviewUnit.title}
-                          </div>
-                        </div>
-                        <div className="stat-tile">
-                          <div className="stat-label">Chunk</div>
-                          <div className="stat-value">{formatNumber(selectedPreviewUnit.chunks)}</div>
-                        </div>
-                        <div className="stat-tile">
-                          <div className="stat-label">Da tradurre</div>
-                          <div className="stat-value">
-                            {formatNumber(selectedPreviewUnit.untranslated)}
-                          </div>
-                        </div>
-                      </div>
-                      <pre className="max-h-96 overflow-auto rounded-md border border-line bg-canvas p-3 font-mono text-[0.7rem] whitespace-pre-wrap text-ink-soft">
-                        {selectedPreviewUnit.markdown}
-                      </pre>
-                      <details>
-                        <summary className="cursor-pointer text-xs text-muted">
-                          metadata.yaml
-                        </summary>
-                        <pre className="mt-2 max-h-48 overflow-auto rounded-md border border-line bg-canvas p-3 font-mono text-[0.7rem] whitespace-pre-wrap text-ink-soft">
-                          {preview.metadata_yaml}
-                        </pre>
-                      </details>
-                    </>
-                  ) : null}
-                </div>
-              </div>
-            ) : previewError !== null ? (
-              <div className="banner banner-error" role="alert">
-                <span aria-hidden="true">⚠</span>
-                <span>{previewError}</span>
-              </div>
-            ) : null}
+            <ExportPreviewPanel
+              preview={preview}
+              error={previewError}
+              onClose={() => {
+                setPreview(null);
+              }}
+            />
 
-            <div className="panel">
-              <div className="panel-head">
-                <span className="panel-title">Unità da esportare</span>
-                <span className="mono-chip">{formatNumber(chapters.length)} capitoli</span>
-              </div>
+            <ExportUnitsPanel chapters={chapters} />
 
-              <div className="table-scroll" style={{ maxHeight: "22rem" }}>
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th style={{ width: "4.5rem" }} className="num">
-                        Ordine
-                      </th>
-                      <th style={{ minWidth: "14rem" }}>Capitolo</th>
-                      <th style={{ width: "5rem" }}>Livello</th>
-                      <th style={{ width: "9rem" }} className="num">
-                        Blocchi
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {chapters.map((chapter) => (
-                      <tr key={chapter.id}>
-                        <td className="num">{formatNumber(chapter.order_index)}</td>
-                        <td>
-                          <span className="block truncate text-ink-soft" title={chapter.title}>
-                            {chapter.title}
-                          </span>
-                          <span className="font-mono text-[0.68rem] text-faint">{chapter.id}</span>
-                        </td>
-                        <td>
-                          <span className="mono-chip">H{formatNumber(chapter.level)}</span>
-                        </td>
-                        <td className="num font-mono text-[0.72rem] text-muted">
-                          {`${formatNumber(chapter.block_first)} – ${formatNumber(chapter.block_last)}`}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-
-              <div className="panel-pad">
-                <p className="text-[0.72rem] text-faint">
-                  La build impagina tutte le unità in un solo file; scegli un capitolo per generarne
-                  una versione autonoma. I capitoli senza modifiche vengono riutilizzati: il build
-                  salta Pandoc quando nulla è cambiato.
-                </p>
-              </div>
-            </div>
-
-            {untranslatedWarning !== null ? (
-              <div className="banner banner-warn" role="alert">
-                <span aria-hidden="true">⚠</span>
-                <div className="flex flex-col gap-2">
-                  <span>
-                    {formatNumber(untranslatedWarning.missing)} parti su{" "}
-                    {formatNumber(untranslatedWarning.total)} non sono tradotte: nel file
-                    uscirebbero nella lingua originale.
-                  </span>
-                  <div className="flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      className="btn"
-                      onClick={() => {
-                        void handleBuild(true);
-                      }}
-                    >
-                      Esporta comunque
-                    </button>
-                    <button
-                      type="button"
-                      className="btn"
-                      onClick={() => {
-                        setUntranslatedWarning(null);
-                      }}
-                    >
-                      Annulla
-                    </button>
-                  </div>
-                </div>
-              </div>
-            ) : null}
-
-            {buildError !== null ? (
-              <div className="banner banner-error" role="alert">
-                <span aria-hidden="true">⚠</span>
-                <span>{buildError}</span>
-              </div>
-            ) : null}
-
-            {building ? (
-              <div className="panel panel-pad">
-                <p className="flex items-center gap-2 text-xs text-muted">
-                  <span className="spinner" aria-hidden="true" />
-                  {progress === null ? "Avvio della build…" : progressLabel(progress)}
-                </p>
-              </div>
-            ) : progress !== null && result === null ? (
-              <div className="panel panel-pad">
-                <p className="text-xs text-muted">{progressLabel(progress)}</p>
-              </div>
-            ) : null}
+            <BuildProgressPanel
+              warning={untranslatedWarning}
+              buildError={buildError}
+              building={building}
+              progress={progress}
+              hasResult={result !== null}
+              onExportAnyway={() => {
+                void handleBuild(true);
+              }}
+              onDismissWarning={() => {
+                setUntranslatedWarning(null);
+              }}
+            />
 
             {result !== null ? (
-              <div className="panel">
-                <div className="panel-head">
-                  <span className="panel-title">Risultato</span>
-                  <span className="flex items-center gap-2">
-                    <StatusBadge status={result.from_cache ? "cached" : "done"} />
-                    <span className="mono-chip">{formatDuration(result.duration_ms)}</span>
-                  </span>
-                </div>
-
-                <div className="panel-pad section-stack">
-                  <div className={result.from_cache ? "banner" : "banner banner-ok"} role="status">
-                    <span aria-hidden="true">{result.from_cache ? "↺" : "✓"}</span>
-                    <span>
-                      {result.from_cache
-                        ? "Nessuna modifica: build saltata, output riutilizzato"
-                        : "File generato"}
-                      {` (${countLabel(result.units, "unità", "unità")}): `}
-                      <span className="font-mono text-ink">{result.output_path}</span>
-                    </span>
-                  </div>
-
-                  {!result.from_cache ? (
-                    <p className="field-hint">
-                      Capitoli ricostruiti: {formatNumber(result.changed_units.length)} · riutilizzati:{" "}
-                      {formatNumber(result.reused_units)}
-                    </p>
-                  ) : null}
-
-                  {openError !== null ? (
-                    <div className="banner banner-error" role="alert">
-                      <span aria-hidden="true">⚠</span>
-                      <span>{openError}</span>
-                    </div>
-                  ) : null}
-
-                  <div className="flex flex-wrap items-center gap-2">
-                    <button
-                      type="button"
-                      className="btn btn-primary"
-                      onClick={() => {
-                        void handleOpen(result.output_path);
-                      }}
-                    >
-                      Apri output
-                    </button>
-                    <button
-                      type="button"
-                      className="btn"
-                      onClick={() => {
-                        void handleOpen(parentDirectory(result.output_path));
-                      }}
-                    >
-                      Apri cartella
-                    </button>
-                    <span className="mono-chip" title={result.output_path}>
-                      {basename(result.output_path)}
-                    </span>
-                  </div>
-
-                  <div>
-                    <div className="stat-label mb-1">Log di Pandoc</div>
-                    <pre className="max-h-64 overflow-auto rounded-md border border-line bg-canvas p-3 font-mono text-[0.7rem] whitespace-pre-wrap text-ink-soft">
-                      {result.log.length === 0 ? "— nessun output —" : result.log}
-                    </pre>
-                  </div>
-                </div>
-              </div>
+              <ExportResultPanel
+                result={result}
+                openError={openError}
+                onOpen={(path) => {
+                  void handleOpen(path);
+                }}
+              />
             ) : null}
 
-            <div className="panel">
-              <div className="panel-head">
-                <span className="panel-title">Cronologia build</span>
-                <span className="mono-chip">{formatNumber(history.length)}</span>
-              </div>
-              {history.length === 0 ? (
-                <div className="panel-pad">
-                  <p className="field-hint">Nessuna build registrata per questo progetto.</p>
-                </div>
-              ) : (
-                <div className="table-scroll" style={{ maxHeight: "18rem" }}>
-                  <table className="data-table">
-                    <thead>
-                      <tr>
-                        <th>Quando</th>
-                        <th>Formato</th>
-                        <th>Ambito</th>
-                        <th className="num">Unità</th>
-                        <th>Esito</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {history.map((record) => (
-                        <tr key={record.id}>
-                          <td className="font-mono text-[0.7rem] text-muted">
-                            {timestampLabel(record.built_at)}
-                          </td>
-                          <td>
-                            <span className="mono-chip">{record.output_format}</span>
-                          </td>
-                          <td className="text-xs text-ink-soft">
-                            {record.chapter_id === null ? "libro" : record.chapter_id}
-                          </td>
-                          <td className="num font-mono text-[0.72rem] text-muted">
-                            {formatNumber(record.units)}
-                          </td>
-                          <td>
-                            {record.from_cache ? (
-                              <span className="badge badge-neutral">saltata</span>
-                            ) : (
-                              <span className="badge badge-success">
-                                {formatNumber(record.changed_units.length)} modificate
-                              </span>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
+            <ExportHistoryPanel history={history} />
           </div>
 
           <div className="section-stack">
             <ExportChecklist projectId={project.id} onNavigate={onNavigate} />
 
-            <div className="panel">
-              <div className="panel-head">
-                <span className="panel-title">Impostazioni di build</span>
-              </div>
-
-              <div className="panel-pad section-stack">
-                <FormField
-                  label="Formato di output"
-                  htmlFor="export-format"
-                  hint={formatSpec?.note ?? undefined}
-                >
-                  <select
-                    id="export-format"
-                    className="select"
-                    value={format}
-                    onChange={(event) => {
-                      const matched = FORMATS.find((entry) => entry.value === event.target.value);
-                      if (matched !== undefined) {
-                        setFormat(matched.value);
-                      }
-                    }}
-                  >
-                    {FORMATS.map((entry) => (
-                      <option key={entry.value} value={entry.value}>
-                        {entry.label}
-                      </option>
-                    ))}
-                  </select>
-                </FormField>
-
-                <FormField label="Ambito" htmlFor="export-scope">
-                  <select
-                    id="export-scope"
-                    className="select"
-                    value={chapterScope}
-                    onChange={(event) => {
-                      setChapterScope(event.target.value);
-                    }}
-                  >
-                    <option value="all">Tutto il libro</option>
-                    {chapters.map((chapter) => (
-                      <option key={chapter.id} value={chapter.id}>
-                        Solo: {chapter.title}
-                      </option>
-                    ))}
-                  </select>
-                </FormField>
-
-                <FormField
-                  label="Template Pandoc"
-                  htmlFor="export-template"
-                  hint={
-                    formatSpec === undefined || formatSpec.templateHint.length === 0
-                      ? "Non applicabile a questo formato: lascia vuoto."
-                      : `Vuoto = default dal pacchetto (${formatSpec.templateHint}). Un percorso personalizzato deve essere assoluto.`
-                  }
-                >
-                  <input
-                    id="export-template"
-                    className="input"
-                    value={template}
-                    spellCheck={false}
-                    onChange={(event) => {
-                      setTemplate(event.target.value);
-                    }}
-                    placeholder="automatico"
-                  />
-                </FormField>
-
-                <FormField
-                  label="Foglio di stile CSS"
-                  htmlFor="export-css"
-                  hint={
-                    formatSpec === undefined || formatSpec.cssHint.length === 0
-                      ? "Ignorato dai formati non HTML."
-                      : `Vuoto = default dal pacchetto (${formatSpec.cssHint}).`
-                  }
-                >
-                  <input
-                    id="export-css"
-                    className="input"
-                    value={css}
-                    spellCheck={false}
-                    disabled={formatSpec === undefined || formatSpec.cssHint.length === 0}
-                    onChange={(event) => {
-                      setCss(event.target.value);
-                    }}
-                    placeholder="automatico"
-                  />
-                </FormField>
-
-                <FormField
-                  label="Percorso di destinazione"
-                  htmlFor="export-output"
-                  hint="Vuoto: il file viene scritto nella cartella di output del progetto."
-                >
-                  <input
-                    id="export-output"
-                    className="input"
-                    value={outputPath}
-                    spellCheck={false}
-                    onChange={(event) => {
-                      setOutputPath(event.target.value);
-                    }}
-                    placeholder="/home/utente/output/libro.epub"
-                  />
-                </FormField>
-
-                <label className="flex items-center gap-2 text-xs text-muted">
-                  <input
-                    type="checkbox"
-                    checked={toc}
-                    onChange={(event) => {
-                      setToc(event.target.checked);
-                    }}
-                  />
-                  Indice (table of contents)
-                </label>
-
-                <label className="flex items-center gap-2 text-xs text-muted">
-                  <input
-                    type="checkbox"
-                    checked={force}
-                    onChange={(event) => {
-                      setForce(event.target.checked);
-                    }}
-                  />
-                  Rigenera anche se nulla è cambiato
-                </label>
-
-                <button
-                  type="button"
-                  className="btn btn-primary"
-                  disabled={building}
-                  onClick={() => {
-                    void handleBuild();
-                  }}
-                >
-                  {building ? <span className="spinner" aria-hidden="true" /> : null}
-                  Genera output
-                </button>
-              </div>
-            </div>
-
-            <div className="panel panel-pad">
-              <div className="panel-title mb-2">Cosa fa la build</div>
-              <ul className="list-disc space-y-1 pl-4 text-xs text-muted">
-                <li>
-                  Il documento viene diviso in unità per capitolo e <span className="mono-chip">metadata.yaml</span>{" "}
-                  è composto dai metadati del progetto e del documento.
-                </li>
-                <li>
-                  Template, CSS e filtri Lua (<span className="mono-chip">footnotes</span>,{" "}
-                  <span className="mono-chip">tables</span> e per EPUB{" "}
-                  <span className="mono-chip">epub_cleanup</span>) arrivano dal pacchetto{" "}
-                  <span className="mono-chip">pandoc/</span>; un percorso scelto a mano li sostituisce.
-                </li>
-                <li>
-                  Una build senza modifiche viene saltata e registrata come tale: la cronologia dice
-                  cosa è stato ricostruito o riutilizzato.
-                </li>
-              </ul>
-            </div>
+            <BuildSettingsPanel
+              format={format}
+              onFormat={setFormat}
+              scope={chapterScope}
+              onScope={setChapterScope}
+              chapters={chapters}
+              template={template}
+              onTemplate={setTemplate}
+              css={css}
+              onCss={setCss}
+              outputPath={outputPath}
+              onOutputPath={setOutputPath}
+              toc={toc}
+              onToc={setToc}
+              force={force}
+              onForce={setForce}
+              busy={building}
+              onBuild={() => {
+                void handleBuild();
+              }}
+            />
           </div>
         </div>
       )}
-    </div>
-  );
-}
-
-interface ChecklistCounts {
-  total: number;
-  untranslated: number;
-  failed: number;
-  openDecisions: number;
-  openFindings: number;
-}
-
-/**
- * "Prima di esportare": what the book would carry if it were built now. Untranslated parts would
- * come out in the source language (the build asks for confirmation), open decisions and findings
- * only mean the text is not reviewed yet.
- */
-function ExportChecklist({
-  projectId,
-  onNavigate,
-}: {
-  projectId: string;
-  onNavigate: (view: ViewId) => void;
-}) {
-  const [counts, setCounts] = useState<ChecklistCounts | null>(null);
-
-  const load = useCallback(async () => {
-    try {
-      const [chunks, decisions, findings] = await Promise.all([
-        chunkList({ project_id: projectId }),
-        suggestionList({ project_id: projectId, status: "pending" }),
-        qaReport({ project_id: projectId, status: "open" }),
-      ]);
-      setCounts({
-        total: chunks.length,
-        untranslated: chunks.filter((chunk) => !chunkTranslated(chunk)).length,
-        failed: chunks.filter((chunk) => chunk.status === "failed").length,
-        openDecisions: decisions.length,
-        openFindings: findings.length,
-      });
-    } catch {
-      // The checklist is advisory: without it the build still guards untranslated parts.
-      setCounts(null);
-    }
-  }, [projectId]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  useEffect(() => onJobProgress(() => void load()), [load]);
-
-  if (counts === null) {
-    return null;
-  }
-
-  const items: Array<{ tone: "warn" | "info" | "ok"; text: string; view?: ViewId; action?: string }> = [
-    counts.untranslated > 0
-      ? {
-          tone: "warn",
-          text: `${formatNumber(counts.untranslated)} parti su ${formatNumber(counts.total)} non sono tradotte: uscirebbero nella lingua originale.`,
-          view: "translate",
-          action: "Vai alla traduzione",
-        }
-      : { tone: "ok", text: "Tutte le parti sono tradotte." },
-    ...(counts.failed > 0
-      ? [
-          {
-            tone: "warn" as const,
-            text: `${formatNumber(counts.failed)} parti non sono riuscite: «Riprova falliti» le rimette in coda.`,
-            view: "translate" as const,
-            action: "Riprova",
-          },
-        ]
-      : []),
-    counts.openDecisions > 0
-      ? {
-          tone: "info",
-          text: `${formatNumber(counts.openDecisions)} proposte di revisione aperte: non bloccano, il testo resta com'è.`,
-          view: "review",
-          action: "Rivedi",
-        }
-      : { tone: "ok", text: "Nessuna proposta di revisione aperta." },
-    ...(counts.openFindings > 0
-      ? [
-          {
-            tone: "info" as const,
-            text: `${formatNumber(counts.openFindings)} controlli QA aperti.`,
-            view: "review" as const,
-            action: "Vedi",
-          },
-        ]
-      : []),
-  ];
-
-  return (
-    <div className="panel">
-      <div className="panel-head">
-        <span className="panel-title">Prima di esportare</span>
-      </div>
-      <ul className="panel-pad flex flex-col gap-2">
-        {items.map((item) => (
-          <li key={item.text} className={`banner ${item.tone === "warn" ? "banner-warn" : item.tone === "ok" ? "banner-ok" : ""}`}>
-            <span aria-hidden="true">{item.tone === "warn" ? "!" : item.tone === "ok" ? "✓" : "i"}</span>
-            <span className="flex-1">{item.text}</span>
-            {item.view === undefined ? null : (
-              <button
-                type="button"
-                className="btn btn-sm"
-                onClick={() => {
-                  if (item.view !== undefined) {
-                    onNavigate(item.view);
-                  }
-                }}
-              >
-                {item.action}
-              </button>
-            )}
-          </li>
-        ))}
-      </ul>
     </div>
   );
 }
