@@ -92,25 +92,8 @@ export interface Ack {
 // --- projects ------------------------------------------------------------------------------
 
 /** Row of `project` (`db::models::Project`); `settings_json` is the raw column. */
-export interface Project {
-  id: string;
-  name: string;
-  source_path: string;
-  source_hash: string;
-  source_format: string;
-  source_lang: string | null;
-  target_lang: string;
-  doc_title: string | null;
-  doc_author: string | null;
-  /** Series the book belongs to; `null` for a standalone book (PLAN.md §9.5). */
-  series_id: string | null;
-  /** Position inside the series, for ordering. */
-  series_order: number | null;
-  prompts_snapshot_dir: string | null;
-  settings_json: string;
-  created_at: string;
-  updated_at: string;
-}
+import type { Project } from "./generated/Project.ts";
+export type { Project };
 
 /** Request body of `project_create` (`commands::CreateProjectRequest`). */
 export interface CreateProjectRequest {
@@ -128,19 +111,8 @@ export interface CreateProjectRequest {
 }
 
 /** Row of `chapter` (`db::models::Chapter`). */
-export interface Chapter {
-  id: string;
-  document_id: string;
-  order_index: number;
-  title: string;
-  level: number;
-  block_first: number;
-  block_last: number;
-  summary: string | null;
-  summary_model: string | null;
-  summary_hash: string | null;
-  status: string;
-}
+import type { Chapter } from "./generated/Chapter.ts";
+export type { Chapter };
 
 /** Result of `project_get` (`commands::project::ProjectDetail`). */
 export interface ProjectDetail {
@@ -172,18 +144,8 @@ export interface ImportBundleRequest {
 // --- LLM endpoints -------------------------------------------------------------------------
 
 /** Row of `llm_endpoint` (`db::models::LlmEndpoint`); `props_json` is the raw `/props` body. */
-export interface Endpoint {
-  id: string;
-  name: string;
-  base_url: string;
-  /** Name of the secret in the OS keyring — never the secret itself (`PLAN.md` §5). */
-  api_key_ref: string | null;
-  max_concurrency: number | null;
-  notes: string | null;
-  last_health_at: string | null;
-  last_health_ok: boolean | null;
-  props_json: string | null;
-}
+import type { LlmEndpoint as Endpoint } from "./generated/LlmEndpoint.ts";
+export type { Endpoint };
 
 /** Request body of `endpoint_upsert` (`commands::endpoint::EndpointUpsert`); `id` absent = create. */
 export interface EndpointUpsert {
@@ -234,14 +196,8 @@ export interface EndpointTestResult {
 // --- role bindings -------------------------------------------------------------------------
 
 /** Row of `role_binding` (`db::models::RoleBinding`); `params_json` is the raw column. */
-export interface RoleBinding {
-  id: string;
-  endpoint_id: string;
-  role: string;
-  model: string;
-  params_json: string;
-  priority: number;
-}
+import type { RoleBinding } from "./generated/RoleBinding.ts";
+export type { RoleBinding };
 
 /** Request body of `role_binding_set` (`commands::role_binding::RoleBindingSet`). */
 export interface RoleBindingSet {
@@ -336,19 +292,8 @@ export interface BookProfile {
 }
 
 /** Row of `glossary_term` (`db::models::GlossaryTerm`). */
-export interface GlossaryTerm {
-  id: string;
-  project_id: string;
-  source_lang: string | null;
-  target_lang: string | null;
-  source: string;
-  target: string;
-  note: string | null;
-  kind: string;
-  origin: string;
-  revision: number;
-  status: string;
-}
+import type { GlossaryTerm } from "./generated/GlossaryTerm.ts";
+export type { GlossaryTerm };
 
 /** Result of `recon_get` and `recon_confirm` (`pipeline::recon::ReconSnapshot`). */
 export interface ReconSnapshot {
@@ -426,37 +371,12 @@ export interface GlossaryUpsertRequest {
 // --- review and QA (PLAN.md §11.4) ---------------------------------------------------------
 
 /** Row of `suggestion` (`db::models::Suggestion`); `original`/`proposed` are raw strings. */
-export interface Suggestion {
-  id: string;
-  chunk_id: string;
-  /** `editor` | `proofreader`. */
-  pass: string;
-  block_id: string | null;
-  field: string | null;
-  original: string | null;
-  proposed: string | null;
-  reason: string | null;
-  severity: string | null;
-  quote: string | null;
-  /** `pending` | `accepted` | `rejected` | `superseded`. */
-  status: string;
-  created_at: string;
-  /** When the user accepted or rejected it; `null` while the proposal is pending. */
-  decided_at: string | null;
-}
+import type { Suggestion } from "./generated/Suggestion.ts";
+export type { Suggestion };
 
 /** Row of `qa_finding` (`db::models::QaFinding`); `details_json` is the raw column. */
-export interface QaFinding {
-  id: string;
-  project_id: string;
-  chunk_id: string | null;
-  block_id: string | null;
-  kind: string;
-  severity: string;
-  details_json: string;
-  status: string;
-  created_at: string;
-}
+import type { QaFinding } from "./generated/QaFinding.ts";
+export type { QaFinding };
 
 /** Request body of `review_start` (`commands::review::ReviewStartRequest`). */
 export interface ReviewStartRequest {
@@ -507,23 +427,8 @@ export interface QaReportRequest {
 // --- jobs ----------------------------------------------------------------------------------
 
 /** Row of `job` (`db::models::Job`); `payload_json` is the raw column. */
-export interface Job {
-  id: string;
-  project_id: string;
-  kind: string;
-  payload_json: string;
-  priority: number;
-  state: string;
-  attempts: number;
-  max_attempts: number;
-  lease_owner: string | null;
-  lease_expires_at: string | null;
-  run_after: string | null;
-  last_error: string | null;
-  created_at: string;
-  started_at: string | null;
-  finished_at: string | null;
-}
+import type { Job } from "./generated/Job.ts";
+export type { Job };
 
 /** Request body of `job_list` (`commands::jobs::JobListRequest`). */
 export interface JobListRequest {
@@ -548,26 +453,8 @@ export interface JobCancelResult {
 // --- chunks and blocks ---------------------------------------------------------------------
 
 /** Row of `chunk` (`db::models::Chunk`); the `*_json` columns are raw strings. */
-export interface Chunk {
-  id: string;
-  document_id: string;
-  chapter_id: string | null;
-  order_index: number;
-  block_ids_json: string;
-  source_md: string;
-  token_estimate: number;
-  context_json: string;
-  flags_json: string;
-  status: string;
-  prompt_hash: string | null;
-  model_id: string | null;
-  params_json: string | null;
-  context_manifest_json: string | null;
-  target_md: string | null;
-  error: string | null;
-  created_at: string;
-  updated_at: string;
-}
+import type { Chunk } from "./generated/Chunk.ts";
+export type { Chunk };
 
 /** Request body of `chunk_list` (`commands::chunks::ChunkListRequest`). */
 export interface ChunkListRequest {
@@ -576,55 +463,16 @@ export interface ChunkListRequest {
 }
 
 /** Row of `block` (`db::models::Block`); `attrs_json` is the raw column. */
-export interface Block {
-  id: string;
-  document_id: string;
-  chapter_id: string | null;
-  order_index: number;
-  kind: string;
-  level: number;
-  source_md: string;
-  source_text: string;
-  translatable: boolean;
-  attrs_json: string;
-  content_hash: string;
-}
+import type { Block } from "./generated/Block.ts";
+export type { Block };
 
 /** Row of `block_translation` (`db::models::BlockTranslation`). */
-export interface BlockTranslation {
-  block_id: string;
-  chunk_id: string;
-  text_md: string;
-  placeholders_ok: boolean;
-  origin: string;
-  edited_by_user: boolean;
-  updated_at: string;
-}
+import type { BlockTranslation } from "./generated/BlockTranslation.ts";
+export type { BlockTranslation };
 
 /** Row of `llm_call` (`db::models::LlmCall`); `params_json` is the raw column. */
-export interface LlmCall {
-  id: string;
-  job_id: string | null;
-  chunk_id: string | null;
-  role: string;
-  endpoint_id: string | null;
-  model: string;
-  params_json: string;
-  seed: number | null;
-  prompt_hash: string;
-  prompt_text: string | null;
-  prompt_compressed: boolean | null;
-  response_text: string | null;
-  /** Thinking of a reasoning model, streamed separately from the answer. */
-  reasoning_text: string | null;
-  finish_reason: string | null;
-  prompt_tokens: number | null;
-  completion_tokens: number | null;
-  latency_ms: number | null;
-  attempt: number;
-  error: string | null;
-  created_at: string;
-}
+import type { LlmCall } from "./generated/LlmCall.ts";
+export type { LlmCall };
 
 /** Result of `chunk_get` (`commands::chunks::ChunkDetail`). */
 export interface ChunkDetail {
@@ -837,46 +685,20 @@ export interface DiagnosticsOutcome {
 // --- series (PLAN.md §9.5) ------------------------------------------------------------------
 
 /** Row of `series` (`db::models::Series`); the language pair is shared by its books. */
-export interface Series {
-  id: string;
-  name: string;
-  source_lang: string | null;
-  target_lang: string | null;
-  settings_json: string;
-  created_at: string;
-  updated_at: string;
-}
+import type { Series } from "./generated/Series.ts";
+export type { Series };
 
 /** Row of `series_glossary_term` (`db::models::SeriesGlossaryTerm`). */
-export interface SeriesGlossaryTerm {
-  id: string;
-  series_id: string;
-  source_lang: string | null;
-  target_lang: string | null;
-  source: string;
-  target: string;
-  note: string | null;
-  kind: string;
-  origin: string;
-  revision: number;
-  status: string;
-}
+import type { SeriesGlossaryTerm } from "./generated/SeriesGlossaryTerm.ts";
+export type { SeriesGlossaryTerm };
 
 /** Row of `series_glossary_variant` (`db::models::SeriesGlossaryVariant`). */
-export interface SeriesGlossaryVariant {
-  id: string;
-  term_id: string;
-  text: string;
-}
+import type { SeriesGlossaryVariant } from "./generated/SeriesGlossaryVariant.ts";
+export type { SeriesGlossaryVariant };
 
 /** Row of `series_memory` (`db::models::SeriesMemory`). */
-export interface SeriesMemory {
-  series_id: string;
-  key: string;
-  value: string;
-  revision: number;
-  updated_at: string;
-}
+import type { SeriesMemory } from "./generated/SeriesMemory.ts";
+export type { SeriesMemory };
 
 /** Result of `series_get` (`commands::series::SeriesDetail`). */
 export interface SeriesDetail {
