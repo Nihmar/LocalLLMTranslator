@@ -34,25 +34,61 @@ pub struct TranslateOutcome {
 ///
 /// Chunk lifecycle: the chunk is marked `running` as soon as its translate job
 /// starts, moves to `done`/`needs_review` at the end (see `finish_chunk`) and to
-/// `failed` when the attempt errors out or leaves the chunk with no usable text. A chunk left `running` by a crash is
+/// `failed` when the attempt errors out with no translation on record. A refused
+/// answer (or a transient error) over a chunk that already holds a validated
+/// `target_md` keeps its previous status instead. A chunk left `running` by a crash is
 /// returned to `pending` at boot (`repo::reset_running_chunks`).
 pub async fn run_translate_chunk(
     deps: &PipelineDeps,
     job_id: Option<&str>,
     chunk_id: &str,
 ) -> Result<TranslateOutcome> {
+    let previous_status = repo::get_chunk(&deps.pool, chunk_id)
+        .await?
+        .map(|chunk| chunk.status);
     repo::set_chunk_status(&deps.pool, chunk_id, "running").await?;
     match translate_chunk_inner(deps, job_id, chunk_id).await {
         Ok(outcome) => Ok(outcome),
         Err(error) => {
-            // Surface the failed attempt; the job may still be retried, in which
-            // case the next run resets the chunk to `running`.
-            tracing::warn!(chunk_id, %error, "chunk translation failed");
-            if let Err(mark_error) = repo::set_chunk_status(&deps.pool, chunk_id, "failed").await {
-                tracing::warn!(chunk_id, %mark_error, "could not mark chunk failed");
+            // A transient failure must not destroy a validated translation: when the
+            // chunk already has target text, restore the status it had instead of
+            // marking it `failed` (which means "no translation"). The job still
+            // fails, so the worker can retry it.
+            let has_translation =
+                repo::get_chunk(&deps.pool, chunk_id)
+                    .await?
+                    .is_some_and(|chunk| {
+                        chunk
+                            .target_md
+                            .as_deref()
+                            .is_some_and(|text| !text.trim().is_empty())
+                    });
+            let restored = status_after_error(previous_status.as_deref(), has_translation);
+            tracing::warn!(chunk_id, status = restored, %error, "chunk translation failed");
+            if let Err(mark_error) = repo::set_chunk_status(&deps.pool, chunk_id, restored).await {
+                tracing::warn!(chunk_id, %mark_error, "could not record the failed attempt");
             }
             Err(error)
         }
+    }
+}
+
+/// Status a chunk is left in when its attempt errors out.
+///
+/// `failed` is the honest answer only when there is no usable translation, because the
+/// rest of the app reads it as "not translated, retry me". A chunk that already carries a
+/// validated `target_md` keeps its previous status, so the transient failure does not make
+/// progress, export or the UI treat it as untranslated.
+fn status_after_error(previous_status: Option<&str>, has_translation: bool) -> &'static str {
+    if !has_translation {
+        return "failed";
+    }
+    match previous_status {
+        Some("done") => "done",
+        Some("needs_review") => "needs_review",
+        // `running`/`pending`/`failed` with a leftover translation: flag it rather
+        // than pretend it is finished or untranslated.
+        _ => "needs_review",
     }
 }
 
@@ -962,6 +998,22 @@ mod tests {
         );
         assert_eq!(describe_chunk_flags("not json"), "");
         assert_eq!(describe_chunk_flags("[]"), "");
+    }
+
+    #[test]
+    fn a_transient_error_keeps_a_translated_chunk_status() {
+        // No translation: the attempt is a real failure.
+        assert_eq!(status_after_error(Some("pending"), false), "failed");
+        assert_eq!(status_after_error(Some("done"), false), "failed");
+        // A validated translation survives a transient error.
+        assert_eq!(status_after_error(Some("done"), true), "done");
+        assert_eq!(
+            status_after_error(Some("needs_review"), true),
+            "needs_review"
+        );
+        // A leftover translation with an ambiguous previous state is flagged.
+        assert_eq!(status_after_error(Some("running"), true), "needs_review");
+        assert_eq!(status_after_error(None, true), "needs_review");
     }
 
     #[test]
