@@ -1,7 +1,17 @@
 # LocalLLMTranslator — Architecture and Implementation Plan
 
-> Status: **M0–M7 complete.** This document is the source of truth for the architecture; the code
-> follows it milestone by milestone.
+> This document is the source of truth for the architecture; the code follows it. Status per
+> pipeline stage (2026-10-09, after the stabilization epic, issue #15):
+>
+> | Stage | State |
+> |---|---|
+> | Import (EPUB, Markdown, PDF) | works; language guessed from the text |
+> | Translate | works; a refused answer with nothing to keep fails the chunk instead of hiding it |
+> | Memory (profile, summaries, glossary) | works; candidates come from the source, only approved terms reach the prompt |
+> | Review | works; span-level proposals, markup guard at generation and acceptance |
+> | Export | works; refuses to mix untranslated chunks without confirmation |
+> | Series | works; UI component pending a refactor (#10) |
+> | Web app | not started (#17) |
 
 ---
 
@@ -1030,69 +1040,200 @@ because the same question — what is running, and can I stop it — is asked fr
 
 ## 12. IPC contract
 
+Frozen: the sidecar methods and the Tauri commands and events below change only together with
+this section, which is their single specification (`AGENTS.md` points here).
+
 ### 12.1 Sidecar (NDJSON over stdio, JSON-RPC 2.0)
 
-Requests `{"jsonrpc":"2.0","id":N,"method":"...","params":{...}}`; responses `result` or
-`error`; server→client notifications for progress. Planned methods:
+One request per line, one response per line. Progressive numeric `id`.
 
-| Method | Return |
-|---|---|
-| `ping` | `{pong, version, python, platform}` |
-| `detect_format` | `{format, backends[], metadata{title?, author?, language?}}` — the language is guessed from a text sample (function words, `langdetect.py`) because declared metadata is often wrong; the hints only pre-fill the new-book form |
-| `ingest` | `{markdown_path, metadata, chapters[], warnings[], assets_dir, assets[]}` |
-| `parse_document` | `{blocks[], chapters[]}` |
-| `build_chunks` | `{chunks[]}` |
-| `prepare_text` | `{llm_text, placeholders[]}` |
-| `reinject` | `{blocks_md[], placeholders_ok, missing[], duplicated[]}` |
-| `qa_check` | `{findings[]}` |
+```
+→ {"jsonrpc":"2.0","id":1,"method":"ping","params":{}}
+← {"jsonrpc":"2.0","id":1,"result":{"pong":true,"version":"0.1.0","python":"3.12.13"}}
+← {"jsonrpc":"2.0","method":"progress","params":{"job_id":"...","done":12,"total":340}}
+```
+
+Errors: `{"jsonrpc":"2.0","id":N,"error":{"code":-32602,"message":"...","data":{...}}}`.
+Codes: `-32700` parse, `-32600` invalid request, `-32601` method not found,
+`-32602` invalid params, `-32603` internal, `1001` ingestion failure, `1002` pandoc failure,
+`1003` missing dependency.
+
+| Method | Params | Result |
+|---|---|---|
+| `ping` | `{}` | `{pong, version, python, platform}` |
+| `detect_format` | `{path}` | `{format: "epub"\|"pdf"\|"markdown", backends: [str], metadata{title?, author?, language?}}` |
+| `ingest` | `{path, work_dir, pdf_backend?}` | `{markdown_path, metadata{}, chapters[{title,level,order}], warnings[str], assets_dir?, assets[]}` |
+| `parse_document` | `{markdown_path}` | `{blocks[Block], chapters[Chapter]}` |
+| `build_chunks` | `{blocks[], budget_tokens}` | `{chunks[Chunk]}` |
+| `prepare_text` | `{block_ids?, text}` | `{llm_text, placeholders[[n,literal]], used_blocks[int]}` |
+| `reinject` | `{text, placeholders, expected_blocks}` | `{blocks_md[], placeholders_ok, missing[int], duplicated[int], block_count_ok}` |
+| `qa_check` | `{source_text, target_text, glossary{}, placeholders[[n,literal]]}` | `{findings[Finding]}` |
 | `pandoc_build` | `{units[{path,title}], metadata{}, output_path, output_format, template?, css?, resource_path[], toc?, lua_filters?, top_level_division?}` | `{output_path, log, duration_ms}` |
-| `estimate_tokens` | `{counts[]}` (heuristic fallback, used if `/tokenize` is not available) |
+| `estimate_tokens` | `{texts[]}` | `{counts[int]}` |
 
-The sidecar is **stateless** and does not touch the DB: every method is a pure function. This is
-what makes it safe to restart it and re-send the in-flight requests.
+`Block` = `{id, chapter_id, order, kind, level, source_md, source_text, translatable, attrs{}, content_hash}`
+`Chunk` = `{id, chapter_id, order, block_ids[], source_md, token_estimate, context_carrier{}, flags[]}`
+`Chapter` = `{id, order, title, level, block_first, block_last}`
+`Finding` = `{kind, severity, block_id?, details{}}`
+
+Block `kind` values:
+`heading|para|list|blockquote|table|code|figure|footnote_def|frontmatter|hr|html`.
+
+`ingest` extracts embedded media (images) into `<work_dir>/assets/`, rewrites the markdown to
+reference them as `assets/<name>` relative to `document.md`, and reports `assets_dir` (absolute,
+`null` when there is none) plus the rewritten hrefs in `assets`. `pandoc_build` receives
+`resource_path` so the writer can resolve those hrefs.
+
+The sidecar is **stateless**: no cache between calls, no DB, no temporary files beyond those
+declared in `work_dir`. Every method must be repeatable with no side effects — that is what
+makes it safe to restart the sidecar and re-send in-flight requests.
+
+`detect_format` guesses the language from a text sample (function words, `langdetect.py`)
+because declared metadata is often wrong; its hints only pre-fill the new-book form.
+`estimate_tokens` is the heuristic fallback when the endpoint has no `/tokenize`.
 
 ### 12.2 Tauri (commands + events)
 
-- Commands: `project_*`, `endpoint_*`, `role_binding_list`, `role_binding_set`, `role_binding_delete`,
-  `document_inspect`, `ingest_start`, `translation_start/pause/resume/cancel`,
-  `recon_start`, `recon_get`, `recon_confirm`, `project_set_dialogue_style`, `glossary_list`, `glossary_upsert`, `glossary_delete`,
-  `series_list`, `series_create`, `series_get`, `series_update`, `series_delete`, `project_set_series`,
-  `series_glossary_list`, `series_glossary_upsert`, `series_glossary_delete`,
-  `series_variant_upsert`, `series_variant_delete`, `series_promote_term`,
-  `series_export`, `series_import`, `series_qa_scan`, `series_recon_start`, `series_recon_confirm`,
-  `job_list`, `job_cancel`, `chunk_get`, `review_start`, `suggestion_list/accept/reject`,
-  `suggestion_history`, `qa_report`,
-  `qa_finding_set_status`, `log_frontend_error`, `diagnostics_paths`, `diagnostics_export`,
-  `export_build`, `export_preview`, `export_history`, `metrics_get`.
-- Events: `job://progress`, `log://line`, `metrics://tick`, `sidecar://status`,
-  `sidecar://progress`, `export://progress`. Findings are not pushed: the UI reads them
-  through `qa_report` and refetches when a `job://progress` transition says a chunk moved.
+Every command is declared `#[tauri::command(rename_all = "snake_case")]`: an argument key is the
+Rust parameter name as written (`{ project_id }`, `{ req: {...} }`), never Tauri's camelCase
+default. `ui/src/lib/ipc.test.ts` rejects a camelCase key.
 
-`job://progress` carries the serialized `job` row at every transition the control plane owns;
-views treat it as an invalidation trigger and refetch through commands. `job_cancel` takes
+Commands: `project_list`, `project_create`, `project_get`, `project_delete`,
+`project_export`, `project_import`,
+`endpoint_list`, `endpoint_upsert`, `endpoint_delete`, `endpoint_test`, `endpoint_models`,
+`role_binding_list`, `role_binding_set`, `role_binding_delete`, `document_inspect`, `ingest_start`, `translation_start`, `translation_pause`,
+`translation_cancel`, `recon_start`, `recon_get`, `recon_confirm`, `project_set_dialogue_style`,
+`glossary_list`, `glossary_upsert`, `glossary_delete`,
+`series_list`, `series_create`, `series_get`, `series_update`, `series_delete`,
+`project_set_series`,
+`series_glossary_list`, `series_glossary_upsert`, `series_glossary_delete`,
+`series_variant_upsert`, `series_variant_delete`, `series_promote_term`,
+`series_export`, `series_import`, `series_qa_scan`, `series_recon_start`,
+`series_recon_confirm`,
+`review_start`, `suggestion_list`, `suggestion_history`, `suggestion_accept`, `suggestion_reject`,
+`qa_report`,
+`qa_finding_set_status`,
+`job_list`, `job_cancel`, `chunk_list`, `chunk_get`, `metrics_get`, `sidecar_status`,
+`log_frontend_error`, `diagnostics_paths`, `diagnostics_export`,
+`export_build`, `export_preview`, `export_history`, `open_path`.
+
+`glossary_upsert` takes `{req: {id?, project_id, source, target, kind, note?, status?, source_lang?,
+ target_lang?, expected_revision?}}` and returns the persisted row; when `id` and
+`expected_revision` are both given the write is optimistic: a row changed by another writer in the
+meantime is rejected instead of overwritten. `glossary_delete` takes the row id; `glossary_list`
+takes `{project_id}`. Candidates proposed by the reconnaissance and the summarizer are approved,
+edited or rejected here; the translator prompt only ever sees `approved` terms, and a proposal
+that conflicts with an existing rendering surfaces as `status='conflict'` plus a
+`qa_finding(kind='glossary_conflict')`.
+
+A project may belong to a `series`: the translator prompt sees the **effective glossary**, i.e.
+the project's own approved terms first and then the approved series terms, with an approved
+project term overriding the series rendering for the same source (aliases of a series term are matched too).
+`project_set_series` takes `{project_id, series_id?, series_order?}`; a series pins the
+source/target language pair its books share. Series terms live in `series_glossary_term`:
+`series_glossary_upsert` takes the same shape as `glossary_upsert` with `series_id` instead of
+`project_id` and returns the persisted row, `series_variant_upsert` takes `{term_id, text}` and
+adds a surface form, `series_promote_term` copies a project term into its series (a different
+existing rendering is kept and flagged, never overwritten). Any series term change opens a
+`glossary_conflict` finding for every member book that renders the same source differently.
+Series bundles (`series_export`/`series_import`) move a series between machines — the canon
+plus, when there are member books, one database snapshot and a `projects/<id>/` tree per book.
+Import merges by revision (a differing rendering becomes `status='conflict'`, never a silent
+drop) and skips a book whose id already exists locally, so the same bundle can be imported
+twice. Version 1 bundles (canon only) still import.
+`series_qa_scan` re-runs the QA heuristics on every translated chunk of every member book,
+and `series_recon_start` (`{req: {series_id, force?}}`) enqueues a `series_recon` job on the
+orchestrator role whose output is a **candidate** profile under
+`series_memory['series_profile']` — never injected into a prompt until the user confirms it.
+The job is incremental: a book whose confirmed profile did not change and a canon whose hash
+did not change are not re-sent to the model, and the previous candidate travels as context
+(the response says how many fresh books there were); `force` bypasses the check.
+`series_recon_confirm` takes `{req: {series_id, synopsis?, style_guide?, characters[{source,
+target, note?}], rejected_characters[], discard?}}`: the accepted fields land in the series
+memory, accepted characters become approved canon terms and rejected sources stay on the
+candidate so a later run does not propose them again.
+
+`qa_report` takes `{project_id, kind?, severity?, chunk_id?, status?}` (`status` is
+`open`/`resolved`/`ignored`; omitted returns every status) and returns the `qa_finding`
+rows. `qa_finding_set_status` takes `{id, status}` and closes or reopens one: that is how the
+Series view resolves a `glossary_conflict` (adopting a book rendering into the canon, keeping
+the canon, or marking the finding resolved). A chunk re-scan replaces its findings anyway.
+
+Diagnostics: Rust writes structured `tracing` events to stdout and to a daily file under the
+app data dir (`logs/llmtz.<date>.log`), starting before the app state is built. The file
+carries job transitions (start, outcome, duration), one line per model call (role, model,
+tokens, answer and reasoning sizes, latency, outcome), sidecar status changes and the errors the
+UI shows; it never carries book text, prompts, responses or glossary values. The frontend calls
+`log_frontend_error({command, message})` for every rejected `invoke`; `diagnostics_paths`
+returns `{data_dir, log_dir}` and `diagnostics_export` writes
+`<data_dir>/diagnostics/llmtz-diagnostics-<timestamp>.zip` with the newest logs and a
+`report.json` (versions, sidecar/worker state, queue, failed jobs, model-call errors, no
+database and no project files).
+
+`review_start` takes `{req: {project_id, chunk_ids?, chapter_id?, pass?, with_qa?}}`, where `pass`
+is `editor` (default `both`, also `proofreader`), and enqueues the matching `edit_chunk` /
+`proofread_chunk` / `qa_scan` jobs for the eligible chunks; it returns `{enqueued}`.
+`suggestion_list` takes `{project_id, chunk_id?, pass?, status?}` and returns `suggestion` rows;
+`suggestion_accept` and `suggestion_reject` take the suggestion id. Accepting applies the proposed
+correction to the block translation (origin `editor` or `proofreader`) and recomposes the chunk's
+`target_md`, so an export right after a review sees the accepted text. `suggestion_history` takes
+`{req: {project_id, chunk_id?, pass?, status?, limit?}}`, where `status` is `accepted`/`rejected`
+(omitted returns both) and `limit` defaults to 1000: it returns the decided rows newest-first —
+the project's correction history, each row carrying the `decided_at` the decision stamped, and
+never an undecided (pending or superseded) proposal.
+
+`document_inspect` takes `{path}` and returns the sidecar's `detect_format` result (`format`,
+`backends`, `metadata{title?, author?, language?}`): the new-book form pre-fills the name and the
+source language from it before any project exists.
+
+`recon_start` runs the `book_recon` job (candidate book profile, PLAN.md §9.4); `recon_get`
+reads it back together with the confirmed memory values and the glossary; `recon_confirm` writes
+the confirmed fields into `project_memory` and the accepted proper nouns into `glossary_term`.
+`project_set_dialogue_style` takes `{req: {project_id, dialogue_style}}` (`keep` or `quotes`),
+stores it in `project_memory['dialogue_style']` and returns the snapshot, which carries
+`dialogue_style`; it applies to the chunks translated from then on (PLAN.md §8).
+No new event: the job lifecycle is announced on `job://progress`.
+
+`export_build` takes `{req: {project_id, output_format, output_path?, template?, css?, toc?,
+chapter_id?, force?, allow_untranslated?}}`: with `chapter_id` it builds that chapter standalone,
+`force` bypasses the unchanged-build skip. A scope with untranslated chunks is refused unless
+`allow_untranslated` is true: those chunks would be rendered in the source language, and the UI
+asks the user first. It returns the outcome (including `from_cache`, `changed_units` and
+`reused_units`) and emits `export://progress` while it runs. `export_preview` takes
+`{req: {project_id, chapter_id?}}` and returns the composed markdown units plus the rendered
+`metadata.yaml` without invoking Pandoc. `export_history` takes `{project_id}` and returns the
+last ten build records.
+
+`project_export` takes `{project_id, output_path?}` and writes the `.llmtz`
+(ZIP with `manifest.json`, `project.sqlite`, `work/`, `output/`, `prompts/`), returning
+`{output_path, bytes, files}`; an absent `output_path` uses the project output directory.
+`project_import` takes `{archive_path}` and returns the imported `Project`.
+
+Events: `job://progress`, `log://line`, `metrics://tick`, `sidecar://status`,
+`sidecar://progress`, `export://progress`.
+
+`job://progress` carries the serialized `job` row at every transition the control plane owns
+(enqueue, claim, done, failed, cancelled); views treat it as an invalidation trigger and refetch
+through commands. `sidecar://progress` forwards the sidecar's out-of-band `progress`
+notifications unchanged. `log://line` is `{ts, level, source, message}` — the control plane does
+not stamp a project on it.
+
+Findings are not pushed: the UI reads them through `qa_report` and refetches when a
+`job://progress` transition says a chunk moved.
+
+`job_cancel` takes
 `{job_ids[]}` and interrupts those jobs **without stopping the queue**: a running job has its
 in-flight call abandoned (the worker polls a per-job cancellation flag and re-reads the row before
 writing an outcome, so a cancelled row is never revived by `complete` or `retry_or_fail`), a queued
 one is cancelled in the database, and an interrupted `translate_chunk` returns its chunk to
 `pending` — only when that chunk is `running`, so a merely queued job never touches the chunk it
 pointed at — so a later `translation_start` picks it up again. The result reports `cancelled[]` and
-`skipped[]` (ids that had already finished). This is deliberately narrower than
-`translation_cancel`, which pauses the pool and aborts every worker. `sidecar://progress`
-forwards the sidecar's out-of-band `progress` notifications unchanged, and `log://line`
-(`{ts, level, source, message}`) carries the sidecar's stderr and the worker's job transitions
-(start, completion) and failures, so the live log pane shows activity during a run.
+`skipped[]` (ids that had already finished). This is deliberately narrower than `translation_cancel`, which pauses the pool and aborts every worker.
 
 API keys: `llm_endpoint.api_key_ref` stores only the *name* of the keyring entry and
 `LlamaClient` accepts a bearer key, but no code reads the OS keyring yet, so an endpoint that
 requires authentication is not usable today. Wiring the keyring lookup is future work; the
 no-secrets-in-the-database rule already holds.
-
-Diagnostics: the control plane writes structured `tracing` events to stdout and to a daily
-file under the app data dir (`logs/llmtz.<date>.log`); the frontend reports every failed
-command through `log_frontend_error`, so the file mirrors what the user saw. The log never
-carries book text, prompts, responses or glossary values. `diagnostics_export` bundles the
-newest logs and a `report.json` (versions, sidecar/worker state, queue, failed jobs,
-model-call errors) and nothing else: no database, no project files.
 
 ---
 
