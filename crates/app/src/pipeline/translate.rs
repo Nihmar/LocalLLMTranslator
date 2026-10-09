@@ -34,7 +34,7 @@ pub struct TranslateOutcome {
 ///
 /// Chunk lifecycle: the chunk is marked `running` as soon as its translate job
 /// starts, moves to `done`/`needs_review` at the end (see `finish_chunk`) and to
-/// `failed` when the attempt errors out. A chunk left `running` by a crash is
+/// `failed` when the attempt errors out or leaves the chunk with no usable text. A chunk left `running` by a crash is
 /// returned to `pending` at boot (`repo::reset_running_chunks`).
 pub async fn run_translate_chunk(
     deps: &PipelineDeps,
@@ -415,12 +415,13 @@ async fn translate_chunk_inner(
         }
     }
 
-    // The chunk holds a validated translation either way; what changes is whether the
-    // attempt that just ran is the one on record.
-    let status = if needs_review_reason.is_some() {
-        "needs_review"
-    } else {
-        "done"
+    // `needs_review` always means "translated, check it". An attempt that leaves the
+    // chunk with no usable text is `failed`: a resume retries it, and no view or export
+    // mistakes it for translated.
+    let status = match (&target_md, needs_review_reason.is_some()) {
+        (None, _) => "failed",
+        (Some(_), true) => "needs_review",
+        (Some(_), false) => "done",
     };
     let error = match (needs_review_reason.as_deref(), kept_previous) {
         (Some(reason), true) => Some(format!("{reason}; the previous translation was kept")),

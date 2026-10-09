@@ -15,16 +15,16 @@
 //! that a resumed run is lossless and identical to the uninterrupted one, and
 //! that re-running a finished pipeline is idempotent.
 //!
-//! # Compliant answers and the `needs_review` path
+//! # Compliant answers and the refused-alignment path
 //!
 //! `tools/fake_llama_server.py` returns only the translated passage by default,
 //! like a compliant instruction-following model, so the shipped prompt aligns
 //! block-for-block and every chunk ends `done`. `--echo-prompt-prefix` restores
 //! the old behaviour of echoing the non-translatable preface that precedes the
 //! `PASSAGE TO TRANSLATE:` marker; the extra blocks then make the pipeline refuse
-//! to align by force and mark the chunk `needs_review` with a NULL `target_md`
-//! (PLAN.md section 15), while the raw reply is preserved in
-//! `llm_call.response_text`. `echoed_preface_marks_the_chunk_needs_review`
+//! to align by force: a chunk with nothing to keep ends `failed` with a NULL
+//! `target_md` (PLAN.md section 6), while the raw reply is preserved in
+//! `llm_call.response_text`. `echoed_preface_fails_a_chunk_with_no_translation`
 //! exercises exactly that path.
 //!
 //! The exported EPUB is asserted to be free of placeholder tokens: `render_chunks`
@@ -602,10 +602,11 @@ async fn walking_skeleton_end_to_end() -> Result<()> {
 }
 
 /// A model that echoes the prompt preface answers irregularly: the pipeline must
-/// refuse to align by force, mark the chunk `needs_review` and leave `target_md`
-/// NULL (PLAN.md section 15), while keeping the raw reply for audit.
+/// refuse to align by force and, with no earlier translation to keep, mark the
+/// chunk `failed` with a NULL `target_md` (PLAN.md section 6), while keeping the
+/// raw reply for audit.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn echoed_preface_marks_the_chunk_needs_review() -> Result<()> {
+async fn echoed_preface_fails_a_chunk_with_no_translation() -> Result<()> {
     let root = repo_root()?;
     let venv_python = root.join("sidecar/.venv/bin/python");
     if !venv_python.is_file() {
@@ -642,7 +643,7 @@ async fn echoed_preface_marks_the_chunk_needs_review() -> Result<()> {
     };
     let client = SidecarClient::new(supervisor.clone());
 
-    let data_dir = tempfile::tempdir().context("needs_review data dir")?;
+    let data_dir = tempfile::tempdir().context("refused alignment data dir")?;
     let pool = db::connect(&data_dir.path().join("app.sqlite")).await?;
     let project_id = seed_environment(&pool, "echo", &epub, &fake_url).await?;
     let deps = PipelineDeps::new(
@@ -670,8 +671,8 @@ async fn echoed_preface_marks_the_chunk_needs_review() -> Result<()> {
     )
     .await??;
     ensure!(
-        outcome.status == "needs_review",
-        "an echoed preface must mark the chunk needs_review, got status {}",
+        outcome.status == "failed",
+        "an echoed preface with nothing to keep must fail the chunk, got status {}",
         outcome.status
     );
 
@@ -679,13 +680,13 @@ async fn echoed_preface_marks_the_chunk_needs_review() -> Result<()> {
         .await?
         .ok_or_else(|| anyhow!("chunk {} disappeared", chunk.id))?;
     ensure!(
-        stored.status == "needs_review",
-        "the persisted chunk status is {}, expected needs_review",
+        stored.status == "failed",
+        "the persisted chunk status is {}, expected failed",
         stored.status
     );
     ensure!(
         stored.target_md.is_none(),
-        "a needs_review chunk must have a NULL target_md, got {:?}",
+        "a chunk with a refused first answer must have a NULL target_md, got {:?}",
         stored.target_md
     );
 
@@ -701,7 +702,7 @@ async fn echoed_preface_marks_the_chunk_needs_review() -> Result<()> {
         "the raw rejected response was not preserved in llm_call"
     );
 
-    eprintln!("[walking_skeleton] echoed preface correctly produced a needs_review chunk");
+    eprintln!("[walking_skeleton] echoed preface correctly failed the chunk");
     Ok(())
 }
 

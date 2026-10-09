@@ -466,8 +466,9 @@ repeated paragraphs, title pages) without even calling the model.
   (`chunk_id` + `prompt_hash`). Re-running an already completed job has no effect.
 - **A refused attempt never destroys an accepted one**: when the answer cannot be aligned with
   the source the *new* answer is dropped, the chunk is flagged `needs_review` with the reason,
-  but a translation already validated for that chunk stays in `target_md` (the column is only
-  left empty when there was nothing to keep). The rejected answer is preserved in
+  but a translation already validated for that chunk stays in `target_md`. When there was
+  nothing to keep the chunk is `failed` instead: `needs_review` always means "translated, check
+  it", never "no translation", so progress, resume and export can trust the status. The rejected answer is preserved in
   `llm_call.response_text`, so the review shows both what failed and what is on record.
 - **No duplicate work**: `translation_start` skips the chunks that already carry an unfinished
   `translate_chunk` job, so "Avvia / Riprendi" resumes a queue instead of queueing the same chunk
@@ -478,7 +479,8 @@ repeated paragraphs, title pages) without even calling the model.
   to temporary files and do an atomic `rename`; the sidecar is restarted and the in-flight
   requests (pure) are re-sent.
 - **Selective resumption**: you can re-run a single chunk, a chapter, or "all chunks
-  `failed`/`needs_review`".
+  `failed`/`needs_review`". "Avvia / Riprendi" takes `pending` and `failed`; a `needs_review`
+  chunk keeps its translation until the user asks for a retry.
 - **Project export/import**: `.llmtz` is a ZIP with `manifest.json` (format version, app
   version, exported-at), `project.sqlite` (a `VACUUM INTO` copy of the app database), the
   project's `work/` directory (Markdown + assets), its `output/` directory and the `prompts/`
@@ -1116,7 +1118,7 @@ context); M6 after M3 (concurrency requires the versioned glossary).
 | Risk | Mitigation |
 |---|---|
 | The model loses placeholders or rewrites the structure | Structural validation per chunk + targeted retry + fallback to raw Markdown + `qa_finding` for manual review (M1, M4) |
-| Original↔translation block alignment fails on irregular output | Compare the number of blocks; if different → `needs_review` instead of aligning by force (M1) |
+| Original↔translation block alignment fails on irregular output | Compare the number of blocks; if different the answer is dropped instead of aligned by force: the chunk keeps its previous translation as `needs_review`, or is `failed` when it had none (M1) |
 | A reasoning model spends the whole budget thinking and answers nothing | The thinking is streamed into `reasoning_content`, which the client keeps out of the answer and stores for audit; a role can turn the thinking off with `chat_template_kwargs`; a structured pass retries once with a larger default budget; the failure names the stop reason, the sizes and the budget (M4) |
 | Packaging of the Python sidecar on 3 OSes | `onedir` sidecar (not `onefile`: faster startup, fewer AV false positives), bundled as a Tauri resource; smoke test in CI on Linux, manual build on macOS/Windows (M0, M7) |
 | Python 3.14 without PyInstaller/torch wheels | Pin **Python 3.12** in the sidecar (already available via uv) |
