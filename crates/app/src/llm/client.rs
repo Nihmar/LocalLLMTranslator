@@ -13,12 +13,23 @@ use crate::error::{AppError, Result};
 
 type ByteStream = Pin<Box<dyn Stream<Item = reqwest::Result<Bytes>> + Send + 'static>>;
 
+/// How long a chat stream may stay silent before it is treated as stalled.
+///
+/// A server that accepts the request and then stops emitting SSE events would otherwise
+/// block the job forever (the lease heartbeat keeps it alive). This is an *idle* bound, so
+/// a slow but steadily-streaming generation is never killed.
+pub const DEFAULT_STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// How many `/tokenize` requests a single chunk may have in flight.
+const TOKENIZE_CONCURRENCY: usize = 4;
+
 /// Client bound to a single `llama-server` base URL (without the `/v1` suffix).
 #[derive(Clone)]
 pub struct LlamaClient {
     base_url: String,
     api_key: Option<String>,
     http: reqwest::Client,
+    idle_timeout: Duration,
 }
 
 impl LlamaClient {
@@ -30,7 +41,14 @@ impl LlamaClient {
             base_url: normalize_base(base_url.into()),
             api_key: None,
             http,
+            idle_timeout: DEFAULT_STREAM_IDLE_TIMEOUT,
         })
+    }
+
+    /// Override the idle timeout of a chat stream (used by the tests).
+    pub fn with_idle_timeout(mut self, timeout: Duration) -> Self {
+        self.idle_timeout = timeout;
+        self
     }
 
     pub fn with_api_key(mut self, key: Option<String>) -> Self {
@@ -134,17 +152,33 @@ impl LlamaClient {
     /// Exact token counts via `/tokenize`, one entry per text the server
     /// answered for. Texts the endpoint refuses are simply absent, so the
     /// caller's counter can fall back to the heuristic estimate.
+    ///
+    /// The requests are issued concurrently (bounded) instead of one after the
+    /// other: a chunk asks for every prompt piece, and a long book would otherwise
+    /// wait for a sequential round trip per piece before each translation.
     pub async fn token_counts(&self, texts: &[&str]) -> HashMap<String, usize> {
-        let mut counts = HashMap::new();
-        for text in texts {
-            if text.is_empty() {
-                continue;
-            }
-            if let Ok(Some(tokens)) = self.tokenize(text).await {
-                counts.insert((*text).to_string(), tokens.len());
-            }
-        }
-        counts
+        // Each future owns a cloned client and its text, so the stream is `Send` and the
+        // requests run up to `TOKENIZE_CONCURRENCY` at a time.
+        let pending: Vec<_> = texts
+            .iter()
+            .copied()
+            .filter(|text| !text.is_empty())
+            .map(|text| {
+                let client = self.clone();
+                let text = text.to_string();
+                async move {
+                    match client.tokenize(&text).await {
+                        Ok(Some(tokens)) => Some((text, tokens.len())),
+                        _ => None,
+                    }
+                }
+            })
+            .collect();
+        stream::iter(pending)
+            .buffer_unordered(TOKENIZE_CONCURRENCY)
+            .filter_map(|entry| async move { entry })
+            .collect()
+            .await
     }
 
     /// `POST /v1/chat/completions` with `stream: true`, parsed as SSE.
@@ -173,6 +207,7 @@ impl LlamaClient {
             buf: Vec::new(),
             raw: String::new(),
             finished: false,
+            idle: self.idle_timeout,
         };
         let stream = stream::unfold(state, |mut st| async move {
             if st.finished {
@@ -224,13 +259,17 @@ impl LlamaClient {
                         }
                     }
                 } else {
-                    match st.inner.next().await {
-                        Some(Ok(chunk)) => st.buf.extend_from_slice(&chunk),
-                        Some(Err(e)) => {
+                    match tokio::time::timeout(st.idle, st.inner.next()).await {
+                        Err(_) => {
+                            st.finished = true;
+                            return Some((Err(AppError::LlmTimeout(st.idle)), st));
+                        }
+                        Ok(Some(Ok(chunk))) => st.buf.extend_from_slice(&chunk),
+                        Ok(Some(Err(e))) => {
                             st.finished = true;
                             return Some((Err(e.into()), st));
                         }
-                        None => {
+                        Ok(None) => {
                             st.finished = true;
                             // Flush a trailing, newline-less data line.
                             if !st.buf.is_empty() {
@@ -267,6 +306,7 @@ struct SseState {
     buf: Vec<u8>,
     raw: String,
     finished: bool,
+    idle: Duration,
 }
 
 #[derive(Deserialize)]
@@ -465,6 +505,61 @@ mod tests {
         let plain = ChatRequest::new("m", vec![ChatMessage::user("hi")]);
         let body = serde_json::to_value(&plain).expect("serialize");
         assert!(body.get("chat_template_kwargs").is_none());
+    }
+
+    /// A server that sends one SSE event and then stalls must not hang the caller: the
+    /// idle timeout turns it into a retryable error instead.
+    #[tokio::test]
+    async fn a_stalled_stream_times_out_instead_of_hanging() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept");
+            let mut head = [0u8; 1024];
+            let _ = socket.read(&mut head).await;
+            socket
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n\r\n\
+                      data: {\"choices\":[{\"delta\":{\"content\":\"Ciao\"}}]}\n\n",
+                )
+                .await
+                .expect("write");
+            // Stay silent from here on: the body never ends.
+            tokio::time::sleep(Duration::from_secs(30)).await;
+        });
+
+        let client = LlamaClient::new(format!("http://{addr}"))
+            .expect("client")
+            .with_idle_timeout(Duration::from_millis(150));
+        let req = ChatRequest::new("m", vec![ChatMessage::user("hi")]);
+        let mut stream = client.chat_stream(req).await.expect("stream");
+
+        let first = stream.next().await.expect("first item").expect("delta");
+        assert_eq!(first.content, "Ciao");
+        let stalled = stream.next().await.expect("second item");
+        assert!(
+            matches!(stalled, Err(AppError::LlmTimeout(_))),
+            "expected an idle timeout, got {stalled:?}"
+        );
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn token_counts_covers_every_non_empty_text() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/tokenize"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"tokens":[1,2,3]}"#))
+            .mount(&server)
+            .await;
+        let client = LlamaClient::new(server.uri()).expect("client");
+        let counts = client.token_counts(&["a", "", "b c"]).await;
+        assert_eq!(counts.len(), 2, "empty texts are skipped");
+        assert_eq!(counts.get("a"), Some(&3));
+        assert_eq!(counts.get("b c"), Some(&3));
     }
 
     #[tokio::test]

@@ -36,6 +36,11 @@ pub enum AppError {
     #[error("sidecar request timed out after {0:?}")]
     SidecarTimeout(std::time::Duration),
 
+    /// An LLM stream stopped producing events for longer than the idle timeout. Retryable:
+    /// a stalled server can be healthy on the next attempt.
+    #[error("llama-server stream was idle for more than {0:?}")]
+    LlmTimeout(std::time::Duration),
+
     /// The sidecar is stateless, so any failure here is safe to retry: the
     /// request is re-issued on the fresh process.
     #[error("sidecar unavailable (retryable): {0}")]
@@ -69,9 +74,10 @@ impl AppError {
     /// level failures are always retryable.
     pub fn retryable(&self) -> bool {
         match self {
-            AppError::SidecarTimeout(_) | AppError::SidecarUnavailable(_) | AppError::Http(_) => {
-                true
-            }
+            AppError::SidecarTimeout(_)
+            | AppError::SidecarUnavailable(_)
+            | AppError::LlmTimeout(_)
+            | AppError::Http(_) => true,
             AppError::Sidecar { retryable, .. } => *retryable,
             _ => false,
         }
@@ -88,6 +94,7 @@ impl AppError {
             AppError::Zip(_) => "zip",
             AppError::Template(_) => "template",
             AppError::SidecarTimeout(_) => "sidecar_timeout",
+            AppError::LlmTimeout(_) => "llm_timeout",
             AppError::SidecarUnavailable(_) => "sidecar_unavailable",
             AppError::Sidecar { .. } => "sidecar",
             AppError::Endpoint { .. } => "endpoint",
