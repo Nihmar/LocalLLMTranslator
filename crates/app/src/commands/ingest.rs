@@ -1,4 +1,4 @@
-//! `ingest_start` command.
+//! `document_inspect` and `ingest_start` commands.
 
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -17,6 +17,16 @@ pub struct IngestStartRequest {
     pub source_path: Option<String>,
     #[serde(default)]
     pub pdf_backend: Option<String>,
+}
+
+/// Format and hints of a document the user is about to add, before any project exists:
+/// the new-book form pre-fills its name and source language from them.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn document_inspect(
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<crate::sidecar::DetectFormatResult> {
+    state.sidecar.detect_format(&path).await
 }
 
 #[derive(Debug, Clone, Serialize)]

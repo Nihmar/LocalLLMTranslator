@@ -1048,7 +1048,7 @@ what makes it safe to restart it and re-send the in-flight requests.
 ### 12.2 Tauri (commands + events)
 
 - Commands: `project_*`, `endpoint_*`, `role_binding_list`, `role_binding_set`, `role_binding_delete`,
-  `ingest_start`, `translation_start/pause/resume/cancel`,
+  `document_inspect`, `ingest_start`, `translation_start/pause/resume/cancel`,
   `recon_start`, `recon_get`, `recon_confirm`, `project_set_dialogue_style`, `glossary_list`, `glossary_upsert`, `glossary_delete`,
   `series_list`, `series_create`, `series_get`, `series_update`, `series_delete`, `project_set_series`,
   `series_glossary_list`, `series_glossary_upsert`, `series_glossary_delete`,

@@ -193,6 +193,7 @@ pub fn run() {
             commands::role_binding::role_binding_list,
             commands::role_binding::role_binding_set,
             commands::role_binding::role_binding_delete,
+            commands::ingest::document_inspect,
             commands::ingest::ingest_start,
             commands::translation::translation_start,
             commands::translation::translation_pause,

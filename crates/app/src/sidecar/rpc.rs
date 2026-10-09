@@ -292,6 +292,21 @@ pub struct DetectFormatResult {
     pub format: String,
     #[serde(default)]
     pub backends: Vec<String>,
+    /// What the file says about itself; every field is optional.
+    #[serde(default)]
+    pub metadata: DocumentHints,
+}
+
+/// Title, author and language of a document, read before ingestion to pre-fill the
+/// new-book form. The language is guessed from the text by the sidecar.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DocumentHints {
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub author: Option<String>,
+    #[serde(default)]
+    pub language: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

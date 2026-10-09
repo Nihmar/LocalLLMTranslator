@@ -141,7 +141,7 @@ default. `ui/src/lib/ipc.test.ts` rejects a camelCase key.
 Commands: `project_list`, `project_create`, `project_get`, `project_delete`,
 `project_export`, `project_import`,
 `endpoint_list`, `endpoint_upsert`, `endpoint_delete`, `endpoint_test`, `endpoint_models`,
-`role_binding_list`, `role_binding_set`, `role_binding_delete`, `ingest_start`, `translation_start`, `translation_pause`,
+`role_binding_list`, `role_binding_set`, `role_binding_delete`, `document_inspect`, `ingest_start`, `translation_start`, `translation_pause`,
 `translation_cancel`, `recon_start`, `recon_get`, `recon_confirm`, `project_set_dialogue_style`,
 `glossary_list`, `glossary_upsert`, `glossary_delete`,
 `series_list`, `series_create`, `series_get`, `series_update`, `series_delete`,
@@ -222,6 +222,10 @@ correction to the block translation (origin `editor` or `proofreader`) and recom
 the project's correction history, each row carrying the `decided_at` the decision stamped, and
 never an undecided (pending or superseded) proposal. `qa_report` takes
 `{project_id, kind?, severity?, chunk_id?}` and returns the `qa_finding` rows.
+
+`document_inspect` takes `{path}` and returns the sidecar's `detect_format` result (`format`,
+`backends`, `metadata{title?, author?, language?}`): the new-book form pre-fills the name and the
+source language from it before any project exists.
 
 `recon_start` runs the `book_recon` job (candidate book profile, PLAN.md §9.4); `recon_get`
 reads it back together with the confirmed memory values and the glossary; `recon_confirm` writes
