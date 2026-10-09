@@ -55,6 +55,10 @@ pub struct ExportRequest {
     /// Bypass the unchanged-build skip.
     #[serde(default)]
     pub force: bool,
+    /// Export even though some chunks in scope have no translation: they are rendered
+    /// from the source, so the book mixes languages. Off by default, the user confirms.
+    #[serde(default)]
+    pub allow_untranslated: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -215,6 +219,12 @@ pub async fn run_export(deps: &PipelineDeps, request: &ExportRequest) -> Result<
         } else {
             "nothing to export: no chunk has been translated yet".into()
         }));
+    }
+    if untranslated_chunks > 0 && !request.allow_untranslated {
+        return Err(AppError::Invalid(format!(
+            "{untranslated_chunks} of {total_chunks} chunks have no translation and would be \
+             exported in the source language; confirm to export anyway"
+        )));
     }
 
     let metadata = book_metadata(&project, &document);
@@ -984,6 +994,7 @@ mod tests {
             toc: true,
             chapter_id: None,
             force: false,
+            allow_untranslated: false,
         };
         // A helper that only reads `deps.pandoc_dir` would need the whole struct,
         // so the pure pieces are exercised through a bare call.
@@ -1080,6 +1091,7 @@ mod tests {
             toc: true,
             chapter_id: Some("ch1".into()),
             force: false,
+            allow_untranslated: false,
         };
         let path = default_output_path(Path::new("/out"), &project, &chapters, &scoped);
         assert!(path.ends_with("My_Book-The_Siege.pdf"), "got {path}");

@@ -530,6 +530,7 @@ async fn walking_skeleton_end_to_end() -> Result<()> {
                 toc: true,
                 chapter_id: Some(changed_chapter.clone()),
                 force: false,
+                allow_untranslated: false,
             },
         ),
         "chapter export",
@@ -1753,6 +1754,7 @@ async fn export_one(
         toc: true,
         chapter_id: None,
         force: false,
+        allow_untranslated: false,
     };
     let outcome = with_timeout(run_export(deps, &request), "export").await??;
     ensure!(

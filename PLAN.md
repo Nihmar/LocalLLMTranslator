@@ -964,6 +964,9 @@ the current book is unambiguous on every page.
    build is skipped and reported as such, `changed_units`/`reused_units` say what moved, and
    `chapter_id` builds one chapter standalone. The preview returns the composed markdown and the
    `metadata.yaml` without invoking Pandoc; the build history is the last ten records.
+   A scope with untranslated chunks is refused unless the request sets `allow_untranslated`:
+   those chunks would be rendered from the source, so the book would silently mix languages.
+   The view checks the preview first and asks the user to confirm.
    `export_build` currently runs the build inline in the command; the `export_unit` job kind is
    dispatched by the worker but nothing enqueues it yet, so pausing the queue does not pause an
    export. Quoting the build through the queue is future work.

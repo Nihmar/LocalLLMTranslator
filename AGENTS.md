@@ -224,8 +224,10 @@ the confirmed fields into `project_memory` and the accepted proper nouns into `g
 No new event: the job lifecycle is announced on `job://progress`.
 
 `export_build` takes `{req: {project_id, output_format, output_path?, template?, css?, toc?,
-chapter_id?, force?}}`: with `chapter_id` it builds that chapter standalone, `force` bypasses the
-unchanged-build skip. It returns the outcome (including `from_cache`, `changed_units` and
+chapter_id?, force?, allow_untranslated?}}`: with `chapter_id` it builds that chapter standalone,
+`force` bypasses the unchanged-build skip. A scope with untranslated chunks is refused unless
+`allow_untranslated` is true: those chunks would be rendered in the source language, and the UI
+asks the user first. It returns the outcome (including `from_cache`, `changed_units` and
 `reused_units`) and emits `export://progress` while it runs. `export_preview` takes
 `{req: {project_id, chapter_id?}}` and returns the composed markdown units plus the rendered
 `metadata.yaml` without invoking Pandoc. `export_history` takes `{project_id}` and returns the
