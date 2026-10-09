@@ -44,24 +44,46 @@ const MAX_NOTE_CHARS: usize = 200;
 const MAX_STYLE_NOTES: usize = 8;
 const MAX_STYLE_NOTE_CHARS: usize = 240;
 const MAX_STORED_STYLE_NOTES: usize = 16;
+/// Shared by the source and the translation excerpt, half each.
 const MAX_EXCERPT_CHARS: usize = 12_000;
+/// Below this much source text a chapter is a title page or a heading: there is
+/// nothing to summarise, and the model's notes about "no narrative text" are noise.
+const MIN_SOURCE_CHARS: usize = 300;
 const DEFAULT_MAX_TOKENS: u32 = 900;
 
 /// Fallback templates, byte-identical to `prompts/summarizer.md` and
 /// `prompts/summarizer.schema.json` (a unit test asserts that) so a project
 /// snapshot from before M3 still runs.
 pub const DEFAULT_SUMMARIZER_SYSTEM_TEMPLATE: &str = r#"You maintain the memory of a translation project ({{ source_language }} → {{ target_language }}).
-From the chapter excerpt below produce JSON only:
+You receive the same chapter twice: the SOURCE text and its TRANSLATION. Produce JSON only:
 {"summary": "3-5 sentences in {{ target_language }}",
  "new_terms": [{"source":"","target":"","kind":"term|proper_noun|do_not_translate","note":""}],
  "style_notes": ["short observations about register, recurring constructions, forms of address"]}
+In new_terms, "source" is copied exactly as the SOURCE text writes it and "target" is how the TRANSLATION renders it.
 Output at most 8 new_terms, only terms that recur or matter."#;
 
 pub const DEFAULT_SUMMARIZER_USER_TEMPLATE: &str = r#"CHAPTER: {{ chapter_title }}
 
-EXCERPT:
+SOURCE:
+{{ source_excerpt }}
+
+TRANSLATION:
 {{ excerpt }}
 "#;
+
+/// SHA-256 of the templates earlier releases wrote into project snapshots. A snapshot
+/// file still byte-identical to one of them was never edited by the user, so it is
+/// replaced by the current default instead of being kept forever.
+const SHIPPED_TEMPLATE_HASHES: &[(&str, &str)] = &[
+    (
+        "summarizer.system.md",
+        "1a5b98b8f29b0c4aa657993a284bdc4c7b30e4f1a6703c7d13b31f4044b57d23",
+    ),
+    (
+        "summarizer.user.md",
+        "35fb639ffde848f131f5f826a8f3065ea0f87a7df63c1460071758a25688c255",
+    ),
+];
 
 pub const DEFAULT_SUMMARIZER_SCHEMA: &str = r##"{"$comment":"Rolling-memory schema for prompts/summarizer.md (PLAN.md section 8). The control plane clamps every value again before persisting it: the summary to 200 words, the term list to 8 entries, the style notes to 8 candidates.","type":"object","properties":{"summary":{"type":"string","maxLength":1600},"new_terms":{"type":"array","maxItems":8,"items":{"type":"object","properties":{"source":{"type":"string","maxLength":120},"target":{"type":"string","maxLength":120},"kind":{"enum":["term","proper_noun","do_not_translate"]},"note":{"type":"string","maxLength":200}},"required":["source","target","kind"]}},"style_notes":{"type":"array","maxItems":8,"items":{"type":"string","maxLength":240}}},"required":["summary","new_terms","style_notes"]}"##;
 
@@ -214,15 +236,40 @@ fn clamp_excerpt(text: &str, max: usize) -> String {
     format!("{}\n\n[…]\n\n{}", head.trim_end(), tail.trim_start())
 }
 
-/// The translated text of the chapter, in order, capped.
-fn excerpt_from<'a>(chunks: impl IntoIterator<Item = &'a Chunk>) -> String {
-    let parts: Vec<&str> = chunks
+/// The chunks of a chapter that carry a translation, in order. The summarizer sees
+/// their source next to their translation: a glossary pair needs both sides.
+fn translated_chunks<'a>(chunks: &'a [Chunk], chapter_id: &str) -> Vec<&'a Chunk> {
+    chunks
+        .iter()
+        .filter(|chunk| chunk.chapter_id.as_deref() == Some(chapter_id))
+        .filter(|chunk| crate::pipeline::export::chunk_has_translation(chunk))
+        .collect()
+}
+
+/// Non-blank texts joined in order.
+fn join_texts<'a>(texts: impl IntoIterator<Item = &'a str>) -> String {
+    texts
         .into_iter()
-        .filter_map(|chunk| chunk.target_md.as_deref())
         .map(str::trim)
         .filter(|text| !text.is_empty())
-        .collect();
-    clamp_excerpt(&parts.join("\n\n"), MAX_EXCERPT_CHARS)
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+/// Case- and apostrophe-insensitive form used to look a term up in the source.
+fn fold(text: &str) -> String {
+    text.replace('\u{2019}', "'").to_lowercase()
+}
+
+/// Keep only the candidates whose source the chapter actually contains. A source
+/// that is not in the source text is the model echoing its own translation, which
+/// would ask the translator to keep a word in the wrong language.
+fn terms_found_in_source(terms: Vec<CandidateTerm>, source_text: &str) -> Vec<CandidateTerm> {
+    let haystack = fold(source_text);
+    terms
+        .into_iter()
+        .filter(|term| haystack.contains(&fold(&term.source)))
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -239,7 +286,13 @@ pub async fn ensure_prompt_files(dir: &Path) -> Result<()> {
         ("summarizer.schema.json", DEFAULT_SUMMARIZER_SCHEMA),
     ] {
         let path = dir.join(name);
-        if !path.exists() {
+        let stale = match tokio::fs::read_to_string(&path).await {
+            Ok(current) => SHIPPED_TEMPLATE_HASHES
+                .iter()
+                .any(|(file, hash)| *file == name && sha256_hex_str(&current) == *hash),
+            Err(_) => true,
+        };
+        if stale {
             tokio::fs::write(&path, content).await?;
         }
     }
@@ -354,16 +407,31 @@ pub async fn run_summarize(
         .ok_or_else(|| AppError::NotFound(format!("chapter {}", payload.chapter_id)))?;
 
     let chunks = repo::list_chunks(pool, &chapter.document_id).await?;
-    let excerpt = excerpt_from(
-        chunks
-            .iter()
-            .filter(|chunk| chunk.chapter_id.as_deref() == Some(payload.chapter_id.as_str())),
-    );
-    if excerpt.is_empty() {
+    let translated = translated_chunks(&chunks, &payload.chapter_id);
+    if translated.is_empty() {
         return Err(AppError::Invalid(
             "no translated text to summarise yet".into(),
         ));
     }
+    let source_text = join_texts(translated.iter().map(|chunk| chunk.source_md.as_str()));
+    if source_text.chars().count() < MIN_SOURCE_CHARS {
+        tracing::debug!(chapter_id = %payload.chapter_id, "chapter too short to summarise");
+        return Ok(SummarizeOutcome {
+            chapter_id: payload.chapter_id.clone(),
+            final_run: payload.final_run,
+            terms_added: 0,
+            style_notes: stored_style_notes(pool, project_id).await?.len(),
+        });
+    }
+    let source_excerpt = clamp_excerpt(&source_text, MAX_EXCERPT_CHARS / 2);
+    let excerpt = clamp_excerpt(
+        &join_texts(
+            translated
+                .iter()
+                .filter_map(|chunk| chunk.target_md.as_deref()),
+        ),
+        MAX_EXCERPT_CHARS / 2,
+    );
 
     let binding = repo::role_binding_for(pool, ROLE)
         .await?
@@ -389,6 +457,7 @@ pub async fn run_summarize(
         &user_template,
         context! {
             chapter_title => &chapter.title,
+            source_excerpt => &source_excerpt,
             excerpt => &excerpt,
         },
     )?;
@@ -433,7 +502,16 @@ pub async fn run_summarize(
         repo::set_memory(pool, project_id, ROLLING_SUMMARY_KEY, &summary.text).await?;
     }
 
-    let terms_added = add_candidates(pool, &project, &summary.terms).await?;
+    let proposed = summary.terms.len();
+    let terms = terms_found_in_source(summary.terms, &source_text);
+    if terms.len() < proposed {
+        tracing::info!(
+            chapter_id = %payload.chapter_id,
+            dropped = proposed - terms.len(),
+            "dropped glossary proposals whose source is not in the chapter"
+        );
+    }
+    let terms_added = add_candidates(pool, &project, &terms).await?;
     let style_notes = merge_style_notes(pool, project_id, &summary.style_notes).await?;
 
     Ok(SummarizeOutcome {
@@ -533,16 +611,70 @@ mod tests {
     }
 
     #[test]
-    fn excerpt_joins_translated_chunks_and_ignores_untranslated_ones() {
+    fn only_translated_chunks_of_the_chapter_feed_the_excerpts() {
         let chunks = vec![
             chunk("c1", Some("ch"), 1, Some("Primo paragrafo.")),
             chunk("c2", Some("ch"), 2, None),
-            chunk("c3", Some("ch"), 3, Some("Secondo paragrafo.")),
+            chunk("c3", Some("other"), 3, Some("Altro capitolo.")),
+            chunk("c4", Some("ch"), 4, Some("Secondo paragrafo.")),
         ];
+        let translated = translated_chunks(&chunks, "ch");
+        let ids: Vec<&str> = translated.iter().map(|chunk| chunk.id.as_str()).collect();
+        assert_eq!(ids, ["c1", "c4"]);
         assert_eq!(
-            excerpt_from(&chunks),
+            join_texts(
+                translated
+                    .iter()
+                    .filter_map(|chunk| chunk.target_md.as_deref())
+            ),
             "Primo paragrafo.\n\nSecondo paragrafo."
         );
+    }
+
+    #[test]
+    fn a_proposal_whose_source_is_not_in_the_chapter_is_dropped() {
+        let term = |source: &str, target: &str| CandidateTerm {
+            source: source.into(),
+            target: target.into(),
+            kind: "term".into(),
+            note: None,
+        };
+        let source = "Les Figés attendaient. Duom Nil\u{2019} Erg se tut. L'Art du Dessin.";
+        let kept = terms_found_in_source(
+            vec![
+                term("Figés", "the Frozen"),
+                // The model echoed its translation as the source.
+                term("Art of Drawing", "Art of Drawing"),
+                // Case and typographic apostrophes do not matter.
+                term("duom nil' erg", "Duom Nil' Erg"),
+            ],
+            source,
+        );
+        let sources: Vec<&str> = kept.iter().map(|term| term.source.as_str()).collect();
+        assert_eq!(sources, ["Figés", "duom nil' erg"]);
+    }
+
+    #[tokio::test]
+    async fn a_shipped_template_is_upgraded_and_an_edited_one_is_kept() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        // A snapshot written by an earlier release (the hash in SHIPPED_TEMPLATE_HASHES).
+        let old_system = "You maintain the memory of a translation project ({{ source_language }} → {{ target_language }}).
+From the chapter excerpt below produce JSON only:
+{\"summary\": \"3-5 sentences in {{ target_language }}\",
+ \"new_terms\": [{\"source\":\"\",\"target\":\"\",\"kind\":\"term|proper_noun|do_not_translate\",\"note\":\"\"}],
+ \"style_notes\": [\"short observations about register, recurring constructions, forms of address\"]}
+Output at most 8 new_terms, only terms that recur or matter.";
+        std::fs::write(dir.path().join("summarizer.system.md"), old_system).expect("write");
+        std::fs::write(dir.path().join("summarizer.user.md"), "my own prompt").expect("write");
+
+        ensure_prompt_files(dir.path()).await.expect("ensure");
+
+        let read = |name: &str| std::fs::read_to_string(dir.path().join(name)).expect("read");
+        assert_eq!(
+            read("summarizer.system.md"),
+            DEFAULT_SUMMARIZER_SYSTEM_TEMPLATE
+        );
+        assert_eq!(read("summarizer.user.md"), "my own prompt");
     }
 
     #[test]

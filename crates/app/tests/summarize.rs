@@ -3,8 +3,8 @@
 //! The enqueue decision (`maybe_enqueue_summaries`) and the job itself
 //! (`run_summarize`) run against a real SQLite database and a wiremock
 //! `llama-server`, with chunks inserted directly: the summarizer consumes
-//! `chunk.target_md`, so the translation half of the pipeline is not needed to
-//! test it.
+//! `chunk.source_md` and `chunk.target_md`, so the translation half of the
+//! pipeline is not needed to test it.
 
 mod common;
 
@@ -26,6 +26,23 @@ use app_lib::scheduler::WorkerPool;
 use common::{add_chunk, deps_for, seed_project, wait_for_job};
 
 const SUMMARY_TEXT: &str = "The keeper wakes before dawn and watches the light turn.";
+
+/// A chapter source long enough to summarise that contains both proposed terms: the
+/// summarizer drops a proposal whose source the chapter does not contain and skips a
+/// chapter with almost no text.
+const SOURCE_TEXT: &str = "Every morning the keeper climbed the hundred steps of Harbour Light \
+before the gulls woke. He trimmed the wick, polished the great lens and wrote the weather in a \
+book nobody read. The keeper had done it for thirty years, and on the days the fog came in from \
+the sea he stayed up there until the boats were home, listening to the bell.";
+
+async fn give_chunks_a_real_source(pool: &sqlx::SqlitePool, document_id: &str) -> Result<()> {
+    sqlx::query("UPDATE chunk SET source_md = ?1 WHERE document_id = ?2")
+        .bind(SOURCE_TEXT)
+        .bind(document_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
 
 fn summary_json() -> String {
     serde_json::json!({
@@ -106,6 +123,7 @@ async fn rolling_summary_lands_in_project_memory_and_candidates() -> Result<()> 
         .await?;
     }
     add_chunk(&pool, &seeded.document_id, &seeded.chapter_id, 6, None).await?;
+    give_chunks_a_real_source(&pool, &seeded.document_id).await?;
 
     let job_id = summarize::maybe_enqueue_summaries(&pool, &seeded.project_id, &seeded.chapter_id)
         .await?
@@ -184,6 +202,7 @@ async fn final_summary_closes_the_chapter_and_never_demotes_a_term() -> Result<(
         )
         .await?;
     }
+    give_chunks_a_real_source(&pool, &seeded.document_id).await?;
 
     let job_id = summarize::maybe_enqueue_summaries(&pool, &seeded.project_id, &seeded.chapter_id)
         .await?

@@ -667,12 +667,28 @@ Output only the corrected text, with no commentary and no code fences.
 
 ```jinja
 You maintain the memory of a translation project ({{ source_language }} → {{ target_language }}).
-From the chapter excerpt below produce JSON only:
+You receive the same chapter twice: the SOURCE text and its TRANSLATION. Produce JSON only:
 {"summary": "3-5 sentences in {{ target_language }}",
  "new_terms": [{"source":"","target":"","kind":"term|proper_noun|do_not_translate","note":""}],
  "style_notes": ["short observations about register, recurring constructions, forms of address"]}
+In new_terms, "source" is copied exactly as the SOURCE text writes it and "target" is how the TRANSLATION renders it.
 Output at most 8 new_terms, only terms that recur or matter.
+---USER---
+CHAPTER: {{ chapter_title }}
+
+SOURCE:
+{{ source_excerpt }}
+
+TRANSLATION:
+{{ excerpt }}
 ```
+
+The summarizer needs both sides: from the translation alone it cannot know the source wording
+and echoes its own rendering as the source. A proposal whose `source` the chapter's source text
+does not contain (case- and apostrophe-insensitive) is dropped, and a chapter with less than 300
+characters of source (a title page, a heading) is not summarised at all. A project snapshot whose
+summarizer prompt is still byte-identical to an earlier shipped default is upgraded in place; an
+edited one is never touched.
 
 The `new_terms` enter `glossary_term` as `status='candidate'` and confirmation is up to the
 user: **only `approved` terms reach the translator prompt** (and the QA glossary check), so a
