@@ -8,7 +8,7 @@ import { LogView } from "../components/LogView";
 import { ProgressBar } from "../components/ProgressBar";
 import { ResourceGauge } from "../components/ResourceGauge";
 import { StatusBadge } from "../components/StatusBadge";
-import { chapterProgress, composePreview } from "../lib/chapters";
+import { chapterProgress, chunkTranslated, composePreview } from "../lib/chapters";
 import { onJobProgress, onMetricsTick } from "../lib/events";
 import { countLabel, formatNumber, formatTokens } from "../lib/format";
 import { isActiveJobState } from "../lib/jobs";
@@ -303,6 +303,9 @@ export function TranslateView({ project, onNavigate, onOpenJobs }: TranslateView
   );
 
   const counts = useMemo(() => countStatuses(chunks), [chunks]);
+  // Progress follows the text, not the status: a `needs_review` chunk that kept its
+  // translation is translated, the same predicate the export uses.
+  const translatedCount = useMemo(() => chunks.filter(chunkTranslated).length, [chunks]);
   const activeJobs = useMemo(
     () => jobs.filter((job) => isActiveJobState(job.state)).length,
     [jobs],
@@ -536,7 +539,7 @@ export function TranslateView({ project, onNavigate, onOpenJobs }: TranslateView
 
           <div className="panel panel-pad section-stack">
             <ProgressBar
-              value={counts.done}
+              value={translatedCount}
               total={chunks.length}
               label="Avanzamento complessivo"
               tone="accent"
