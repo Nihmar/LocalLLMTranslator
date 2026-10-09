@@ -159,7 +159,7 @@ export function ProjectsView({ currentProjectId, onOpenProject, onDeleteProject,
   function validate(state: FormState): FormErrors {
     const errors: FormErrors = {};
     if (state.name.trim().length === 0) {
-      errors.name = "Indica un nome per il progetto.";
+      errors.name = "Indica un nome per il libro.";
     }
     if (state.source_path.trim().length === 0) {
       errors.source_path = "Indica il percorso del documento sorgente.";
@@ -212,7 +212,8 @@ export function ProjectsView({ currentProjectId, onOpenProject, onDeleteProject,
     try {
       const fresh = await projectGet(projectId);
       onOpenProject(fresh.project);
-      onNavigate("ingest");
+      // A book that was never imported starts at the import; otherwise at the reading.
+      onNavigate(fresh.chapters.length === 0 ? "ingest" : "translate");
     } catch (openError) {
       setActionError(toErrorMessage(openError));
     } finally {
@@ -274,10 +275,9 @@ export function ProjectsView({ currentProjectId, onOpenProject, onDeleteProject,
     <div className="section-stack">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 className="text-lg font-semibold text-ink">Progetti</h2>
-          <p className="mt-0.5 text-xs text-muted">
-            Un progetto è un documento sorgente con la sua lingua di destinazione, la sua copia dei
-            prompt e i suoi checkpoint.
+          <h1 className="font-serif text-2xl font-medium text-ink">I tuoi libri</h1>
+          <p className="mt-0.5 text-sm text-muted">
+            Ogni libro ha il suo documento, la lingua di arrivo, i suoi prompt e i suoi progressi.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -309,7 +309,7 @@ export function ProjectsView({ currentProjectId, onOpenProject, onDeleteProject,
               setFormOpen((open) => !open);
             }}
           >
-            {formOpen ? "Chiudi" : "Nuovo progetto"}
+            {formOpen ? "Chiudi" : "Nuovo libro"}
           </button>
         </div>
       </div>
@@ -362,7 +362,7 @@ export function ProjectsView({ currentProjectId, onOpenProject, onDeleteProject,
           }}
         >
           <div className="panel-head">
-            <span className="panel-title">Nuovo progetto</span>
+            <span className="panel-title">Nuovo libro</span>
             {detectedFormat !== null ? (
               <StatusBadge
                 status="ok"
@@ -374,7 +374,7 @@ export function ProjectsView({ currentProjectId, onOpenProject, onDeleteProject,
 
           <div className="panel-pad section-stack">
             <div className="grid grid-cols-2 gap-3">
-              <FormField label="Nome progetto" htmlFor="project-name" required error={formErrors.name}>
+              <FormField label="Nome del libro" htmlFor="project-name" required error={formErrors.name}>
                 <input
                   id="project-name"
                   className="input"
@@ -524,8 +524,8 @@ export function ProjectsView({ currentProjectId, onOpenProject, onDeleteProject,
         <div className="section-stack">
           <EmptyState
             title="Benvenuto in LocalLLMTranslator"
-            description="Tre passi per iniziare: assegna un modello, crea o importa un progetto, poi importa il documento."
-            actionLabel="Crea il primo progetto"
+            description="Due passi per iniziare: assegna un modello in «Modelli», poi scegli il file del libro: l'importazione parte da sola."
+            actionLabel="Aggiungi il primo libro"
             onAction={() => {
               setFormOpen(true);
             }}
