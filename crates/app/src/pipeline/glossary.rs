@@ -127,10 +127,15 @@ pub struct ResolvedTerm {
     pub scope: GlossaryScope,
 }
 
-/// Resolve the effective glossary of a project: its own non-rejected terms, then the
-/// series terms whose source is not overridden by a project term (case-insensitive).
-/// A rejected project term does not block the series term: rejecting means "not for
-/// this book", not "nothing here".
+/// Resolve the effective glossary of a project: its own approved terms, then the
+/// approved series terms whose source is not overridden by a project term
+/// (case-insensitive).
+///
+/// Only `approved` rows count. Candidates and conflicts are proposals by a model that
+/// may be wrong — the summarizer used to echo the target as the source, telling the
+/// translator to keep words untranslated — so they wait for the user. A project term
+/// that is not approved does not block the series term either: rejecting means "not
+/// for this book", not "nothing here".
 pub async fn effective_terms(pool: &SqlitePool, project_id: &str) -> Result<Vec<ResolvedTerm>> {
     let project = repo::get_project(pool, project_id)
         .await?
@@ -139,7 +144,7 @@ pub async fn effective_terms(pool: &SqlitePool, project_id: &str) -> Result<Vec<
     let mut overridden: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
 
     for term in repo::list_glossary_terms(pool, project_id).await? {
-        if term.status == "rejected" {
+        if term.status != "approved" {
             continue;
         }
         let key = term.source.trim().to_lowercase();
@@ -168,7 +173,7 @@ pub async fn effective_terms(pool: &SqlitePool, project_id: &str) -> Result<Vec<
             .push(variant.text);
     }
     for term in repo::list_series_terms(pool, series_id).await? {
-        if term.status == "rejected" {
+        if term.status != "approved" {
             continue;
         }
         let key = term.source.trim().to_lowercase();
@@ -708,6 +713,28 @@ mod tests {
         assert_eq!(terms.len(), 1);
         assert_eq!(terms[0].target, "custode");
         assert_eq!(terms[0].scope, GlossaryScope::Series);
+    }
+
+    #[tokio::test]
+    async fn only_approved_terms_reach_the_effective_glossary() {
+        let (pool, _dir) = crate::db::connect_temp_file().await.expect("pool");
+        let project = seed(&pool, Some("en")).await;
+        assign_to_series(&pool, &project.id).await;
+        add_project_term(&pool, &project.id, "Figés", "Figés", "candidate").await;
+        add_project_term(&pool, &project.id, "Sentinelles", "Watchers", "conflict").await;
+        add_project_term(&pool, &project.id, "Spires", "Spires", "approved").await;
+        add_series_term(&pool, "st1", "keeper", "custode", "candidate").await;
+        add_series_term(&pool, "st2", "ship", "nave", "approved").await;
+        // A project candidate does not hide the approved series rendering.
+        add_project_term(&pool, &project.id, "ship", "vascello", "candidate").await;
+
+        let terms = effective_terms(&pool, &project.id).await.expect("terms");
+        let mut seen: Vec<(&str, &str)> = terms
+            .iter()
+            .map(|term| (term.source.as_str(), term.target.as_str()))
+            .collect();
+        seen.sort_unstable();
+        assert_eq!(seen, [("Spires", "Spires"), ("ship", "nave")]);
     }
 
     #[tokio::test]

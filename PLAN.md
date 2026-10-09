@@ -674,9 +674,10 @@ From the chapter excerpt below produce JSON only:
 Output at most 8 new_terms, only terms that recur or matter.
 ```
 
-The `new_terms` enter `glossary_term` as `status='candidate'`: confirmation is up to the user
-(or automatic, if configured). It is the mechanism that satisfies "memory of the terminological
-choices already made".
+The `new_terms` enter `glossary_term` as `status='candidate'` and confirmation is up to the
+user: **only `approved` terms reach the translator prompt** (and the QA glossary check), so a
+wrong proposal never steers a translation before someone has looked at it. It is the mechanism
+that satisfies "memory of the terminological choices already made".
 
 Mechanics: a `summarize` job runs on the `orchestrator` role after every 5 completed chunks of a
 chapter and once when the chapter has no unfinished chunk left. A rolling run writes
@@ -807,9 +808,9 @@ book, and a series adds a shared layer that **evolves after the books are transl
 - **`series`** owns the pinned language pair (`source_lang`, `target_lang`) every member book
   shares, a name and free-form settings. `project.series_id` + `project.series_order` place a
   book in the saga; the series is optional (a standalone book is exactly what exists today).
-- **Glossary resolution, no copies.** The prompt sees the *effective* glossary: project terms
-  first, then series terms, with a project term **overriding** the series rendering for the same
-  source. Nothing is copied at creation time, so editing a series term immediately reaches every
+- **Glossary resolution, no copies.** The prompt sees the *effective* glossary: approved project
+  terms first, then approved series terms, with an approved project term **overriding** the
+  series rendering for the same source. Nothing is copied at creation time, so editing a series term immediately reaches every
   book, and an override stays an explicit, per-book decision.
 - **Aliases and variants.** `series_glossary_variant` lists the surface forms of a term
   (`Keeper`, `the Keeper`, `Keeper's`). Filtering for "the terms present in this chunk" matches

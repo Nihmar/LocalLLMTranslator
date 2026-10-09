@@ -157,13 +157,13 @@ Commands: `project_list`, `project_create`, `project_get`, `project_delete`,
 `expected_revision` are both given the write is optimistic: a row changed by another writer in the
 meantime is rejected instead of overwritten. `glossary_delete` takes the row id; `glossary_list`
 takes `{project_id}`. Candidates proposed by the reconnaissance and the summarizer are approved,
-edited or rejected here; the translator prompt only ever sees non-rejected terms, and a proposal
+edited or rejected here; the translator prompt only ever sees `approved` terms, and a proposal
 that conflicts with an existing rendering surfaces as `status='conflict'` plus a
 `qa_finding(kind='glossary_conflict')`.
 
 A project may belong to a `series`: the translator prompt sees the **effective glossary**, i.e.
-the project's own terms first and then the series terms, with a project term overriding the
-series rendering for the same source (aliases of a series term are matched too).
+the project's own approved terms first and then the approved series terms, with an approved
+project term overriding the series rendering for the same source (aliases of a series term are matched too).
 `project_set_series` takes `{project_id, series_id?, series_order?}`; a series pins the
 source/target language pair its books share. Series terms live in `series_glossary_term`:
 `series_glossary_upsert` takes the same shape as `glossary_upsert` with `series_id` instead of

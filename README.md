@@ -78,8 +78,8 @@ orchestrator model bound the fields stay editable by hand. The app never fetches
 While translation runs, the same role maintains the memory: a summary of the chapter so far
 every five chunks, a final summary when the chapter is complete (used as context by the next
 chapters), candidate terms that never demote an existing rendering, and style-note candidates
-the user can add to the guide. The glossary is editable in the profile panel; rejected terms
-never reach a prompt, and only the terms a chunk actually contains are injected, so a book with
+the user can add to the guide. The glossary is editable in the profile panel; only approved
+terms reach a prompt (candidates wait for your decision), and only the terms a chunk actually contains are injected, so a book with
 hundreds of entries does not eat the context.
 
 The context budget is not a constant: `ingest` and the translator read `n_ctx` from `/props`
@@ -169,7 +169,7 @@ which model is "best":
 | `translator` | small (4B) | it is the pass that **decodes** the most (its answer is as long as the chunk), so its speed is felt on every chunk of the book |
 | `editor` | big (12B) | its prompt is the source **and** the translation of the chunk — almost all prefill, a short answer — and it is where judgement matters: a noisy editor is time spent reviewing |
 | `proofreader` | small (4B) | monolingual polish; every change is a suggestion you accept or reject |
-| `orchestrator` | big (12B) | it runs rarely (reconnaissance once, summaries every few chunks) and its output — style guide, synopsis, glossary candidates — is read by the translator on **every** chunk |
+| `orchestrator` | big (12B) | it runs rarely (reconnaissance once, summaries every few chunks) and its output — style guide, synopsis, glossary terms, once you confirm them — is read by the translator on **every** chunk |
 
 ```sh
 # Small model: translator + proofreader
