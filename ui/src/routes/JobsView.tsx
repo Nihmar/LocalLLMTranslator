@@ -6,6 +6,7 @@ import { ResourceGauge } from "../components/ResourceGauge";
 import { StatusBadge } from "../components/StatusBadge";
 import { onJobProgress, onMetricsTick } from "../lib/events";
 import { useTicker } from "../lib/hooks";
+import { downloadUrl } from "../lib/http";
 import { KIND_LABELS, jobKindLabel, payloadChunkId } from "../lib/jobs";
 import {
   countLabel,
@@ -19,7 +20,15 @@ import {
   shortId,
   truncate,
 } from "../lib/format";
-import { diagnosticsExport, diagnosticsPaths, jobList, metricsGet, openPath, toErrorMessage } from "../lib/ipc";
+import {
+  diagnosticsExport,
+  diagnosticsPaths,
+  isTauriRuntime,
+  jobList,
+  metricsGet,
+  openPath,
+  toErrorMessage,
+} from "../lib/ipc";
 import type { DiagnosticsPaths, JobView, Metrics, Project } from "../lib/types";
 import type { ViewId } from "../App";
 
@@ -531,18 +540,20 @@ export function JobsView({ project, onNavigate }: JobsViewProps) {
                 fallimenti: nessun testo del libro, prompt o database.
               </p>
               <div className="flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  className="btn"
-                  disabled={diagPaths === null}
-                  onClick={() => {
-                    if (diagPaths !== null) {
-                      void openPath(diagPaths.log_dir);
-                    }
-                  }}
-                >
-                  Apri cartella log
-                </button>
+                {isTauriRuntime() ? (
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={diagPaths === null}
+                    onClick={() => {
+                      if (diagPaths !== null) {
+                        void openPath(diagPaths.log_dir);
+                      }
+                    }}
+                  >
+                    Apri cartella log
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   className="btn btn-primary"
@@ -553,13 +564,19 @@ export function JobsView({ project, onNavigate }: JobsViewProps) {
                   Esporta diagnostica
                 </button>
                 {exportedBundle !== null ? (
-                  <button
-                    type="button"
-                    className="btn btn-sm btn-ghost"
-                    onClick={() => void openPath(parentDirectory(exportedBundle))}
-                  >
-                    Apri cartella del bundle
-                  </button>
+                  isTauriRuntime() ? (
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-ghost"
+                      onClick={() => void openPath(parentDirectory(exportedBundle))}
+                    >
+                      Apri cartella del bundle
+                    </button>
+                  ) : (
+                    <a className="btn btn-sm btn-ghost" href={downloadUrl(exportedBundle)} download>
+                      Scarica diagnostica
+                    </a>
+                  )
                 ) : null}
               </div>
               {diagPaths !== null ? (

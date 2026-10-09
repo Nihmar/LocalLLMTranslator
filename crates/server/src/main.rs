@@ -7,6 +7,7 @@
 
 mod api;
 mod events;
+mod files;
 
 use std::convert::Infallible;
 use std::net::{IpAddr, SocketAddr};
@@ -15,7 +16,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use app_lib::AppState;
-use axum::extract::{Path, Request, State};
+use axum::extract::{DefaultBodyLimit, Path, Request, State};
 use axum::http::{header, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::sse::{Event, KeepAlive, Sse};
@@ -136,6 +137,11 @@ fn app_router(server: ServerState, ui_dir: &std::path::Path) -> Router {
     let api = Router::new()
         .route("/{command}", post(run_command))
         .route("/events", get(stream_events))
+        .route(
+            "/upload",
+            post(files::upload_file).layer(DefaultBodyLimit::max(files::MAX_UPLOAD_BYTES)),
+        )
+        .route("/download", get(files::download_file))
         .route_layer(middleware::from_fn_with_state(
             server.clone(),
             require_token,
@@ -172,7 +178,7 @@ async fn run_command(
     }
 }
 
-fn error_response(error: app_lib::error::AppError) -> Response {
+pub(crate) fn error_response(error: app_lib::error::AppError) -> Response {
     let status = api::status_for(&error);
     (status, Json(error)).into_response()
 }

@@ -30,7 +30,12 @@ export function apiToken(): string | null {
 
 /** Headers for every `/api/*` request. */
 export function apiHeaders(): Record<string, string> {
-  const headers: Record<string, string> = { "content-type": "application/json" };
+  return { "content-type": "application/json", ...authHeaders() };
+}
+
+/** Headers for a request whose body is not JSON (the upload). */
+function authHeaders(): Record<string, string> {
+  const headers: Record<string, string> = {};
   const token = apiToken();
   if (token !== null) {
     headers["authorization"] = `Bearer ${token}`;
@@ -57,6 +62,37 @@ export async function postCommand(
     throw payload ?? new Error(`HTTP ${response.status} from ${command}`);
   }
   return payload;
+}
+
+/** A file stored by the server for a path-based command (`PLAN.md` §12.3). */
+export interface UploadedFile {
+  path: string;
+  name: string;
+  bytes: number;
+}
+
+/** `POST /api/upload`: the body is the file itself, so no JSON content type. */
+export async function uploadFile(file: File): Promise<UploadedFile> {
+  const response = await fetch(`/api/upload?filename=${encodeURIComponent(file.name)}`, {
+    method: "POST",
+    headers: authHeaders(),
+    body: file,
+  });
+  const payload = parseBody(await response.text());
+  if (!response.ok) {
+    throw payload ?? new Error(`HTTP ${response.status} from the upload`);
+  }
+  return payload as UploadedFile;
+}
+
+/** The `GET /api/download` URL of a file under the data directory. */
+export function downloadUrl(path: string): string {
+  const params = new URLSearchParams({ path });
+  const token = apiToken();
+  if (token !== null) {
+    params.set("token", token);
+  }
+  return `/api/download?${params.toString()}`;
 }
 
 /** Parses a JSON body, degrading to the raw text when it is not JSON. */

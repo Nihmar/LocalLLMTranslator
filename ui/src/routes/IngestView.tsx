@@ -5,6 +5,7 @@ import { FormField } from "../components/FormField";
 import { StatusBadge } from "../components/StatusBadge";
 import { basename, fileExtension, formatNumber } from "../lib/format";
 import { pickDocumentFile } from "../lib/dialog";
+import { uploadFile } from "../lib/http";
 import { onJobProgress } from "../lib/events";
 import { ingestStart, isTauriRuntime, jobList, projectGet, toErrorMessage } from "../lib/ipc";
 import type { Chapter, Job, PdfBackend, Project, ProjectDetail, SourceFormat } from "../lib/types";
@@ -54,6 +55,8 @@ export function IngestView({ project, onNavigate }: IngestViewProps) {
   const [dragging, setDragging] = useState(false);
   const [pdfBackend, setPdfBackend] = useState<PdfBackend>("auto");
   const [starting, setStarting] = useState(false);
+  // Browser only: the picked or dropped file is uploaded before any command sees it.
+  const [uploading, setUploading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [jobId, setJobId] = useState<string | null>(null);
@@ -153,6 +156,20 @@ export function IngestView({ project, onNavigate }: IngestViewProps) {
     [project, jobId, refreshOutcome],
   );
 
+  /** Store a browser file on the server and use the returned path. */
+  async function acceptFile(file: File) {
+    setUploading(true);
+    setError(null);
+    try {
+      const uploaded = await uploadFile(file);
+      setPath(uploaded.path);
+    } catch (uploadError) {
+      setError(toErrorMessage(uploadError));
+    } finally {
+      setUploading(false);
+    }
+  }
+
   async function handleStart() {
     if (project === null) {
       return;
@@ -247,11 +264,11 @@ export function IngestView({ project, onNavigate }: IngestViewProps) {
                 return;
               }
               const dropped = event.dataTransfer.files[0];
-              setError(
-                dropped === undefined
-                  ? "Trascinamento non riconosciuto: indica il percorso a mano."
-                  : "Nel browser non è possibile leggere il percorso assoluto di un file trascinato: avvia l'app desktop oppure incolla il percorso nel campo qui sotto.",
-              );
+              if (dropped === undefined) {
+                setError("Trascinamento non riconosciuto: indica il percorso a mano.");
+                return;
+              }
+              void acceptFile(dropped);
             }}
           >
             <span aria-hidden="true" className="text-2xl">
@@ -262,7 +279,7 @@ export function IngestView({ project, onNavigate }: IngestViewProps) {
             <button
               type="button"
               className="btn btn-sm"
-              disabled={starting}
+              disabled={starting || uploading}
               onClick={() => {
                 void pickDocumentFile().then((picked) => {
                   if (picked !== null) {
@@ -272,12 +289,13 @@ export function IngestView({ project, onNavigate }: IngestViewProps) {
                 });
               }}
             >
+              {uploading ? <span className="spinner" aria-hidden="true" /> : null}
               Sfoglia…
             </button>
             {!isTauriRuntime() ? (
-              <p className="text-[0.72rem] text-warn">
-                Fuori dall&apos;app desktop il trascinamento non può fornire un percorso: usa il
-                campo manuale.
+              <p className="text-[0.72rem] text-muted">
+                Nel browser il file scelto (o trascinato) viene caricato sul server; il percorso
+                qui sotto resta modificabile.
               </p>
             ) : null}
           </div>

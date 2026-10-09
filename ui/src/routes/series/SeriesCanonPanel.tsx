@@ -1,7 +1,9 @@
 import { useMemo, useState } from "react";
 import { pickSeriesBundleFile } from "../../lib/dialog";
 import { parentDirectory } from "../../lib/format";
+import { downloadUrl } from "../../lib/http";
 import {
+  isTauriRuntime,
   openPath,
   seriesExport,
   seriesImport,
@@ -211,13 +213,19 @@ export function SeriesCanonPanel({
                 Scansiona QA tutti i libri
               </button>
               {exportedPath !== null ? (
-                <button
-                  type="button"
-                  className="btn btn-sm btn-ghost"
-                  onClick={() => void openPath(parentDirectory(exportedPath))}
-                >
-                  Apri cartella
-                </button>
+                isTauriRuntime() ? (
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-ghost"
+                    onClick={() => void openPath(parentDirectory(exportedPath))}
+                  >
+                    Apri cartella
+                  </button>
+                ) : (
+                  <a className="btn btn-sm btn-ghost" href={downloadUrl(exportedPath)} download>
+                    Scarica bundle
+                  </a>
+                )
               ) : null}
             </div>
             <p className="field-hint">

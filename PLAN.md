@@ -11,7 +11,7 @@
 > | Review | works; span-level proposals, markup guard at generation and acceptance |
 > | Export | works; refuses to mix untranslated chunks without confirmation |
 > | Series | works; UI component pending a refactor (#10) |
-> | Web app | `llmtz serve` on loopback (issue #17); browser upload/download not yet |
+> | Web app | `llmtz serve` on loopback: command API, SSE, upload/download (issue #17) |
 
 ---
 
@@ -1247,6 +1247,13 @@ the no-argument ones — and answers with the same JSON. A failure is the serial
 502 (`endpoint`) or 500. `open_path` exists only in the desktop shell and answers 400.
 - `GET /api/events` streams the §12.2 events as Server-Sent Events: one named event per event
 name (`job://progress`, `log://line`, …) with the payload verbatim.
+- `POST /api/upload?filename=<name>` stores the raw request body under
+`<data_dir>/uploads/<id>/<name>` and answers `{path, name, bytes}`: the browser client turns a
+picked or dropped file into the absolute path the path-based commands expect. Empty bodies and
+uploads over 512 MB are refused.
+- `GET /api/download?path=<absolute>` streams a file back as an attachment, with a content type
+from its extension. The path must resolve inside the data directory (symlinks resolved): an export
+written elsewhere on the machine is not downloadable.
 - Everything else serves the built UI (`ui/dist`) with an SPA fallback to `index.html`.
 
 Flags: `--host` (default `127.0.0.1`), `--port` (default 4321), `--data-dir` (default: the
@@ -1259,7 +1266,10 @@ llmtranslator_sidecar`).
 `ui/src/lib/ipc.ts` and `ui/src/lib/events.ts` pick the transport at runtime
 (`isTauriRuntime()`): inside the Tauri webview `invoke`/`listen`, in a browser
 `POST /api/<command>` and the SSE stream, with the token from `?token=` kept in
-`sessionStorage`. There is no other network call, and nothing is fetched remotely.
+`sessionStorage`. The file pickers behave the same way: the desktop dialog returns an absolute
+path, the browser opens a hidden `<input type=file>` and uploads the choice; an exported artifact
+is revealed by the OS in the desktop and downloaded from `/api/download` in the browser. There is
+no other network call, and nothing is fetched remotely.
 
 ---
 

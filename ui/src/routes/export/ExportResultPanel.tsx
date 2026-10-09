@@ -1,5 +1,7 @@
 import { StatusBadge } from "../../components/StatusBadge";
 import { basename, countLabel, formatDuration, formatNumber } from "../../lib/format";
+import { downloadUrl } from "../../lib/http";
+import { isTauriRuntime } from "../../lib/ipc";
 import type { ExportOutcome } from "../../lib/types";
 import { parentDirectory } from "./shared";
 
@@ -50,24 +52,36 @@ export function ExportResultPanel({
         ) : null}
 
         <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            className="btn btn-primary"
-            onClick={() => {
-              onOpen(result.output_path);
-            }}
-          >
-            Apri output
-          </button>
-          <button
-            type="button"
-            className="btn"
-            onClick={() => {
-              onOpen(parentDirectory(result.output_path));
-            }}
-          >
-            Apri cartella
-          </button>
+          {isTauriRuntime() ? (
+            <>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => {
+                  onOpen(result.output_path);
+                }}
+              >
+                Apri output
+              </button>
+              <button
+                type="button"
+                className="btn"
+                onClick={() => {
+                  onOpen(parentDirectory(result.output_path));
+                }}
+              >
+                Apri cartella
+              </button>
+            </>
+          ) : (
+            <a
+              className="btn btn-primary"
+              href={downloadUrl(result.output_path)}
+              download={basename(result.output_path)}
+            >
+              Scarica
+            </a>
+          )}
           <span className="mono-chip" title={result.output_path}>
             {basename(result.output_path)}
           </span>

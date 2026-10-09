@@ -127,9 +127,9 @@ the desktop app's data directory, so the browser shows the same books; `LLMTZ_DA
 `LLMTZ_UI_DIR` and `LLMTRANSLATOR_SIDECAR` override the defaults.
 
 The desktop app is untouched: `ui/src/lib/ipc.ts` and `ui/src/lib/events.ts` pick
-invoke/listen or fetch/SSE at runtime. Uploads and downloads (add a file, save an export) are not
-implemented yet: the browser can only reach paths that exist on the machine running the server.
-See issue #17.
+invoke/listen or fetch/SSE at runtime. Picking a file in the browser uploads it to
+`<data-dir>/uploads/` and the path-based commands receive the stored path; exports and bundles are
+downloaded from `/api/download`, which only serves files under the data directory. See issue #17.
 
 ## `llama-server`
 
@@ -317,7 +317,7 @@ tools/          Fake llama-server and fixture generator
 | M5 | Export and typesetting with templates and Lua filters | ✅ |
 | M6 | Parallel sub-agents with VRAM budget and serial degradation | ✅ |
 | M7 | Packaging (PyInstaller + Tauri bundle) | ✅ |
-| W1 | Headless web app (`llmtz serve`): HTTP command API, SSE events, browser transport | ✅ loopback; upload/download pending (#17) |
+| W1 | Headless web app (`llmtz serve`): HTTP command API, SSE events, browser transport, upload/download | ✅ |
 
 Known gaps, worth knowing rather than blocking: the sidecar's `estimate_tokens` route is
 intentionally unused because the control plane counts exactly via `/tokenize` with a built-in

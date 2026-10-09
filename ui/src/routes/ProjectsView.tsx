@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { EmptyState } from "../components/EmptyState";
 import { pickBundleFile } from "../lib/dialog";
 import { formatBytes } from "../lib/format";
+import { downloadUrl } from "../lib/http";
 import {
   ingestStart,
   openPath,
@@ -10,6 +11,7 @@ import {
   projectGet,
   projectImport,
   projectList,
+  isTauriRuntime,
   toErrorMessage,
 } from "../lib/ipc";
 import type { ExportBundleOutcome, Project } from "../lib/types";
@@ -195,15 +197,21 @@ export function ProjectsView({
             {actionNotice}
             {bundleResult !== null ? (
               <span className="mt-2 flex items-center gap-2">
-                <button
-                  type="button"
-                  className="btn btn-sm"
-                  onClick={() => {
-                    void openPath(bundleResult.output_path);
-                  }}
-                >
-                  Apri cartella
-                </button>
+                {isTauriRuntime() ? (
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    onClick={() => {
+                      void openPath(bundleResult.output_path);
+                    }}
+                  >
+                    Apri cartella
+                  </button>
+                ) : (
+                  <a className="btn btn-sm" href={downloadUrl(bundleResult.output_path)} download>
+                    Scarica bundle
+                  </a>
+                )}
                 <span className="mono-chip">
                   {formatBytes(bundleResult.bytes)} · {bundleResult.files} file
                 </span>

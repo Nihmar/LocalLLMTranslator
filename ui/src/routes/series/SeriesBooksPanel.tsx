@@ -1,5 +1,5 @@
 import { FormField } from "../../components/FormField";
-import { openPath, projectSetSeries } from "../../lib/ipc";
+import { isTauriRuntime, openPath, projectSetSeries } from "../../lib/ipc";
 import type { Project, SeriesDetail } from "../../lib/types";
 import type { SeriesPanelProps } from "./shared";
 
@@ -68,13 +68,15 @@ export function SeriesBooksPanel({
                   </span>
                 </span>
                 <span className="flex items-center gap-1">
-                  <button
-                    type="button"
-                    className="btn btn-sm btn-ghost"
-                    onClick={() => void openPath(member.source_path)}
-                  >
-                    Apri sorgente
-                  </button>
+                  {isTauriRuntime() ? (
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-ghost"
+                      onClick={() => void openPath(member.source_path)}
+                    >
+                      Apri sorgente
+                    </button>
+                  ) : null}
                   <button
                     type="button"
                     className="btn btn-sm"
