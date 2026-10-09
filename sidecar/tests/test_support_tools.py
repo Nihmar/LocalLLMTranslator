@@ -734,7 +734,8 @@ REPRESENTATIVE_CONTEXTS: dict[str, dict[str, object]] = {
         "source_language": "English",
         "target_language": "Italian",
         "chapter_title": "Chapter One",
-        "excerpt": "The harbour was quiet that morning.",
+        "source_excerpt": "The harbour was quiet that morning.",
+        "excerpt": "Il porto era quieto quella mattina.",
     },
     "orchestrator.md": {
         "source_language": "English",
