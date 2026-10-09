@@ -1,15 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ChapterReader } from "../components/ChapterReader";
-import { ChunkTable } from "../components/ChunkTable";
 import type { ChunkRow } from "../components/ChunkTable";
 import { EmptyState } from "../components/EmptyState";
-import { LogView } from "../components/LogView";
-import { ProgressBar } from "../components/ProgressBar";
-import { ResourceGauge } from "../components/ResourceGauge";
-import { StatusBadge } from "../components/StatusBadge";
 import { chapterProgress, chunkTranslated } from "../lib/chapters";
 import { onJobProgress, onMetricsTick } from "../lib/events";
-import { countLabel, formatNumber } from "../lib/format";
+import { countLabel } from "../lib/format";
 import { isActiveJobState } from "../lib/jobs";
 import {
   chunkGet,
@@ -24,6 +19,17 @@ import {
 } from "../lib/ipc";
 import type { Chunk, ChunkDetail, Chapter, Job, Metrics, Project } from "../lib/types";
 import type { ViewId } from "../App";
+import { ChunkBrowser } from "./translate/ChunkBrowser";
+import { ChunkDetailPanel } from "./translate/ChunkDetailPanel";
+import { TranslateControls } from "./translate/TranslateControls";
+import { TranslateProgressPanel } from "./translate/TranslateProgressPanel";
+import { TranslateSidebar } from "./translate/TranslateSidebar";
+import {
+  countStatuses,
+  PAGE_SIZE,
+  parseChunkId,
+  parseStringArray,
+} from "./translate/shared";
 
 /**
  * Translation page (`PLAN.md` §11.3): the chunk table, the run controls and the resource gauge.
@@ -41,8 +47,8 @@ import type { ViewId } from "../App";
  * opens a live preview composed from the chunks already in memory, so it follows a running
  * translation without another command or a second data source (`PLAN.md` §11.3).
  *
- * The job rows are fetched here too, both for the attempt counts of the table and for the
- * in-flight summary that opens the shared job monitor.
+ * The panels in `./translate/` own the presentation; this component keeps the loaded rows, the
+ * filters and the run controls.
  */
 
 export interface TranslateViewProps {
@@ -50,85 +56,6 @@ export interface TranslateViewProps {
   onNavigate: (view: ViewId) => void;
   /** Opens the shared job monitor, scoped to the open project. */
   onOpenJobs: () => void;
-}
-
-const STATUS_FILTERS: ReadonlyArray<{ value: string; label: string }> = [
-  { value: "all", label: "Tutti gli stati" },
-  { value: "pending", label: "In attesa" },
-  { value: "running", label: "In corso" },
-  { value: "done", label: "Completati" },
-  { value: "failed", label: "Falliti" },
-  { value: "needs_review", label: "Da rivedere" },
-];
-
-const PAGE_SIZE = 200;
-
-interface Counts {
-  pending: number;
-  running: number;
-  done: number;
-  failed: number;
-  needs_review: number;
-}
-
-function countStatuses(chunks: readonly Chunk[]): Counts {
-  const counts: Counts = { pending: 0, running: 0, done: 0, failed: 0, needs_review: 0 };
-  for (const chunk of chunks) {
-    if (chunk.status === "pending") {
-      counts.pending += 1;
-    } else if (chunk.status === "running") {
-      counts.running += 1;
-    } else if (chunk.status === "done") {
-      counts.done += 1;
-    } else if (chunk.status === "failed") {
-      counts.failed += 1;
-    } else if (chunk.status === "needs_review") {
-      counts.needs_review += 1;
-    }
-  }
-  return counts;
-}
-
-/** Parses a `*_json` column that holds a JSON array of strings; `[]` on anything unexpected. */
-function parseStringArray(json: string): string[] {
-  try {
-    const parsed: unknown = JSON.parse(json);
-    if (!Array.isArray(parsed)) {
-      return [];
-    }
-    return parsed.filter((item): item is string => typeof item === "string");
-  } catch {
-    return [];
-  }
-}
-
-/** Reads `chunk_id` out of a job `payload_json`; `null` when the payload has no such field. */
-function parseChunkId(payloadJson: string): string | null {
-  try {
-    const parsed: unknown = JSON.parse(payloadJson);
-    if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
-      const value = (parsed as Record<string, unknown>)["chunk_id"];
-      return typeof value === "string" ? value : null;
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-function blockOriginLabel(origin: string): string {
-  switch (origin) {
-    case "translator":
-      return "traduttore";
-    case "editor":
-      return "editor";
-    case "proofreader":
-      return "proofreader";
-    case "user":
-      return "utente";
-    default:
-      return origin;
-  }
 }
 
 export function TranslateView({ project, onNavigate, onOpenJobs }: TranslateViewProps) {
@@ -151,10 +78,6 @@ export function TranslateView({ project, onNavigate, onOpenJobs }: TranslateView
   const [detail, setDetail] = useState<ChunkDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
-
-
-  // Bumped on every `job://progress` so the book profile panel refetches the
-  // reconnaissance outcome without opening its own event listener.
 
   const projectId = project?.id ?? null;
 
@@ -268,10 +191,7 @@ export function TranslateView({ project, onNavigate, onOpenJobs }: TranslateView
   }, [jobs]);
 
   const visibleChunks = useMemo(
-    () =>
-      statusFilter === "all"
-        ? chunks
-        : chunks.filter((chunk) => chunk.status === statusFilter),
+    () => (statusFilter === "all" ? chunks : chunks.filter((chunk) => chunk.status === statusFilter)),
     [chunks, statusFilter],
   );
 
@@ -297,14 +217,8 @@ export function TranslateView({ project, onNavigate, onOpenJobs }: TranslateView
   // Progress follows the text, not the status: a `needs_review` chunk that kept its
   // translation is translated, the same predicate the export uses.
   const translatedCount = useMemo(() => chunks.filter(chunkTranslated).length, [chunks]);
-  const activeJobs = useMemo(
-    () => jobs.filter((job) => isActiveJobState(job.state)).length,
-    [jobs],
-  );
-  const pendingJobs = useMemo(
-    () => jobs.filter((job) => job.state === "pending").length,
-    [jobs],
-  );
+  const activeJobs = useMemo(() => jobs.filter((job) => isActiveJobState(job.state)).length, [jobs]);
+  const pendingJobs = useMemo(() => jobs.filter((job) => job.state === "pending").length, [jobs]);
   const totalTokens = useMemo(
     () => chunks.reduce((sum, chunk) => sum + chunk.token_estimate, 0),
     [chunks],
@@ -383,17 +297,6 @@ export function TranslateView({ project, onNavigate, onOpenJobs }: TranslateView
     }
   }
 
-  const detailRows = useMemo(() => {
-    if (detail === null) {
-      return [];
-    }
-    const byBlock = new Map(detail.translations.map((entry) => [entry.block_id, entry]));
-    return detail.blocks.map((block) => ({
-      block,
-      translation: byBlock.get(block.id) ?? null,
-    }));
-  }, [detail]);
-
   if (project === null) {
     return (
       <div className="section-stack">
@@ -410,91 +313,34 @@ export function TranslateView({ project, onNavigate, onOpenJobs }: TranslateView
     );
   }
 
-  const busy = control !== "idle";
-  const hasChunks = visibleChunks.length > 0;
-
   return (
     <div className="section-stack">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="font-serif text-2xl font-medium text-ink">Traduci</h1>
-          <p className="mt-0.5 text-xs text-muted">
-            Progetto <span className="font-semibold text-ink-soft">{project.name}</span> —{" "}
-            {countLabel(chunks.length, "chunk nel progetto", "chunk nel progetto")}
-            {visibleChunks.length !== chunks.length
-              ? ` · ${formatNumber(visibleChunks.length)} con lo stato scelto`
-              : ""}
-            {visibleChunks.length > limit ? ` · mostrati ${formatNumber(limit)}` : ""}.
-          </p>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2">
-          <label className="flex items-center gap-1 text-xs text-muted">
-            Stato
-            <select
-              className="select"
-              style={{ width: "auto" }}
-              value={statusFilter}
-              onChange={(event) => {
-                setStatusFilter(event.target.value);
-              }}
-            >
-              {STATUS_FILTERS.map((filter) => (
-                <option key={filter.value} value={filter.value}>
-                  {filter.label}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <button
-            type="button"
-            className="btn btn-primary"
-            disabled={busy}
-            onClick={() => {
-              void runStart(false);
-            }}
-          >
-            {control === "starting" ? <span className="spinner" aria-hidden="true" /> : null}
-            Avvia / Riprendi
-          </button>
-
-          <button
-            type="button"
-            className="btn"
-            disabled={busy}
-            onClick={() => {
-              void runStart(true);
-            }}
-            title="Rimette in coda solo i chunk falliti o da rivedere"
-          >
-            Riprova falliti
-          </button>
-
-          <button type="button" className="btn" disabled={busy} onClick={() => void runPause()}>
-            {control === "pausing" ? <span className="spinner" aria-hidden="true" /> : null}
-            Pausa
-          </button>
-
-          <button type="button" className="btn" disabled={busy} onClick={() => void runCancel()}>
-            {control === "cancelling" ? <span className="spinner" aria-hidden="true" /> : null}
-            Annulla
-          </button>
-
-          <button
-            type="button"
-            className="btn"
-            disabled={loading}
-            onClick={() => {
-              void loadChunks();
-              void loadMetrics();
-            }}
-            title="Rilegge la tabella dal database"
-          >
-            Aggiorna
-          </button>
-        </div>
-      </div>
+      <TranslateControls
+        projectName={project.name}
+        chunksTotal={chunks.length}
+        visibleCount={visibleChunks.length}
+        limit={limit}
+        statusFilter={statusFilter}
+        onStatusFilter={setStatusFilter}
+        control={control}
+        loading={loading}
+        onStart={() => {
+          void runStart(false);
+        }}
+        onRetry={() => {
+          void runStart(true);
+        }}
+        onPause={() => {
+          void runPause();
+        }}
+        onCancel={() => {
+          void runCancel();
+        }}
+        onReload={() => {
+          void loadChunks();
+          void loadMetrics();
+        }}
+      />
 
       {actionError !== null ? (
         <div className="banner banner-error" role="alert">
@@ -510,42 +356,12 @@ export function TranslateView({ project, onNavigate, onOpenJobs }: TranslateView
         </div>
       ) : null}
 
-      <div className="panel panel-pad section-stack">
-            <ProgressBar
-              value={translatedCount}
-              total={chunks.length}
-              label="Avanzamento complessivo"
-              tone="accent"
-              showCounts
-            />
-
-            <div className="grid grid-cols-6 gap-2">
-              <div className="stat-tile">
-                <div className="stat-label">In attesa</div>
-                <div className="stat-value">{formatNumber(counts.pending)}</div>
-              </div>
-              <div className="stat-tile">
-                <div className="stat-label">In corso</div>
-                <div className="stat-value">{formatNumber(counts.running)}</div>
-              </div>
-              <div className="stat-tile">
-                <div className="stat-label">Completati</div>
-                <div className="stat-value">{formatNumber(counts.done)}</div>
-              </div>
-              <div className="stat-tile">
-                <div className="stat-label">Falliti</div>
-                <div className="stat-value">{formatNumber(counts.failed)}</div>
-              </div>
-              <div className="stat-tile">
-                <div className="stat-label">Da rivedere</div>
-                <div className="stat-value">{formatNumber(counts.needs_review)}</div>
-              </div>
-              <div className="stat-tile">
-                <div className="stat-label">Token stimati</div>
-                <div className="stat-value">{formatNumber(totalTokens)}</div>
-              </div>
-            </div>
-          </div>
+      <TranslateProgressPanel
+        translatedCount={translatedCount}
+        chunksTotal={chunks.length}
+        counts={counts}
+        totalTokens={totalTokens}
+      />
 
       {chapterRows.length > 0 ? <ChapterReader chapters={chapterRows} chunks={chunks} /> : null}
 
@@ -554,280 +370,53 @@ export function TranslateView({ project, onNavigate, onOpenJobs }: TranslateView
           <span className="panel-title">Dettagli tecnici: chunk, risorse, coda e log</span>
         </summary>
         <div className="panel-pad grid grid-cols-1 gap-3 xl:grid-cols-[minmax(0,1fr)_20rem]">
-        <div className="section-stack min-w-0">
-          <div className="panel flex min-h-0 flex-col" style={{ maxHeight: "34rem" }}>
-            <div className="panel-head">
-              <span className="panel-title">Chunk</span>
-              <span className="flex items-center gap-2">
-                <span className="mono-chip">
-                  {visibleChunks.length > limit
-                    ? `${formatNumber(limit)} di ${formatNumber(visibleChunks.length)} righe`
-                    : `${formatNumber(visibleChunks.length)} righe`}
-                </span>
-                {visibleChunks.length > limit ? (
-                  <button
-                    type="button"
-                    className="btn btn-sm"
-                    disabled={loading}
-                    onClick={() => {
-                      setLimit((current) => current + PAGE_SIZE);
-                    }}
-                  >
-                    Carica altri {formatNumber(PAGE_SIZE)}
-                  </button>
-                ) : null}
-              </span>
-            </div>
+          <div className="section-stack min-w-0">
+            <ChunkBrowser
+              loading={loading}
+              error={error}
+              rows={rows}
+              visibleCount={visibleChunks.length}
+              limit={limit}
+              statusFilter={statusFilter}
+              onReload={() => void loadChunks()}
+              onLoadMore={() => {
+                setLimit((current) => current + PAGE_SIZE);
+              }}
+              onOpenDetails={(chunkId) => {
+                void openDetail(chunkId);
+              }}
+              onNavigate={onNavigate}
+              onResetFilter={() => {
+                setStatusFilter("all");
+              }}
+            />
 
-            {loading ? (
-              <div className="panel-pad">
-                <EmptyState tone="loading" compact title="Lettura dei chunk…" />
-              </div>
-            ) : error !== null ? (
-              <div className="panel-pad">
-                <EmptyState
-                  tone="error"
-                  compact
-                  title="Impossibile leggere i chunk"
-                  details={error}
-                  actionLabel="Riprova"
-                  onAction={() => {
-                    void loadChunks();
-                  }}
-                />
-              </div>
-            ) : !hasChunks ? (
-              <div className="panel-pad">
-                <EmptyState
-                  compact
-                  title={
-                    statusFilter === "all"
-                      ? "Nessun chunk nel progetto"
-                      : "Nessun chunk con questo stato"
-                  }
-                  description={
-                    statusFilter === "all"
-                      ? "Importa il documento dalla pagina Ingestione: i chunk vengono costruiti lì."
-                      : "Cambia il filtro per vedere gli altri chunk."
-                  }
-                  actionLabel={statusFilter === "all" ? "Vai all'ingestione" : "Mostra tutti"}
-                  onAction={() => {
-                    if (statusFilter === "all") {
-                      onNavigate("ingest");
-                    } else {
-                      setStatusFilter("all");
-                    }
-                  }}
-                />
-              </div>
-            ) : (
-              <ChunkTable
-                chunks={rows}
-                onOpenDetails={(chunkId) => {
-                  void openDetail(chunkId);
+            {detailId !== null ? (
+              <ChunkDetailPanel
+                detailId={detailId}
+                detail={detail}
+                detailLoading={detailLoading}
+                detailError={detailError}
+                chapterTitle={chapterTitle}
+                onReload={() => {
+                  void openDetail(detailId);
+                }}
+                onClose={() => {
+                  setDetailId(null);
+                  setDetail(null);
+                  setDetailError(null);
                 }}
               />
-            )}
+            ) : null}
           </div>
 
-          {detailId !== null ? (
-            <div className="panel">
-              <div className="panel-head">
-                <span className="panel-title">
-                  Dettagli chunk <span className="mono-chip">{detailId}</span>
-                </span>
-                <span className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    className="btn btn-sm"
-                    disabled={detailLoading}
-                    onClick={() => {
-                      void openDetail(detailId);
-                    }}
-                  >
-                    Ricarica
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-sm btn-ghost"
-                    onClick={() => {
-                      setDetailId(null);
-                      setDetail(null);
-                      setDetailError(null);
-                    }}
-                  >
-                    Chiudi
-                  </button>
-                </span>
-              </div>
-
-              {detailLoading ? (
-                <div className="panel-pad">
-                  <EmptyState tone="loading" compact title="Lettura del chunk…" />
-                </div>
-              ) : detailError !== null ? (
-                <div className="panel-pad">
-                  <EmptyState tone="error" compact title="Impossibile leggere il chunk" details={detailError} />
-                </div>
-              ) : detail === null ? (
-                <div className="panel-pad">
-                  <EmptyState compact title="Nessun dato" />
-                </div>
-              ) : (
-                <div className="panel-pad section-stack">
-                  <div className="grid grid-cols-4 gap-2">
-                    <div className="stat-tile">
-                      <div className="stat-label">Capitolo</div>
-                      <div className="truncate text-xs text-ink-soft">
-                        {detail.chunk.chapter_id === null
-                          ? "—"
-                          : (chapterTitle.get(detail.chunk.chapter_id) ?? detail.chunk.chapter_id)}
-                      </div>
-                    </div>
-                    <div className="stat-tile">
-                      <div className="stat-label">Token stimati</div>
-                      <div className="stat-value">{formatNumber(detail.chunk.token_estimate)}</div>
-                    </div>
-                    <div className="stat-tile">
-                      <div className="stat-label">Blocchi</div>
-                      <div className="stat-value">{formatNumber(detail.blocks.length)}</div>
-                    </div>
-                    <div className="stat-tile">
-                      <div className="stat-label">Hash prompt</div>
-                      <div className="truncate font-mono text-[0.7rem] text-muted">
-                        {detail.chunk.prompt_hash ?? "—"}
-                      </div>
-                    </div>
-                  </div>
-
-                  {detailRows.length === 0 ? (
-                    <EmptyState
-                      compact
-                      title="Nessun blocco associato"
-                      description="Il chunk è stato salvato ma i blocchi non sono leggibili: verifica la migrazione o ripeti l'ingestione."
-                    />
-                  ) : (
-                    <div className="table-scroll" style={{ maxHeight: "26rem" }}>
-                      <table className="data-table">
-                        <thead>
-                          <tr>
-                            <th style={{ width: "9rem" }}>Blocco</th>
-                            <th>Sorgente</th>
-                            <th>Traduzione</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {detailRows.map(({ block, translation }) => (
-                            <tr key={block.id}>
-                              <td>
-                                <span className="block">
-                                  <span className="mono-chip">{block.id}</span>
-                                </span>
-                                <span className="mt-1 block text-[0.68rem] text-faint">
-                                  {block.kind}
-                                  {block.level > 0 ? ` · L${formatNumber(block.level)}` : ""}
-                                  {block.translatable ? "" : " · non traducibile"}
-                                </span>
-                              </td>
-                              <td>
-                                <pre className="max-w-prose font-mono text-[0.72rem] whitespace-pre-wrap text-ink-soft">
-                                  {block.source_md}
-                                </pre>
-                              </td>
-                              <td>
-                                {translation === null ? (
-                                  <span className="text-faint">— nessuna traduzione —</span>
-                                ) : (
-                                  <>
-                                    <pre className="max-w-prose font-mono text-[0.72rem] whitespace-pre-wrap text-ink">
-                                      {translation.text_md}
-                                    </pre>
-                                    <span className="mt-1 flex items-center gap-1">
-                                      <span className="mono-chip">{blockOriginLabel(translation.origin)}</span>
-                                      <StatusBadge
-                                        status={translation.placeholders_ok ? "ok" : "failed"}
-                                        tone={translation.placeholders_ok ? "success" : "danger"}
-                                        label={
-                                          translation.placeholders_ok
-                                            ? "placeholder integri"
-                                            : "placeholder alterati"
-                                        }
-                                      />
-                                      {translation.edited_by_user ? (
-                                        <span className="badge badge-neutral">modificato a mano</span>
-                                      ) : null}
-                                    </span>
-                                  </>
-                                )}
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-
-                  {detail.chunk.error !== null ? (
-                    <div className="banner banner-error" role="alert">
-                      <span aria-hidden="true">⚠</span>
-                      <span>{detail.chunk.error}</span>
-                    </div>
-                  ) : null}
-                </div>
-              )}
-            </div>
-          ) : null}
-        </div>
-
-        <div className="section-stack">
-          <ResourceGauge metrics={metrics} loading={metricsLoading} compact />
-
-          <div className="panel panel-pad">
-            <div className="flex flex-wrap items-start justify-between gap-2">
-              <div className="min-w-0">
-                <div className="panel-title">Lavori in corso</div>
-                <p className="mt-1 text-xs text-muted">
-                  {countLabel(activeJobs, "job in esecuzione", "job in esecuzione")}
-                  {pendingJobs > 0
-                    ? ` · ${countLabel(pendingJobs, "job in attesa", "job in attesa")}`
-                    : ""}
-                </p>
-              </div>
-              <button
-                type="button"
-                className="btn btn-sm"
-                onClick={onOpenJobs}
-                title="Elenco dei lavori di questo e degli altri progetti, con la possibilità di interromperne uno"
-              >
-                Apri elenco
-              </button>
-            </div>
-            <p className="field-hint">
-              Il monitor dice quale chunk sta traducendo ogni worker e permette di interrompere un
-              lavoro senza fermare la coda.
-            </p>
-          </div>
-
-          <div className="panel panel-pad">
-            <div className="panel-title mb-2">Come si comporta la coda</div>
-            <ul className="list-disc space-y-1 pl-4 text-xs text-muted">
-              <li>Un chunk è l&apos;unità di lavoro e di checkpoint: ogni chunk completato è salvato.</li>
-              <li>
-                «Pausa» ferma l&apos;intero esecutore e non riceve argomenti (
-                <span className="mono-chip">translation_pause</span>); «Annulla» agisce sul progetto
-                aperto, il cui id viene passato a{" "}
-                <span className="mono-chip">translation_cancel</span>.
-              </li>
-              <li>
-                «Avvia / Riprendi» rimette in coda i chunk non completati; «Riprova falliti» solo
-                quelli falliti o da rivedere.
-              </li>
-              <li>I retry automatici rispettano il limite di tentativi del job.</li>
-            </ul>
-          </div>
-
-          <LogView limit={300} heightClass="h-64" />
-        </div>
+          <TranslateSidebar
+            metrics={metrics}
+            metricsLoading={metricsLoading}
+            activeJobs={activeJobs}
+            pendingJobs={pendingJobs}
+            onOpenJobs={onOpenJobs}
+          />
         </div>
       </details>
     </div>
