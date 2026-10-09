@@ -2,7 +2,7 @@
 //!
 //! The editor and proofreader passes run against a wiremock `llama-server`; the
 //! accept path rewrites a block translation and recomposes the chunk without the
-//! sidecar (the placeholder guard skips itself when the sidecar is not running).
+//! sidecar (the markup guard is local and deterministic).
 
 mod common;
 
@@ -204,6 +204,35 @@ async fn proofreader_pass_suggests_span_corrections() -> Result<()> {
         .find(|row| row.origin == review::PROOFREAD_ROLE)
         .expect("the proofreader row");
     assert_eq!(polished.text_md, "Il vecchio porto.");
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_proposal_that_breaks_markup_never_reaches_the_review() -> Result<()> {
+    // The editor proposes to drop the link target: such a change could never be
+    // accepted, so it is not stored at all.
+    let answer = r#"{"verdict":"needs_fix","issues":[{"block_index":0,"severity":"major","kind":"markup","quote":"[il porto](https://x.it)","suggested":"il porto","reason":"simpler"}]}"#;
+    let server = mock_answer(answer).await;
+    let dir = tempfile::tempdir()?;
+    let (pool, deps) = deps_for(dir.path()).await?;
+    let fixture = seed_reviewable(&pool, &server.uri()).await?;
+    set_block_translation(
+        &pool,
+        "b000001",
+        &fixture.chunk_id,
+        "translator",
+        "Vedi [il porto](https://x.it)",
+    )
+    .await?;
+    bind_role(&pool, "review", "editor", &server.uri()).await?;
+
+    let created = review::run_edit_chunk(&deps, None, &fixture.chunk_id).await?;
+    assert_eq!(created, 0);
+    assert!(
+        repo::list_suggestions(&pool, &fixture.project_id, None, None, None)
+            .await?
+            .is_empty()
+    );
     Ok(())
 }
 

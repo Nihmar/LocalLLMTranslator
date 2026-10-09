@@ -475,13 +475,6 @@ impl SidecarClient {
         &self.supervisor
     }
 
-    /// Whether the sidecar process is already running. A caller doing a
-    /// best-effort check (the review placeholder guard) uses this to skip
-    /// instead of paying a spawn it does not need.
-    pub fn is_running(&self) -> bool {
-        self.supervisor.is_running()
-    }
-
     /// Generic call; prefer a typed method below.
     pub async fn call(&self, method: &str, params: Value) -> Result<Value> {
         self.supervisor.call(method, params).await

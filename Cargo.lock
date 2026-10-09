@@ -2255,6 +2255,7 @@ dependencies = [
  "hex",
  "minijinja",
  "parking_lot",
+ "regex",
  "reqwest",
  "serde",
  "serde_json",

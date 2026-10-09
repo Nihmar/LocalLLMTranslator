@@ -5,14 +5,16 @@
 //! answer JSON (`prompts/editor.schema.json`, `prompts/proofreader.schema.json`):
 //! span-level issues with a quote, a replacement, a reason and a severity, stored as
 //! `suggestion` rows. Accepting one rewrites the
-//! block translation with the pass as its origin — after a placeholder guard —
+//! block translation with the pass as its origin — after a markup guard —
 //! and recomposes the chunk's `target_md`, so an export right after the review
 //! sees the accepted text.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::sync::OnceLock;
 
 use minijinja::{context, Environment};
+use regex::Regex;
 use serde::Deserialize;
 use serde_json::Value;
 use sqlx::SqlitePool;
@@ -438,6 +440,16 @@ async fn store_issues(
         if issue.quote.is_empty() && issue.suggested.trim() == current.trim() {
             continue;
         }
+        // A proposal that would break the block's markup could never be accepted:
+        // it is dropped here instead of reaching the review.
+        let applied = restore_line_escapes(
+            &current,
+            &proposed_block(&current, Some(&issue.quote), &issue.suggested),
+        );
+        if let Err(literal) = guard_markup(&current, &applied) {
+            tracing::debug!(chunk_id, pass, literal = %literal, "dropped a proposal that breaks markup");
+            continue;
+        }
         repo::insert_suggestion(
             pool,
             &Suggestion {
@@ -632,20 +644,6 @@ pub async fn recompose_chunk(pool: &SqlitePool, chunk_id: &str) -> Result<()> {
 /// quote. Ordered-list markers (`1\.`) are handled separately.
 const LINE_MARKERS: &str = "-+*#>|";
 
-/// Whether a placeholder literal is a line-start escape (`\-`, `12\.`): a markdown
-/// artefact, not content, so the guard does not count it (see
-/// [`restore_line_escapes`]).
-fn is_line_escape(literal: &str) -> bool {
-    let Some(rest) = literal.strip_suffix(['.', ')']) else {
-        let mut chars = literal.chars();
-        return chars.next() == Some('\\')
-            && chars.next().is_some_and(|c| LINE_MARKERS.contains(c))
-            && chars.next().is_none();
-    };
-    rest.strip_suffix('\\')
-        .is_some_and(|digits| !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()))
-}
-
 /// The escaped marker a line opens with (`\- Sit` → `-`, `3\. Then` → `.`).
 fn escaped_marker(line: &str) -> Option<char> {
     if let Some(rest) = line.strip_prefix('\\') {
@@ -703,52 +701,65 @@ fn restore_line_escapes(current: &str, proposed: &str) -> String {
         .join("\n")
 }
 
-/// A change must not lose or duplicate a placeholder literal of its block.
-/// Best-effort: when the sidecar is unreachable the guard is skipped rather than
-/// blocking the review.
-async fn guard_placeholders(
-    deps: &PipelineDeps,
-    chunk_id: &str,
-    old_text: &str,
-    new_text: &str,
-) -> Result<()> {
-    // Never start the sidecar just for this best-effort check.
-    if !deps.sidecar.is_running() {
-        return Ok(());
-    }
-    let Ok(Some(chunk)) = repo::get_chunk(&deps.pool, chunk_id).await else {
-        return Ok(());
-    };
-    let block_ids: Vec<String> = serde_json::from_str(&chunk.block_ids_json).unwrap_or_default();
-    let Ok(prepared) = deps
-        .sidecar
-        .prepare_text(Some(&block_ids), &chunk.source_md)
-        .await
-    else {
-        return Ok(());
-    };
+/// Markup a correction must carry over unchanged: inline code, math, images, link
+/// targets, footnote references, autolinks, URLs and HTML tags — the opaque literals
+/// the sidecar turns into placeholders at translation time. Link texts and emphasis
+/// are prose and may change; line-start escapes are reconciled by
+/// [`restore_line_escapes`].
+fn protected_markup() -> &'static Regex {
+    static MARKUP: OnceLock<Regex> = OnceLock::new();
+    MARKUP.get_or_init(|| {
+        // A fixed pattern: compiling it cannot fail, and a unit test exercises it.
+        Regex::new(concat!(
+            r"``[^`]+?``|`[^`\n]+`",
+            r"|\$\$[\s\S]+?\$\$|\$[^$\n]+?\$",
+            r"|!\[[^\]]*\]\([^)\s]*\)",
+            r"|\]\([^)\s]*\)",
+            r"|\[\^[^\]]+\]",
+            r"|<[A-Za-z][A-Za-z0-9+.-]*:[^>]*>",
+            r"|[A-Za-z][A-Za-z0-9+.-]*://[^\s<>)\]]+",
+            r"|</?[A-Za-z][^>\n]*>",
+        ))
+        .expect("the protected-markup pattern is a valid regex")
+    })
+}
 
-    let mut literals: Vec<&str> = prepared
-        .placeholders
-        .iter()
-        .map(|(_, literal)| literal.as_str())
-        .collect();
-    literals.sort_unstable();
-    literals.dedup();
-    for literal in literals {
-        // Line-start escapes are repaired by `restore_line_escapes`, not counted.
-        if literal.is_empty() || is_line_escape(literal) {
-            continue;
-        }
-        let before = old_text.matches(literal).count();
-        let after = new_text.matches(literal).count();
-        if before != after {
-            return Err(AppError::Invalid(format!(
-                "the change would alter the placeholder {literal:?} ({before} → {after})"
-            )));
-        }
+/// Whether a change keeps every protected literal of its block, as many times. The
+/// error names the first literal that was lost, duplicated or invented.
+///
+/// Pure and local: it used to ask the sidecar for the placeholder map and silently
+/// skipped when the sidecar was not running, so the same click could pass or fail.
+fn guard_markup(current: &str, proposed: &str) -> std::result::Result<(), String> {
+    let collect = |text: &str| {
+        let mut found: Vec<String> = protected_markup()
+            .find_iter(text)
+            .map(|found| found.as_str().to_string())
+            .collect();
+        found.sort_unstable();
+        found
+    };
+    let (before, after) = (collect(current), collect(proposed));
+    if before == after {
+        return Ok(());
     }
-    Ok(())
+    let count =
+        |list: &[String], literal: &str| list.iter().filter(|item| *item == literal).count();
+    let changed = before
+        .iter()
+        .chain(after.iter())
+        .find(|literal| count(&before, literal) != count(&after, literal))
+        .cloned()
+        .unwrap_or_default();
+    Err(changed)
+}
+
+/// The block text a proposal produces: the quote replaced once when the current text
+/// contains it, otherwise the proposal is the corrected block.
+fn proposed_block(current: &str, quote: Option<&str>, proposed: &str) -> String {
+    match quote.filter(|quote| !quote.is_empty()) {
+        Some(quote) if current.contains(quote) => current.replacen(quote, proposed, 1),
+        _ => proposed.to_string(),
+    }
 }
 
 /// Apply the accepted correction to the block translation and recompose.
@@ -777,19 +788,17 @@ pub async fn accept_suggestion(deps: &PipelineDeps, id: &str) -> Result<Suggesti
         .clone()
         .filter(|text| !text.trim().is_empty())
         .ok_or_else(|| AppError::Invalid(format!("suggestion {id} has no proposed text")))?;
-    let new_text = match suggestion
-        .quote
-        .as_deref()
-        .filter(|quote| !quote.is_empty())
-    {
-        Some(quote) if current.contains(quote) => current.replacen(quote, &proposed, 1),
-        // No usable quote (or a whole-block proposal from before the proofreader
-        // answered JSON): the proposal is the corrected block.
-        _ => proposed,
-    };
-
-    let new_text = restore_line_escapes(&current, &new_text);
-    guard_placeholders(deps, &suggestion.chunk_id, &current, &new_text).await?;
+    // A whole-block proposal from before the proofreader answered JSON has no quote:
+    // it is the corrected block.
+    let new_text = restore_line_escapes(
+        &current,
+        &proposed_block(&current, suggestion.quote.as_deref(), &proposed),
+    );
+    if let Err(literal) = guard_markup(&current, &new_text) {
+        return Err(AppError::Invalid(format!(
+            "the change would alter the markup {literal:?}"
+        )));
+    }
 
     repo::upsert_block_translation(
         pool,
@@ -852,13 +861,46 @@ mod tests {
     use super::*;
 
     #[test]
-    fn line_escapes_are_recognised() {
-        for literal in ["\\-", "\\#", "\\>", "\\|", "1\\.", "12\\)"] {
-            assert!(is_line_escape(literal), "{literal} is a line escape");
-        }
-        for literal in ["\\", "-", "\\a", "\\.", "a\\.", "1.", "⟦1⟧", "**bold**"] {
-            assert!(!is_line_escape(literal), "{literal} is not a line escape");
-        }
+    fn the_markup_guard_protects_opaque_literals_only() {
+        let current = "See [the harbour](https://x.it/a), `code`, $x^2$, [^3] and <br>.";
+        // Prose, link text and emphasis may change.
+        assert!(guard_markup(
+            current,
+            "Look at [the port](https://x.it/a), `code`, $x^2$, [^3] and <br>."
+        )
+        .is_ok());
+        // A lost link target, code span or footnote is refused and named.
+        assert_eq!(
+            guard_markup(current, "See the harbour, `code`, $x^2$, [^3] and <br>."),
+            Err("](https://x.it/a)".to_string())
+        );
+        assert_eq!(
+            guard_markup(
+                current,
+                "See [the harbour](https://x.it/a), code, $x^2$, [^3] and <br>."
+            ),
+            Err("`code`".to_string())
+        );
+        // Duplicating one is refused too.
+        assert!(guard_markup("A [^1].", "A [^1] [^1].").is_err());
+        // Plain prose has nothing to protect.
+        assert!(guard_markup("Il vecchio porto", "Il nuovo porto.").is_ok());
+    }
+
+    #[test]
+    fn a_proposal_replaces_its_quote_or_the_whole_block() {
+        assert_eq!(
+            proposed_block("Il vecchio porto", Some("vecchio"), "nuovo"),
+            "Il nuovo porto"
+        );
+        assert_eq!(
+            proposed_block("Il vecchio porto", Some("assente"), "Riscritto"),
+            "Riscritto"
+        );
+        assert_eq!(
+            proposed_block("Il vecchio porto", None, "Riscritto"),
+            "Riscritto"
+        );
     }
 
     #[test]

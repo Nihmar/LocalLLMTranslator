@@ -138,7 +138,7 @@ pub async fn suggestion_history(
 }
 
 /// Accept a proposal: the block translation is rewritten and the chunk's
-/// `target_md` recomposed. The placeholder guard needs the sidecar.
+/// `target_md` recomposed, after the local markup guard.
 #[tauri::command(rename_all = "snake_case")]
 pub async fn suggestion_accept(state: State<'_, AppState>, id: String) -> Result<Suggestion> {
     let deps = pipeline_deps(&state);

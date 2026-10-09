@@ -986,7 +986,10 @@ amber only for what needs attention. Creating a book imports it in the same step
    keyboard (J/K, A, R). "Decise" lists the decided proposals newest first (`suggestion_history`,
    the per-project correction history) and "Controlli QA" the open findings.
    Accept/reject is a control-plane operation that rewrites a block translation and recomposes
-   the chunk, so the view never mutates the text locally. Passes run as `edit_chunk` /
+   the chunk, so the view never mutates the text locally. A correction must keep the block's
+   protected markup — inline code, math, images, link targets, footnote references, URLs, HTML —
+   exactly: a proposal that would not is dropped when the pass stores it, and acceptance checks
+   the same local rule, so no suggestion is shown that cannot be applied. Passes run as `edit_chunk` /
    `proofread_chunk` jobs; the QA heuristics run inline on every validated translation and can be
    re-run per chunk with `qa_scan` (for example after a glossary change). Accepting a suggestion
    rewrites the block with the pass as its origin and recomposes the chunk's `target_md`, so the
