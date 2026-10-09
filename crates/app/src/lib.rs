@@ -27,18 +27,20 @@ use sqlx::SqlitePool;
 use tauri::Manager;
 use tokio::sync::broadcast;
 
-use crate::commands::{emit, EVENT_METRICS_TICK, EVENT_SIDECAR_STATUS};
+use crate::commands::{EVENT_METRICS_TICK, EVENT_SIDECAR_STATUS};
 use crate::db::models::Job;
 use crate::error::{AppError, Result};
-use crate::events::{sidecar_event_sink, EventEmitter};
+use crate::events::{emit_event, sidecar_event_sink, EventEmitter};
 use crate::pipeline::PipelineDeps;
 use crate::resources::ResourceGovernor;
 use crate::scheduler::{JobDispatcher, WorkerPool};
 use crate::sidecar::{resolve_spawn_spec, SidecarClient, Supervisor};
 
-/// Shared application state, managed by Tauri and injected into commands.
+/// Shared application state of the control plane.
+///
+/// It holds no Tauri type: the Tauri shell builds it in `run`, and a headless binary
+/// (the standalone server) can build the same state from a data dir and an emitter.
 pub struct AppState {
-    pub app: tauri::AppHandle,
     /// UI event emitter, shared by the worker pool and the commands.
     pub emitter: Arc<dyn EventEmitter>,
     pub pool: SqlitePool,
@@ -174,7 +176,10 @@ pub fn run() {
             // and every boot message lands in the log a user can hand over.
             let data_dir = resolve_data_dir(&handle)?;
             logging::init(&data_dir);
-            let state = tauri::async_runtime::block_on(build_state(&handle, data_dir))?;
+            let resource_dir = handle.path().resource_dir().ok();
+            let emitter: Arc<dyn EventEmitter> = Arc::new(handle.clone());
+            let state =
+                tauri::async_runtime::block_on(build_state(data_dir, resource_dir, emitter))?;
             app.manage(state);
             Ok(())
         })
@@ -274,7 +279,11 @@ fn resolve_data_dir(app: &tauri::AppHandle) -> Result<PathBuf> {
         .map_err(|error| AppError::Other(anyhow::anyhow!("no app data dir: {error}")))
 }
 
-async fn build_state(app: &tauri::AppHandle, data_dir: PathBuf) -> Result<AppState> {
+async fn build_state(
+    data_dir: PathBuf,
+    resource_dir: Option<PathBuf>,
+    emitter: Arc<dyn EventEmitter>,
+) -> Result<AppState> {
     tokio::fs::create_dir_all(&data_dir).await?;
 
     let pool = db::connect(&data_dir.join("app.sqlite")).await?;
@@ -304,10 +313,9 @@ async fn build_state(app: &tauri::AppHandle, data_dir: PathBuf) -> Result<AppSta
     }
 
     // --- Sidecar ---------------------------------------------------------
-    let bundled = crate::sidecar::bundled_sidecar_path(app.path().resource_dir().ok().as_ref());
+    let bundled = crate::sidecar::bundled_sidecar_path(resource_dir.as_ref());
     let spec = resolve_spawn_spec(bundled.as_deref());
 
-    let emitter: Arc<dyn EventEmitter> = Arc::new(app.clone());
     let sink = sidecar_event_sink(emitter.clone());
     let supervisor = Supervisor::new(spec, sink, emitter.clone(), None);
     let sidecar = SidecarClient::new(supervisor.clone());
@@ -333,9 +341,7 @@ async fn build_state(app: &tauri::AppHandle, data_dir: PathBuf) -> Result<AppSta
         resources.clone(),
         data_dir.clone(),
     )
-    .with_pandoc_dir(crate::pandoc::resolve_assets_dir(
-        app.path().resource_dir().ok().as_deref(),
-    ));
+    .with_pandoc_dir(crate::pandoc::resolve_assets_dir(resource_dir.as_deref()));
     let dispatcher = Arc::new(PipelineDispatcher { deps });
     let limits = crate::resources::endpoints::EndpointLimits::from_plan(
         &endpoint_plan,
@@ -379,9 +385,9 @@ async fn build_state(app: &tauri::AppHandle, data_dir: PathBuf) -> Result<AppSta
         worker.start();
     }
 
-    spawn_status_forwarder(app.clone(), supervisor.clone());
+    spawn_status_forwarder(emitter.clone(), supervisor.clone());
     spawn_metrics_ticker(
-        app.clone(),
+        emitter.clone(),
         pool.clone(),
         resources.clone(),
         worker.clone(),
@@ -389,7 +395,6 @@ async fn build_state(app: &tauri::AppHandle, data_dir: PathBuf) -> Result<AppSta
     );
 
     Ok(AppState {
-        app: app.clone(),
         emitter,
         pool,
         sidecar,
@@ -401,12 +406,12 @@ async fn build_state(app: &tauri::AppHandle, data_dir: PathBuf) -> Result<AppSta
 }
 
 /// Forward sidecar status changes to the `sidecar://status` event.
-fn spawn_status_forwarder(app: tauri::AppHandle, supervisor: Arc<Supervisor>) {
+fn spawn_status_forwarder(emitter: Arc<dyn EventEmitter>, supervisor: Arc<Supervisor>) {
     let mut receiver = supervisor.subscribe_status();
     tauri::async_runtime::spawn(async move {
         loop {
             match receiver.recv().await {
-                Ok(status) => emit(&app, EVENT_SIDECAR_STATUS, status),
+                Ok(status) => emit_event(&*emitter, EVENT_SIDECAR_STATUS, status),
                 Err(broadcast::error::RecvError::Lagged(_)) => continue,
                 Err(broadcast::error::RecvError::Closed) => break,
             }
@@ -416,7 +421,7 @@ fn spawn_status_forwarder(app: tauri::AppHandle, supervisor: Arc<Supervisor>) {
 
 /// Periodically emit `metrics://tick` with queue depth and resource state.
 fn spawn_metrics_ticker(
-    app: tauri::AppHandle,
+    emitter: Arc<dyn EventEmitter>,
     pool: SqlitePool,
     resources: ResourceGovernor,
     worker: Arc<WorkerPool>,
@@ -440,8 +445,8 @@ fn spawn_metrics_ticker(
                     .await
                     .unwrap_or_default(),
             );
-            emit(
-                &app,
+            emit_event(
+                &*emitter,
                 EVENT_METRICS_TICK,
                 serde_json::json!({
                     "free_bytes": snapshot.free_bytes,

@@ -19,10 +19,10 @@ pub mod translation;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tauri::{AppHandle, Emitter};
 
 use crate::db::models::Job;
 use crate::error::{AppError, Result};
+use crate::events::emit_event;
 use crate::pipeline::PipelineDeps;
 use crate::scheduler::NewJob;
 use crate::AppState;
@@ -34,11 +34,9 @@ pub use crate::events::{
     EVENT_SIDECAR_PROGRESS, EVENT_SIDECAR_STATUS,
 };
 
-/// Emit a UI event, ignoring failures (there may be no window listening).
-pub fn emit<T: Serialize + Clone>(app: &AppHandle, event: &str, payload: T) {
-    if let Err(error) = app.emit(event, payload) {
-        tracing::debug!(%error, event, "failed to emit UI event");
-    }
+/// Emit a UI event, ignoring serialization failures (they are logged).
+pub fn emit<T: Serialize>(state: &AppState, event: &str, payload: T) {
+    emit_event(&*state.emitter, event, payload);
 }
 
 /// Enqueue a job and announce the `pending` transition on `job://progress`.

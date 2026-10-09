@@ -75,20 +75,27 @@ impl LogLine {
     }
 }
 
+/// Serialize a payload and emit it, degrading to a log line when serialization fails. The
+/// generic form of [`emit_job`] and [`emit_log`], for events whose payload is an ad-hoc shape.
+pub fn emit_event<T: Serialize>(emitter: &dyn EventEmitter, event: &str, payload: T) {
+    match serde_json::to_value(payload) {
+        Ok(value) => emitter.emit(event, value),
+        Err(error) => tracing::warn!(%error, event, "could not serialize event payload"),
+    }
+}
+
 /// Emit the serialized [`Job`] row on `job://progress`.
 pub fn emit_job(emitter: &dyn EventEmitter, job: &Job) {
-    match serde_json::to_value(job) {
-        Ok(payload) => emitter.emit(EVENT_JOB_PROGRESS, payload),
-        Err(error) => tracing::warn!(job_id = %job.id, %error, "could not serialize job for event"),
-    }
+    emit_event(emitter, EVENT_JOB_PROGRESS, job);
 }
 
 /// Emit a structured log line on `log://line`.
 pub fn emit_log(emitter: &dyn EventEmitter, level: &str, source: &str, message: impl Into<String>) {
-    match serde_json::to_value(LogLine::new(level, source, message)) {
-        Ok(payload) => emitter.emit(EVENT_LOG_LINE, payload),
-        Err(error) => tracing::warn!(%error, "could not serialize log line"),
-    }
+    emit_event(
+        emitter,
+        EVENT_LOG_LINE,
+        LogLine::new(level, source, message),
+    );
 }
 
 /// Map a sidecar notification method to a UI event sink.
