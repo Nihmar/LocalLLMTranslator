@@ -13,18 +13,14 @@ use crate::AppState;
 
 /// Open a path with the platform's default application. `Shell::command` is used
 /// (rather than the deprecated `Shell::open`) so the launcher is explicit.
+///
+/// Windows does **not** go through `cmd /C start`: `std::process::Command` only quotes
+/// arguments containing whitespace or quotes, so a path containing `&`, `|`, `^` or `%`
+/// would be re-parsed by `cmd.exe` as shell syntax. `explorer` receives the path as a
+/// normal argument and is not a shell.
 #[tauri::command(rename = "open_path", rename_all = "snake_case")]
 pub async fn open_path_command(app: AppHandle, path: String) -> Result<Ack> {
-    let (program, args): (&str, Vec<String>) = if cfg!(target_os = "macos") {
-        ("open", vec![path])
-    } else if cfg!(target_os = "windows") {
-        (
-            "cmd",
-            vec!["/C".to_string(), "start".to_string(), String::new(), path],
-        )
-    } else {
-        ("xdg-open", vec![path])
-    };
+    let (program, args) = opener(path);
 
     app.shell()
         .command(program)
@@ -32,6 +28,21 @@ pub async fn open_path_command(app: AppHandle, path: String) -> Result<Ack> {
         .spawn()
         .map_err(|error| AppError::Other(anyhow::anyhow!("failed to open path: {error}")))?;
     Ok(Ack::done())
+}
+
+/// The program and arguments that open `path` with the OS default handler.
+///
+/// Kept pure so the platform choice is testable without an `AppHandle`. On Windows the path
+/// is handed to `explorer` as a single argument, never to `cmd`, because a path containing
+/// shell metacharacters would otherwise be re-interpreted by `cmd.exe`.
+fn opener(path: String) -> (&'static str, Vec<String>) {
+    if cfg!(target_os = "macos") {
+        ("open", vec![path])
+    } else if cfg!(target_os = "windows") {
+        ("explorer", vec![path])
+    } else {
+        ("xdg-open", vec![path])
+    }
 }
 
 /// Record a UI-visible failure. The frontend calls this for every rejected `invoke`, so the
@@ -101,4 +112,22 @@ pub async fn diagnostics_export(state: &AppState) -> Result<DiagnosticsOutcome> 
     tokio::task::spawn_blocking(move || diagnostics::write_bundle(&data_dir, &report))
         .await
         .map_err(|error| AppError::Other(anyhow::anyhow!("diagnostics task panicked: {error}")))?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::opener;
+
+    #[test]
+    fn the_opener_never_uses_a_shell() {
+        let (program, args) = opener("C:\\Books\\A & B.pdf".to_string());
+        #[cfg(target_os = "macos")]
+        assert_eq!(program, "open");
+        #[cfg(windows)]
+        assert_eq!(program, "explorer");
+        #[cfg(all(unix, not(target_os = "macos")))]
+        assert_eq!(program, "xdg-open");
+        // The path travels as one argument, so no character of it is re-parsed by a shell.
+        assert_eq!(args, vec!["C:\\Books\\A & B.pdf".to_string()]);
+    }
 }
