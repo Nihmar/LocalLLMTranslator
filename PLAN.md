@@ -960,7 +960,10 @@ amber only for what needs attention. Creating a book imports it in the same step
    the step then shows the running job, chapters and warnings, and re-imports (or imports
    another file, with the PDF backend choice) on demand.
 2. **Models** — endpoint CRUD (URL, health-check, model list from `/v1/models`, `props`),
-   role assignment, savable profiles, VRAM/slot indicator.
+   role assignment, savable profiles, VRAM/slot indicator. A **quick setup** binds one endpoint and
+   one model to every role in one click (the new bindings outrank the existing ones, nothing is
+   deleted) and shows which model each role uses; the per-role form with custom parameters sits
+   under "Avanzate".
    A binding is one row per (role, endpoint): assigning the same pair again updates that row
    instead of adding a twin, and `role_binding_delete` removes it, so a model can be unassigned
    from a role it was given earlier. A role may keep several bindings, ordered by priority

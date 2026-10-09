@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { EmptyState } from "../components/EmptyState";
 import { FormField } from "../components/FormField";
 import { ResourceGauge } from "../components/ResourceGauge";
+import { QuickModelSetup } from "../components/QuickModelSetup";
 import { StatusBadge } from "../components/StatusBadge";
 import { onMetricsTick } from "../lib/events";
 import { formatDateTime, formatNumber, formatRelative, truncate } from "../lib/format";
@@ -423,7 +424,7 @@ export function ModelsView() {
     <div className="section-stack">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 className="text-lg font-semibold text-ink">Modelli</h2>
+          <h1 className="font-serif text-2xl font-medium text-ink">Modelli</h1>
           <p className="mt-0.5 text-xs text-muted">
             L&apos;app non avvia llama-server: rileva gli endpoint che hai già in esecuzione, ne
             verifica la salute e legge slot, contesto e modelli disponibili.
@@ -870,9 +871,25 @@ export function ModelsView() {
             </div>
           ) : null}
 
-          <div className="panel">
-            <div className="panel-head">
-              <span className="panel-title">Assegnazione dei ruoli</span>
+          <QuickModelSetup
+            endpoints={endpoints}
+            bindings={bindings}
+            onApplied={(saved) => {
+              setBindings((current) => {
+                const rest = current.filter(
+                  (binding) =>
+                    !saved.some(
+                      (row) => row.endpoint_id === binding.endpoint_id && row.role === binding.role,
+                    ),
+                );
+                return [...rest, ...saved].sort((left, right) => right.priority - left.priority);
+              });
+            }}
+          />
+
+          <details className="panel">
+            <summary className="panel-head cursor-pointer">
+              <span className="panel-title">Avanzate: un modello per ruolo e parametri</span>
               <button
                 type="button"
                 className="btn btn-sm btn-ghost"
@@ -882,7 +899,7 @@ export function ModelsView() {
               >
                 Aggiorna
               </button>
-            </div>
+            </summary>
 
             <div className="panel-pad section-stack">
               {bindingsError !== null ? (
@@ -1087,7 +1104,7 @@ export function ModelsView() {
                 </button>
               </div>
             </div>
-          </div>
+          </details>
         </div>
 
         <div className="section-stack">
