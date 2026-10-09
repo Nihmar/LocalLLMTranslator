@@ -9,7 +9,7 @@ use crate::pipeline::export::{
 };
 use crate::AppState;
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn export_build(
     state: State<'_, AppState>,
     app: AppHandle,
@@ -37,7 +37,7 @@ pub async fn export_build(
 
 /// The composed units and the `metadata.yaml` a build would use, without
 /// invoking Pandoc.
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn export_preview(
     state: State<'_, AppState>,
     req: ExportPreviewRequest,
@@ -47,7 +47,7 @@ pub async fn export_preview(
 }
 
 /// The recent build records, newest first.
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn export_history(
     state: State<'_, AppState>,
     project_id: String,

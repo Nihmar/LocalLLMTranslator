@@ -19,12 +19,12 @@ pub struct ProjectDetail {
     pub chunks_done: i64,
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn project_list(state: State<'_, AppState>) -> Result<Vec<Project>> {
     repo::list_projects(&state.pool).await
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn project_create(
     state: State<'_, AppState>,
     req: CreateProjectRequest,
@@ -58,7 +58,7 @@ pub async fn project_create(
     Ok(project)
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn project_get(state: State<'_, AppState>, id: String) -> Result<ProjectDetail> {
     let project = repo::get_project(&state.pool, &id)
         .await?
@@ -98,7 +98,7 @@ pub async fn project_get(state: State<'_, AppState>, id: String) -> Result<Proje
     })
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn project_delete(state: State<'_, AppState>, id: String) -> Result<Ack> {
     // Queued work for a project that is about to disappear would only fail later.
     let cancelled = queue::cancel_project_jobs(&state.pool, &id).await?;
@@ -128,7 +128,7 @@ pub struct ExportBundleRequest {
 }
 
 /// Write the project as a `.llmtz` bundle (PLAN.md §6).
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn project_export(
     state: State<'_, AppState>,
     req: ExportBundleRequest,
@@ -148,7 +148,7 @@ pub struct ImportBundleRequest {
 }
 
 /// Import a `.llmtz` bundle as a new project; an existing id is rejected.
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn project_import(
     state: State<'_, AppState>,
     req: ImportBundleRequest,

@@ -13,7 +13,7 @@ use crate::AppState;
 /// on "Sidecar non pronto" until an unrelated job happened to use the sidecar. A
 /// failed spawn is not returned as an error: the status carries the reason and the
 /// banner renders it, keeping the command contract (a `SidecarStatus` result).
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn sidecar_status(state: State<'_, AppState>) -> Result<SidecarStatus> {
     if let Err(error) = state.supervisor.ensure_running().await {
         tracing::warn!(%error, "sidecar status check could not start the sidecar");

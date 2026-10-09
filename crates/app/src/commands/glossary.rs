@@ -55,7 +55,7 @@ fn normalize_status(raw: &str) -> &'static str {
     }
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn glossary_list(
     state: State<'_, AppState>,
     project_id: String,
@@ -63,7 +63,7 @@ pub async fn glossary_list(
     repo::list_glossary_terms(&state.pool, &project_id).await
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn glossary_upsert(
     state: State<'_, AppState>,
     req: GlossaryUpsert,
@@ -141,7 +141,7 @@ pub async fn glossary_upsert(
     Ok(term)
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn glossary_delete(state: State<'_, AppState>, id: String) -> Result<Ack> {
     repo::delete_glossary_term(&state.pool, &id).await?;
     Ok(Ack::done())

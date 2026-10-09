@@ -24,7 +24,7 @@ pub struct JobStarted {
     pub job_id: String,
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn ingest_start(
     state: State<'_, AppState>,
     req: IngestStartRequest,

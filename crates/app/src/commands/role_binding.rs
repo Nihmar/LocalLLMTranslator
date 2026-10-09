@@ -23,12 +23,12 @@ pub struct RoleBindingSet {
     pub priority: Option<i64>,
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn role_binding_list(state: State<'_, AppState>) -> Result<Vec<RoleBinding>> {
     repo::list_role_bindings(&state.pool).await
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn role_binding_set(
     state: State<'_, AppState>,
     req: RoleBindingSet,
@@ -62,7 +62,7 @@ pub async fn role_binding_set(
 ///
 /// The counterpart of `role_binding_set`: without it an assignment made once could never be
 /// undone through the UI, and the row kept deciding which endpoint a role used.
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn role_binding_delete(state: State<'_, AppState>, id: String) -> Result<Ack> {
     repo::delete_role_binding(&state.pool, &id).await?;
     Ok(Ack::done())

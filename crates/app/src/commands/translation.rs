@@ -77,7 +77,7 @@ pub fn enqueue_candidates<'a>(
         .collect()
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn translation_start(
     state: State<'_, AppState>,
     req: TranslationStartRequest,
@@ -107,7 +107,7 @@ pub async fn translation_start(
     })
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn translation_pause(state: State<'_, AppState>) -> Result<Ack> {
     state.worker.pause();
     // Persist the explicit pause so it survives a relaunch: `build_state` used to
@@ -124,7 +124,7 @@ pub async fn translation_pause(state: State<'_, AppState>) -> Result<Ack> {
 /// `pending`; without it every project is cancelled. Previously the command took
 /// no argument and cancelled *every* unfinished job in the database, so one
 /// project's "Annulla" destroyed another project's queued work.
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn translation_cancel(
     state: State<'_, AppState>,
     req: Option<TranslationCancelRequest>,

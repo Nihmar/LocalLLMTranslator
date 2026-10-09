@@ -133,6 +133,10 @@ makes it safe to restart the sidecar and re-send in-flight requests.
 
 ### UI → Tauri
 
+Every command is declared `#[tauri::command(rename_all = "snake_case")]`: an argument key is the
+Rust parameter name as written (`{ project_id }`, `{ req: {...} }`), never Tauri's camelCase
+default. `ui/src/lib/ipc.test.ts` rejects a camelCase key.
+
 Commands: `project_list`, `project_create`, `project_get`, `project_delete`,
 `project_export`, `project_import`,
 `endpoint_list`, `endpoint_upsert`, `endpoint_delete`, `endpoint_test`, `endpoint_models`,

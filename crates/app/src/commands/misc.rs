@@ -13,7 +13,7 @@ use crate::AppState;
 
 /// Open a path with the platform's default application. `Shell::command` is used
 /// (rather than the deprecated `Shell::open`) so the launcher is explicit.
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn open_path(app: AppHandle, path: String) -> Result<Ack> {
     let (program, args): (&str, Vec<String>) = if cfg!(target_os = "macos") {
         ("open", vec![path])
@@ -36,7 +36,7 @@ pub async fn open_path(app: AppHandle, path: String) -> Result<Ack> {
 
 /// Record a UI-visible failure. The frontend calls this for every rejected `invoke`, so the
 /// log file contains the errors the user actually saw, with the command name.
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn log_frontend_error(command: String, message: String) -> Result<Ack> {
     // A runaway message must not fill the log; the frontend already truncates for display.
     let command = clamp_chars(command.trim(), 120);
@@ -54,7 +54,7 @@ pub struct DiagnosticsPaths {
 }
 
 /// Where the application keeps its data and its logs, so the UI can reveal the folder.
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn diagnostics_paths(state: State<'_, AppState>) -> Result<DiagnosticsPaths> {
     Ok(DiagnosticsPaths {
         data_dir: state.data_dir.to_string_lossy().to_string(),
@@ -66,7 +66,7 @@ pub async fn diagnostics_paths(state: State<'_, AppState>) -> Result<Diagnostics
 
 /// Write a diagnostics bundle (newest logs + a report) and return where it landed. The
 /// archive carries no book text, prompt, response or database.
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn diagnostics_export(state: State<'_, AppState>) -> Result<DiagnosticsOutcome> {
     let queue_counts = queue::count_by_state(&state.pool)
         .await?

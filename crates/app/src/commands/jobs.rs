@@ -18,7 +18,7 @@ pub struct JobListRequest {
     pub limit: Option<i64>,
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn job_list(state: State<'_, AppState>, req: JobListRequest) -> Result<Vec<Job>> {
     queue::list_jobs(
         &state.pool,
@@ -55,7 +55,7 @@ pub struct JobCancelResult {
 ///
 /// An interrupted `translate_chunk` returns its chunk to `pending`, so a later `translation_start`
 /// picks it up again instead of leaving it `running` forever.
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn job_cancel(
     state: State<'_, AppState>,
     req: JobCancelRequest,

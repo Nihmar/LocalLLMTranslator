@@ -6,10 +6,12 @@
  * ("UI -> Tauri"); the argument keys are derived from the Rust command signatures in
  * `crates/app/src/commands/*.rs`, which is the source of truth.
  *
- * Three argument conventions appear in the Rust signatures and are reproduced here exactly:
+ * Every argument key is spelled exactly as in the Rust signature: each command is declared with
+ * `#[tauri::command(rename_all = "snake_case")]`, so Tauri does not turn `project_id` into
+ * `projectId` (issue #8). Three shapes appear:
  *
  * - commands that take a struct declare it as `req` and receive `{ req: {...} }`;
- * - commands that take a primitive id declare it as `id` / `chunk_id` / `path`;
+ * - commands that take a primitive declare it as `id` / `chunk_id` / `project_id` / `path`;
  * - commands with no payload (`role_binding_list`, `metrics_get`, `sidecar_status`,
  *   `translation_pause`, `project_list`, `endpoint_list`) are called with no arguments at all.
  *
@@ -339,9 +341,7 @@ export function reconStart(request: ReconStartRequest): Promise<JobStarted> {
 
 /** Candidate profile, already-confirmed values and glossary of a project. */
 export function reconGet(projectId: string): Promise<ReconSnapshot> {
-  // Flat arguments take Tauri's camelCase key, like `chunkGet` above: sending the Rust
-  // snake_case spelling fails validation before the command runs.
-  return call<ReconSnapshot>(COMMANDS.reconGet, { projectId });
+  return call<ReconSnapshot>(COMMANDS.reconGet, { project_id: projectId });
 }
 
 /** Writes the fields the user confirmed into project memory and the glossary. */
@@ -358,7 +358,7 @@ export function projectSetDialogueStyle(request: DialogueStyleRequest): Promise<
 
 /** Every term of a project, candidates included. */
 export function glossaryList(projectId: string): Promise<GlossaryTerm[]> {
-  return call<GlossaryTerm[]>(COMMANDS.glossaryList, { projectId });
+  return call<GlossaryTerm[]>(COMMANDS.glossaryList, { project_id: projectId });
 }
 
 /** Create or update a term; the returned row is the persisted one. */
@@ -404,8 +404,7 @@ export function projectSetSeries(request: ProjectSetSeriesRequest): Promise<Proj
 
 /** The series glossary; the translator prompt sees it merged with the book's own. */
 export function seriesGlossaryList(seriesId: string): Promise<SeriesGlossaryTerm[]> {
-  // CamelCase, like every flat argument: see `reconGet`.
-  return call<SeriesGlossaryTerm[]>(COMMANDS.seriesGlossaryList, { seriesId });
+  return call<SeriesGlossaryTerm[]>(COMMANDS.seriesGlossaryList, { series_id: seriesId });
 }
 
 /** Create or update a series term; a change flags every book rendering it differently. */
@@ -447,8 +446,7 @@ export function seriesImport(request: SeriesImportRequest): Promise<SeriesImport
 
 /** Re-runs the QA scan on every translated chunk of the member books. */
 export function seriesQaScan(seriesId: string): Promise<SeriesQaScanResult> {
-  // CamelCase, like every flat argument: see `reconGet`.
-  return call<SeriesQaScanResult>(COMMANDS.seriesQaScan, { seriesId });
+  return call<SeriesQaScanResult>(COMMANDS.seriesQaScan, { series_id: seriesId });
 }
 
 /** Enqueues the `series_recon` job: a candidate series profile from the confirmed books. */
@@ -523,9 +521,7 @@ export function chunkList(request: ChunkListRequest): Promise<Chunk[]> {
 }
 
 export function chunkGet(chunkId: string): Promise<ChunkDetail> {
-  // Tauri maps the Rust `chunk_id` parameter to the camelCase `chunkId` key: passing the
-  // snake_case spelling makes the command fail argument validation before it ever runs.
-  return call<ChunkDetail>(COMMANDS.chunkGet, { chunkId });
+  return call<ChunkDetail>(COMMANDS.chunkGet, { chunk_id: chunkId });
 }
 
 // --- metrics and sidecar -------------------------------------------------------------------
@@ -551,7 +547,7 @@ export function exportPreview(request: ExportPreviewRequest): Promise<ExportPrev
 
 /** The recent build records, newest first. */
 export function exportHistory(projectId: string): Promise<ExportBuildRecord[]> {
-  return call<ExportBuildRecord[]>(COMMANDS.exportHistory, { projectId });
+  return call<ExportBuildRecord[]>(COMMANDS.exportHistory, { project_id: projectId });
 }
 
 /** Opens a file or directory with the OS handler; the only filesystem command the UI needs. */

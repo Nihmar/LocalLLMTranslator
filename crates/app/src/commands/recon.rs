@@ -22,7 +22,7 @@ pub struct ReconStartRequest {
 
 /// Enqueue the `book_recon` job. Fails fast when the prerequisites are missing,
 /// so the user gets a clear message instead of a failed job later.
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn recon_start(state: State<'_, AppState>, req: ReconStartRequest) -> Result<JobStarted> {
     repo::get_project(&state.pool, &req.project_id)
         .await?
@@ -53,13 +53,13 @@ pub async fn recon_start(state: State<'_, AppState>, req: ReconStartRequest) -> 
 }
 
 /// Candidate profile, confirmed values and glossary for a project.
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn recon_get(state: State<'_, AppState>, project_id: String) -> Result<ReconSnapshot> {
     recon::snapshot(&state.pool, &project_id).await
 }
 
 /// Persist the fields the user confirmed.
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn recon_confirm(
     state: State<'_, AppState>,
     req: ConfirmRequest,
@@ -76,7 +76,7 @@ pub struct DialogueStyleRequest {
 
 /// Choose how the translator renders dialogue. It applies to the chunks translated
 /// from now on; already translated chunks keep their text until they are redone.
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn project_set_dialogue_style(
     state: State<'_, AppState>,
     req: DialogueStyleRequest,

@@ -39,12 +39,12 @@ pub struct EndpointModelsRequest {
     pub base_url: Option<String>,
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn endpoint_list(state: State<'_, AppState>) -> Result<Vec<LlmEndpoint>> {
     repo::list_endpoints(&state.pool).await
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn endpoint_upsert(
     state: State<'_, AppState>,
     req: EndpointUpsert,
@@ -64,13 +64,13 @@ pub async fn endpoint_upsert(
     Ok(endpoint)
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn endpoint_delete(state: State<'_, AppState>, id: String) -> Result<Ack> {
     repo::delete_endpoint(&state.pool, &id).await?;
     Ok(Ack::done())
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn endpoint_test(state: State<'_, AppState>, id: String) -> Result<EndpointTestResult> {
     let endpoint = repo::get_endpoint(&state.pool, &id)
         .await?
@@ -100,7 +100,7 @@ pub async fn endpoint_test(state: State<'_, AppState>, id: String) -> Result<End
     })
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn endpoint_models(
     state: State<'_, AppState>,
     req: EndpointModelsRequest,

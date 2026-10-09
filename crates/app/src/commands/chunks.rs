@@ -25,12 +25,12 @@ pub struct ChunkDetail {
     pub llm_calls: Vec<LlmCall>,
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn chunk_list(state: State<'_, AppState>, req: ChunkListRequest) -> Result<Vec<Chunk>> {
     repo::list_chunks_by_project(&state.pool, &req.project_id, req.status.as_deref()).await
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn chunk_get(state: State<'_, AppState>, chunk_id: String) -> Result<ChunkDetail> {
     let chunk = repo::get_chunk(&state.pool, &chunk_id)
         .await?

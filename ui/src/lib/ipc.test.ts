@@ -26,11 +26,11 @@ test("toErrorMessage keeps the plain Error and string forms", () => {
 });
 
 /**
- * Tauri maps a Rust command parameter to a **camelCase** key (`project_id` → `projectId`) unless
- * the command opts out with `rename_all`. A snake_case key in a flat argument object therefore
- * fails argument validation before the command ever runs, and the mistake stays invisible until
- * the view that calls it is opened — `recon_get`, `glossary_list`, the series glossary, the series
- * QA scan and the export history all shipped with it.
+ * Every command is declared with `rename_all = "snake_case"`, so an argument key is the Rust
+ * parameter name as written (`project_id`). Tauri's default would expect `projectId`, and a key in
+ * the wrong spelling fails validation before the command runs, invisibly until the view that
+ * calls it is opened — `recon_get` shipped that way 319 times in one day of use. One spelling,
+ * checked here, instead of a convention remembered in comments.
  *
  * Keys *inside* `{ req: { ... } }` are struct fields, which serde deserialises exactly as
  * written, so only the flat form is checked.
@@ -38,18 +38,21 @@ test("toErrorMessage keeps the plain Error and string forms", () => {
 const SOURCE = readFileSync(fileURLToPath(new URL("./ipc.ts", import.meta.url)), "utf8");
 const FLAT_CALL = /call<[^>]*>\(COMMANDS\.(\w+), \{(.*)\}\)/g;
 
-test("a flat command argument uses Tauri's camelCase key", () => {
+test("a flat command argument uses the Rust parameter name", () => {
   const offenders: string[] = [];
   for (const match of SOURCE.matchAll(FLAT_CALL)) {
     const command = match[1] ?? "";
     const args = (match[2] ?? "").trim();
-    if (args.startsWith("req:") || !args.includes("_")) {
+    if (args.startsWith("req:")) {
       continue;
     }
-    offenders.push(`${command} sends { ${args} }`);
+    const keys = args.split(",").map((part) => (part.split(":")[0] ?? "").trim());
+    if (keys.some((key) => /[A-Z]/.test(key))) {
+      offenders.push(`${command} sends { ${args} }`);
+    }
   }
 
-  assert.deepEqual(offenders, [], `flat argument keys must be camelCase: ${offenders.join("; ")}`);
+  assert.deepEqual(offenders, [], `flat argument keys must be snake_case: ${offenders.join("; ")}`);
 });
 
 test("the scan actually reaches the calls", () => {
