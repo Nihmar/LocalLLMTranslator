@@ -233,11 +233,11 @@ export function GlossaryView({ project, onNavigate }: GlossaryViewProps) {
   if (project === null) {
     return (
       <div className="section-stack">
-        <h2 className="text-lg font-semibold text-ink">Glossario</h2>
+        <h1 className="font-serif text-2xl font-medium text-ink">Prepara</h1>
         <EmptyState
-          title="Nessun progetto aperto"
+          title="Nessun libro aperto"
           description="Il glossario appartiene a un progetto: aprine uno per rivedere i termini che il traduttore riceve."
-          actionLabel="Vai ai progetti"
+          actionLabel="Vai alla libreria"
           onAction={() => {
             onNavigate("projects");
           }}

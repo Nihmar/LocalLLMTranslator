@@ -184,11 +184,11 @@ export function IngestView({ project, onNavigate }: IngestViewProps) {
   if (project === null) {
     return (
       <div className="section-stack">
-        <h2 className="text-lg font-semibold text-ink">Ingestione</h2>
+        <h1 className="font-serif text-2xl font-medium text-ink">Importa</h1>
         <EmptyState
-          title="Nessun progetto aperto"
+          title="Nessun libro aperto"
           description="L'ingestione lavora su un progetto: il documento estratto, i suoi blocchi e i suoi chunk vengono salvati nel progetto scelto."
-          actionLabel="Vai ai progetti"
+          actionLabel="Vai alla libreria"
           onAction={() => {
             onNavigate("projects");
           }}
@@ -204,7 +204,7 @@ export function IngestView({ project, onNavigate }: IngestViewProps) {
     <div className="section-stack">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 className="text-lg font-semibold text-ink">Ingestione</h2>
+          <h1 className="font-serif text-2xl font-medium text-ink">Importa</h1>
           <p className="mt-0.5 text-xs text-muted">
             Progetto <span className="font-semibold text-ink-soft">{project.name}</span> — il
             documento viene convertito in Markdown canonico, segmentato in blocchi con ID stabili e

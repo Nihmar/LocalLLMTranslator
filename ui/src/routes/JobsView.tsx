@@ -249,11 +249,11 @@ export function JobsView({ project, onNavigate }: JobsViewProps) {
   if (project === null) {
     return (
       <div className="section-stack">
-        <h2 className="text-lg font-semibold text-ink">Job</h2>
+        <h1 className="font-serif text-2xl font-medium text-ink">Log e coda</h1>
         <EmptyState
-          title="Nessun progetto aperto"
+          title="Nessun libro aperto"
           description="La dashboard mostra la coda di un progetto: aprine uno per vedere job, progresso e log."
-          actionLabel="Vai ai progetti"
+          actionLabel="Vai alla libreria"
           onAction={() => {
             onNavigate("projects");
           }}
@@ -266,7 +266,7 @@ export function JobsView({ project, onNavigate }: JobsViewProps) {
     <div className="section-stack">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 className="text-lg font-semibold text-ink">Job</h2>
+          <h1 className="font-serif text-2xl font-medium text-ink">Log e coda</h1>
           <p className="mt-0.5 text-xs text-muted">
             Progetto <span className="font-semibold text-ink-soft">{project.name}</span> — coda,
             progresso e log. {countLabel(activeJobs, "job attivo", "job attivi")}.

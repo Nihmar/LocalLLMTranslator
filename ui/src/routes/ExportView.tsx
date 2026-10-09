@@ -294,11 +294,11 @@ export function ExportView({ project, onNavigate }: ExportViewProps) {
   if (project === null) {
     return (
       <div className="section-stack">
-        <h2 className="text-lg font-semibold text-ink">Export</h2>
+        <h1 className="font-serif text-2xl font-medium text-ink">Esporta</h1>
         <EmptyState
-          title="Nessun progetto aperto"
+          title="Nessun libro aperto"
           description="L'export impagina la traduzione di un progetto: aprine uno per scegliere formato e capitoli."
-          actionLabel="Vai ai progetti"
+          actionLabel="Vai alla libreria"
           onAction={() => {
             onNavigate("projects");
           }}
@@ -311,7 +311,7 @@ export function ExportView({ project, onNavigate }: ExportViewProps) {
     <div className="section-stack">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 className="text-lg font-semibold text-ink">Export</h2>
+          <h1 className="font-serif text-2xl font-medium text-ink">Esporta</h1>
           <p className="mt-0.5 text-xs text-muted">
             Progetto <span className="font-semibold text-ink-soft">{project.name}</span> — Pandoc
             impagina il Markdown tradotto con i template e i filtri Lua del pacchetto.

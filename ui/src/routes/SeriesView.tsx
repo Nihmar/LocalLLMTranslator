@@ -719,7 +719,7 @@ export function SeriesView() {
   return (
     <div className="section-stack">
       <div>
-        <h2 className="text-lg font-semibold text-ink">Serie</h2>
+        <h1 className="font-serif text-2xl font-medium text-ink">Serie</h1>
         <p className="mt-0.5 text-xs text-muted">
           Il canone condiviso: glossario e memoria che i libri della saga ereditano. Un termine
           del libro vince su quello di serie; una modifica al canone segnala i libri incoerenti.
