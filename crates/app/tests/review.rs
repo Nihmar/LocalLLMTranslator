@@ -158,16 +158,20 @@ async fn editor_pass_creates_a_suggestion_and_accept_rewrites_the_block() -> Res
     Ok(())
 }
 
+/// The proofreader answers span-level issues; a no-op one (the replacement equals the
+/// quote) is dropped instead of reaching the review.
+const PROOFREADER_ANSWER: &str = r#"{"issues":[{"block_index":0,"severity":"minor","kind":"punctuation","quote":"porto","suggested":"porto.","reason":"the sentence needs a full stop"},{"block_index":1,"severity":"minor","kind":"grammar","quote":"La nave","suggested":"La nave","reason":"nothing to change"}]}"#;
+
 #[tokio::test]
-async fn proofreader_pass_suggests_corrected_blocks() -> Result<()> {
-    let server = mock_answer("Il vecchio porto.\n\n<!-- block -->\n\nLa nave").await;
+async fn proofreader_pass_suggests_span_corrections() -> Result<()> {
+    let server = mock_answer(PROOFREADER_ANSWER).await;
     let dir = tempfile::tempdir()?;
     let (pool, deps) = deps_for(dir.path()).await?;
     let fixture = seed_reviewable(&pool, &server.uri()).await?;
     bind_role(&pool, "review", "proofreader", &server.uri()).await?;
 
     let created = review::run_proofread_chunk(&deps, None, &fixture.chunk_id).await?;
-    assert_eq!(created, 1);
+    assert_eq!(created, 1, "the no-op issue is not stored");
 
     let suggestions = repo::list_suggestions(&pool, &fixture.project_id, None, None, None).await?;
     assert_eq!(suggestions.len(), 1);
@@ -175,7 +179,23 @@ async fn proofreader_pass_suggests_corrected_blocks() -> Result<()> {
     assert_eq!(suggestion.pass, review::PROOFREAD_ROLE);
     assert_eq!(suggestion.block_id.as_deref(), Some("b000001"));
     assert_eq!(suggestion.original.as_deref(), Some("Il vecchio porto"));
-    assert_eq!(suggestion.proposed.as_deref(), Some("Il vecchio porto."));
+    assert_eq!(suggestion.quote.as_deref(), Some("porto"));
+    assert_eq!(suggestion.proposed.as_deref(), Some("porto."));
+    assert_eq!(suggestion.severity.as_deref(), Some("minor"));
+    assert_eq!(
+        suggestion.reason.as_deref(),
+        Some("the sentence needs a full stop")
+    );
+
+    // The request used the structured path and numbered the blocks.
+    let requests = server.received_requests().await.expect("requests");
+    let body: Value = serde_json::from_slice(&requests[0].body)?;
+    assert_eq!(
+        body["response_format"]["json_schema"]["name"],
+        "proofreader"
+    );
+    let user = body["messages"][1]["content"].as_str().unwrap_or_default();
+    assert!(user.contains("[0] Il vecchio porto"));
 
     review::accept_suggestion(&deps, &suggestion.id).await?;
     let translations = repo::list_block_translations(&pool, &fixture.chunk_id).await?;
@@ -390,7 +410,7 @@ async fn editor_reports_why_the_answer_was_empty() -> Result<()> {
         .expect_err("an answer with no JSON object fails the pass");
     let message = error.to_string();
     assert!(
-        message.contains("the editor answer contains no JSON object"),
+        message.contains("the review answer contains no JSON object"),
         "{message}"
     );
     assert!(message.contains("finish_reason=length"), "{message}");

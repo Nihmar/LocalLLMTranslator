@@ -1,0 +1,52 @@
+{
+  "type": "object",
+  "properties": {
+    "issues": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "block_index": {
+            "type": "integer"
+          },
+          "severity": {
+            "enum": [
+              "major",
+              "minor"
+            ]
+          },
+          "kind": {
+            "enum": [
+              "grammar",
+              "agreement",
+              "punctuation",
+              "spelling",
+              "calque",
+              "collocation"
+            ]
+          },
+          "quote": {
+            "type": "string"
+          },
+          "suggested": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "block_index",
+          "severity",
+          "kind",
+          "quote",
+          "suggested",
+          "reason"
+        ]
+      }
+    }
+  },
+  "required": [
+    "issues"
+  ]
+}

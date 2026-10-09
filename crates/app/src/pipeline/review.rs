@@ -1,9 +1,10 @@
 //! Bilingual editor, proofreader and suggestion lifecycle (PLAN.md §11.4).
 //!
-//! The editor asks the `editor` role to compare source and translation and
-//! returns JSON behind `prompts/editor.schema.json`; the proofreader asks the
-//! `proofreader` role to polish the target blocks, separated by
-//! [`BLOCK_SEPARATOR`]. Both persist `suggestion` rows. Accepting one rewrites the
+//! The editor asks the `editor` role to compare source and translation; the
+//! proofreader asks the `proofreader` role to read the target blocks alone. Both
+//! answer JSON (`prompts/editor.schema.json`, `prompts/proofreader.schema.json`):
+//! span-level issues with a quote, a replacement, a reason and a severity, stored as
+//! `suggestion` rows. Accepting one rewrites the
 //! block translation with the pass as its origin — after a placeholder guard —
 //! and recomposes the chunk's `target_md`, so an export right after the review
 //! sees the accepted text.
@@ -16,9 +17,9 @@ use serde::Deserialize;
 use serde_json::Value;
 use sqlx::SqlitePool;
 
-use super::chat_call::{run_chat_call, run_structured_call, ChatCall};
+use super::chat_call::{run_structured_call, ChatCall};
 use super::PipelineDeps;
-use crate::db::models::{Block, BlockTranslation, Chunk, QaFinding, Suggestion};
+use crate::db::models::{Block, BlockTranslation, Chunk, Suggestion};
 use crate::db::{new_id, now, repo};
 use crate::error::{AppError, Result};
 use crate::llm::ResponseFormat;
@@ -29,10 +30,8 @@ pub const EDIT_JOB: &str = "edit_chunk";
 pub const PROOFREAD_ROLE: &str = "proofreader";
 pub const PROOFREAD_JOB: &str = "proofread_chunk";
 
-/// Line the proofreader prompt uses between blocks.
-pub const BLOCK_SEPARATOR: &str = "<!-- block -->";
-
 const EDIT_SCHEMA_NAME: &str = "editor";
+const PROOFREAD_SCHEMA_NAME: &str = "proofreader";
 const MAX_ISSUES: usize = 40;
 const MAX_FIELD_CHARS: usize = 2000;
 const MAX_REASON_CHARS: usize = 500;
@@ -66,23 +65,35 @@ pub const DEFAULT_EDITOR_SCHEMA: &str = r##"{"type":"object","properties":{"verd
 
 pub const DEFAULT_PROOFREADER_SYSTEM_TEMPLATE: &str = r#"You are a monolingual proofreader for {{ target_language }}.
 The text was translated from {{ source_language }} and reads slightly foreign.
-Fix grammar, agreement, punctuation, calques, false friends and unnatural collocations.
-Do NOT change meaning. Do NOT add or remove content. Do NOT touch placeholders ⟦n⟧.
-Do NOT alter Markdown structure, code spans, URLs or table pipes.
+Report only real defects: grammar, agreement, punctuation, spelling, calques, false friends and unnatural collocations.
+Do NOT change meaning. Do NOT add or remove content. Do NOT touch placeholders ⟦n⟧, Markdown structure, code spans, URLs or table pipes.
 Do NOT change how dialogue is punctuated (a dash or quotation marks): it is a choice made for the whole book.
-The text arrives as blocks separated by a line containing only `<!-- block -->`.
-Keep the same number of blocks, in the same order, with the same separators.
-Output only the corrected text, with no commentary and no code fences."#;
+You do not rewrite for taste. You propose the smallest correction that fixes the defect.
+Blocks are numbered `[0]`, `[1]`, ...; the `block_index` of an issue is that number.
+Copy `quote` verbatim from the text and make `suggested` the text that replaces it.
+Use `major` for an error a reader would stumble on and `minor` for a slip.
+An empty issue list is a valid answer.
+Reply with JSON only."#;
 
-pub const DEFAULT_PROOFREADER_USER_TEMPLATE: &str = r#"{{ text }}
+pub const DEFAULT_PROOFREADER_USER_TEMPLATE: &str = r#"TEXT ({{ target_language }}):
+{{ text }}
+
+Reply with a single JSON object that validates against this schema:
+{{ response_schema }}
 "#;
+
+pub const DEFAULT_PROOFREADER_SCHEMA: &str = r##"{"type":"object","properties":{"issues":{"type":"array","items":{"type":"object","properties":{"block_index":{"type":"integer"},"severity":{"enum":["major","minor"]},"kind":{"enum":["grammar","agreement","punctuation","spelling","calque","collocation"]},"quote":{"type":"string"},"suggested":{"type":"string"},"reason":{"type":"string"}},"required":["block_index","severity","kind","quote","suggested","reason"]}}},"required":["issues"]}"##;
 
 /// SHA-256 of the system templates earlier releases shipped
 /// (see [`crate::util::ensure_prompt_file`]).
 const SHIPPED_EDITOR_SYSTEM_HASHES: &[&str] =
     &["e1b5271f0108c0f3ec1a8287144aa57a5bc528b220e66deb107c595c2334f54b"];
-const SHIPPED_PROOFREADER_SYSTEM_HASHES: &[&str] =
-    &["c4b6ace99c38f9e6e2c818528a791c7b87cf6282a54679012ce3d00f9ea85de2"];
+const SHIPPED_PROOFREADER_SYSTEM_HASHES: &[&str] = &[
+    "c4b6ace99c38f9e6e2c818528a791c7b87cf6282a54679012ce3d00f9ea85de2",
+    "a2d2868cbbf867f49bc7ee77a8cab05465be86477223de90afa7d572e9877988",
+];
+const SHIPPED_PROOFREADER_USER_HASHES: &[&str] =
+    &["8094e5d814d7961252a645a64daaf7de9c3a4e08513ce5fc1d8e8706c60a6d0c"];
 
 // ---------------------------------------------------------------------------
 // Pure helpers
@@ -136,11 +147,12 @@ fn extract_json_object(text: &str) -> Option<&str> {
     (end > start).then(|| &text[start..=end])
 }
 
-fn parse_editor_answer(text: &str) -> Result<Vec<EditedIssue>> {
+/// Parse the JSON both review passes answer with.
+fn parse_review_answer(text: &str) -> Result<Vec<EditedIssue>> {
     let json = extract_json_object(text)
-        .ok_or_else(|| AppError::Invalid("the editor answer contains no JSON object".into()))?;
+        .ok_or_else(|| AppError::Invalid("the review answer contains no JSON object".into()))?;
     let raw: RawEditor = serde_json::from_str(json).map_err(|error| {
-        AppError::Invalid(format!("the editor answer is not valid JSON: {error}"))
+        AppError::Invalid(format!("the review answer is not valid JSON: {error}"))
     })?;
 
     let mut issues = Vec::new();
@@ -197,36 +209,6 @@ fn preferred_translation<'a>(
         .map(|row| row.text_md.as_str())
 }
 
-/// Split the proofreader answer on the separator lines. A missing separator
-/// yields one block, which the caller detects as a count mismatch.
-fn split_blocks_text(text: &str) -> Vec<String> {
-    let mut blocks: Vec<String> = Vec::new();
-    let mut current: Vec<&str> = Vec::new();
-    for line in text.lines() {
-        if line.trim() == BLOCK_SEPARATOR {
-            blocks.push(current.join("\n").trim().to_string());
-            current.clear();
-        } else {
-            current.push(line);
-        }
-    }
-    blocks.push(current.join("\n").trim().to_string());
-    blocks
-}
-
-/// Strip a single code fence wrapping the whole answer, if present.
-fn strip_code_fence(text: &str) -> String {
-    let trimmed = text.trim();
-    if !trimmed.starts_with("```") || !trimmed.ends_with("```") || trimmed.len() < 6 {
-        return text.to_string();
-    }
-    let inner = &trimmed[3..trimmed.len() - 3];
-    inner
-        .split_once('\n')
-        .map(|(_, rest)| rest.trim().to_string())
-        .unwrap_or_else(|| inner.trim().to_string())
-}
-
 // ---------------------------------------------------------------------------
 // Prompt files
 // ---------------------------------------------------------------------------
@@ -251,8 +233,9 @@ pub async fn ensure_prompt_files(dir: &Path) -> Result<()> {
         (
             "proofreader.user.md",
             DEFAULT_PROOFREADER_USER_TEMPLATE,
-            &[],
+            SHIPPED_PROOFREADER_USER_HASHES,
         ),
+        ("proofreader.schema.json", DEFAULT_PROOFREADER_SCHEMA, &[]),
     ] {
         crate::util::ensure_prompt_file(&dir.join(name), content, shipped).await?;
     }
@@ -278,12 +261,18 @@ fn load_editor(dir: &Path) -> (String, String, Value) {
     (system, user, schema)
 }
 
-fn load_proofreader(dir: &Path) -> (String, String) {
+fn load_proofreader(dir: &Path) -> (String, String, Value) {
     let system = read_first(dir, &["proofreader.system.md"])
         .unwrap_or_else(|| DEFAULT_PROOFREADER_SYSTEM_TEMPLATE.to_string());
     let user = read_first(dir, &["proofreader.user.md"])
         .unwrap_or_else(|| DEFAULT_PROOFREADER_USER_TEMPLATE.to_string());
-    (system, user)
+    let schema = read_first(dir, &["proofreader.schema.json"])
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_else(|| {
+            serde_json::from_str(DEFAULT_PROOFREADER_SCHEMA)
+                .expect("embedded proofreader schema is valid")
+        });
+    (system, user, schema)
 }
 
 // ---------------------------------------------------------------------------
@@ -413,32 +402,48 @@ pub async fn run_edit_chunk(
             seed: crate::pipeline::translate::derive_seed(&chunk.id, EDIT_ROLE),
             default_max_tokens: Some(EDIT_MAX_TOKENS),
         },
-        parse_editor_answer,
+        parse_review_answer,
     )
     .await?;
 
-    repo::supersede_suggestions(pool, chunk_id, EDIT_ROLE).await?;
+    store_issues(pool, chunk_id, EDIT_ROLE, &prep.blocks, issues).await
+}
+
+/// Replace a pass's pending suggestions for a chunk with the new issues. An issue
+/// pointing at no block, or whose replacement changes nothing, is dropped.
+async fn store_issues(
+    pool: &SqlitePool,
+    chunk_id: &str,
+    pass: &str,
+    blocks: &[Block],
+    issues: Vec<EditedIssue>,
+) -> Result<usize> {
+    repo::supersede_suggestions(pool, chunk_id, pass).await?;
+    let translations = repo::list_block_translations(pool, chunk_id).await?;
     let mut created = 0;
     for issue in issues {
         let block = issue
             .block_index
             .and_then(|index| usize::try_from(index).ok())
-            .and_then(|index| prep.blocks.get(index));
+            .and_then(|index| blocks.get(index));
         let Some(block) = block else {
             continue;
         };
-        let current = preferred_translation(
-            &block.id,
-            &repo::list_block_translations(pool, chunk_id).await?,
-        )
-        .map(str::to_string)
-        .unwrap_or_else(|| block.source_md.clone());
+        if issue.suggested.trim() == issue.quote.trim() {
+            continue;
+        }
+        let current = preferred_translation(&block.id, &translations)
+            .map(str::to_string)
+            .unwrap_or_else(|| block.source_md.clone());
+        if issue.quote.is_empty() && issue.suggested.trim() == current.trim() {
+            continue;
+        }
         repo::insert_suggestion(
             pool,
             &Suggestion {
                 id: new_id(),
                 chunk_id: chunk_id.to_string(),
-                pass: EDIT_ROLE.to_string(),
+                pass: pass.to_string(),
                 block_id: Some(block.id.clone()),
                 field: Some("text".to_string()),
                 original: Some(current),
@@ -457,7 +462,7 @@ pub async fn run_edit_chunk(
     Ok(created)
 }
 
-/// Monolingual proofreader pass: one block-per-suggestion call.
+/// Monolingual proofreader pass: span-level issues on the target text alone.
 pub async fn run_proofread_chunk(
     deps: &PipelineDeps,
     job_id: Option<&str>,
@@ -476,8 +481,8 @@ pub async fn run_proofread_chunk(
         .await?
         .ok_or_else(|| AppError::NotFound(format!("endpoint {}", binding.endpoint_id)))?;
 
-    let separator = format!("\n\n{BLOCK_SEPARATOR}\n\n");
-    let target_text = prep.texts.join(&separator);
+    let block_refs: Vec<&Block> = prep.blocks.iter().collect();
+    let target_text = numbered(&block_refs, &prep.texts);
     if target_text.chars().count() > MAX_PROOFREAD_CHARS {
         return Err(AppError::Invalid(format!(
             "chunk {chunk_id} is too large for the proofreader pass"
@@ -486,7 +491,8 @@ pub async fn run_proofread_chunk(
 
     let prompts_dir = deps.prompts_dir(&prep.project_id);
     ensure_prompt_files(&prompts_dir).await?;
-    let (system_template, user_template) = load_proofreader(&prompts_dir);
+    let (system_template, user_template, schema) = load_proofreader(&prompts_dir);
+    let schema_text = serde_json::to_string_pretty(&schema)?;
 
     let env = Environment::new();
     let system = env.render_str(
@@ -496,10 +502,17 @@ pub async fn run_proofread_chunk(
             target_language => &project.target_lang,
         },
     )?;
-    let user = env.render_str(&user_template, context! { text => &target_text })?;
+    let user = env.render_str(
+        &user_template,
+        context! {
+            target_language => &project.target_lang,
+            text => &target_text,
+            response_schema => &schema_text,
+        },
+    )?;
     let prompt_hash = sha256_hex_str(&format!("{system}\n\u{0}\n{user}"));
 
-    let response = run_chat_call(
+    let (_, issues) = run_structured_call(
         deps,
         &ChatCall {
             job_id,
@@ -512,72 +525,15 @@ pub async fn run_proofread_chunk(
             prompt_hash: &prompt_hash,
             system: &system,
             user: &user,
-            response_format: None,
+            response_format: Some(ResponseFormat::json_schema(PROOFREAD_SCHEMA_NAME, schema)),
             seed: crate::pipeline::translate::derive_seed(&chunk.id, PROOFREAD_ROLE),
             default_max_tokens: Some(PROOFREAD_MAX_TOKENS),
         },
+        parse_review_answer,
     )
     .await?;
-    let corrected = split_blocks_text(&strip_code_fence(&response));
 
-    if corrected.len() != prep.blocks.len() {
-        repo::insert_qa_finding(
-            pool,
-            &QaFinding {
-                id: new_id(),
-                project_id: prep.project_id.clone(),
-                chunk_id: Some(chunk.id.clone()),
-                block_id: None,
-                kind: "markdown_malformed".to_string(),
-                severity: "minor".to_string(),
-                details_json: serde_json::json!({
-                    "reason": "proofreader_block_count",
-                    "expected": prep.blocks.len(),
-                    "got": corrected.len(),
-                })
-                .to_string(),
-                status: "open".to_string(),
-                created_at: now(),
-            },
-        )
-        .await?;
-        return Ok(0);
-    }
-
-    repo::supersede_suggestions(pool, chunk_id, PROOFREAD_ROLE).await?;
-    let mut created = 0;
-    for (block, text) in prep.blocks.iter().zip(corrected.iter()) {
-        let current = preferred_translation(
-            &block.id,
-            &repo::list_block_translations(pool, chunk_id).await?,
-        )
-        .map(str::to_string)
-        .unwrap_or_else(|| block.source_md.clone());
-        if text.trim().is_empty() || text.trim() == current.trim() {
-            continue;
-        }
-        repo::insert_suggestion(
-            pool,
-            &Suggestion {
-                id: new_id(),
-                chunk_id: chunk_id.to_string(),
-                pass: PROOFREAD_ROLE.to_string(),
-                block_id: Some(block.id.clone()),
-                field: Some("text".to_string()),
-                original: Some(current),
-                proposed: Some(text.clone()),
-                reason: None,
-                severity: None,
-                quote: None,
-                status: "pending".to_string(),
-                created_at: now(),
-                decided_at: None,
-            },
-        )
-        .await?;
-        created += 1;
-    }
-    Ok(created)
+    store_issues(pool, chunk_id, PROOFREAD_ROLE, &prep.blocks, issues).await
 }
 
 // ---------------------------------------------------------------------------
@@ -821,18 +777,15 @@ pub async fn accept_suggestion(deps: &PipelineDeps, id: &str) -> Result<Suggesti
         .clone()
         .filter(|text| !text.trim().is_empty())
         .ok_or_else(|| AppError::Invalid(format!("suggestion {id} has no proposed text")))?;
-    let new_text = if suggestion.pass == PROOFREAD_ROLE {
-        proposed
-    } else {
-        match suggestion
-            .quote
-            .as_deref()
-            .filter(|quote| !quote.is_empty())
-        {
-            Some(quote) if current.contains(quote) => current.replacen(quote, &proposed, 1),
-            // No usable quote: the proposal is the corrected block.
-            _ => proposed,
-        }
+    let new_text = match suggestion
+        .quote
+        .as_deref()
+        .filter(|quote| !quote.is_empty())
+    {
+        Some(quote) if current.contains(quote) => current.replacen(quote, &proposed, 1),
+        // No usable quote (or a whole-block proposal from before the proofreader
+        // answered JSON): the proposal is the corrected block.
+        _ => proposed,
     };
 
     let new_text = restore_line_escapes(&current, &new_text);
@@ -998,29 +951,13 @@ mod tests {
             {"block_index":1,"severity":"nonsense","kind":"register","quote":"q","suggested":"","reason":"r"},
             {"block_index":2,"severity":"minor","kind":"register","quote":"","suggested":"ok","reason":"r"}
         ]}"#;
-        let issues = parse_editor_answer(answer).expect("parse");
+        let issues = parse_review_answer(answer).expect("parse");
         assert_eq!(issues.len(), 2);
         assert_eq!(issues[0].severity, "critical");
         assert_eq!(issues[0].suggested, "fixed");
         assert_eq!(issues[0].block_index, Some(0));
         assert_eq!(issues[1].severity, "minor");
         assert_eq!(issues[1].quote, "");
-    }
-
-    #[test]
-    fn proofreader_answer_splits_on_the_separator() {
-        let text = "Primo blocco.\n\n<!-- block -->\n\nSecondo\nblocco.";
-        let blocks = split_blocks_text(text);
-        assert_eq!(blocks, vec!["Primo blocco.", "Secondo\nblocco."]);
-        // A missing separator is one block, which the caller detects.
-        assert_eq!(split_blocks_text("nessun separatore").len(), 1);
-    }
-
-    #[test]
-    fn code_fences_are_stripped() {
-        assert_eq!(strip_code_fence("```\ncorretto\n```"), "corretto");
-        assert_eq!(strip_code_fence("```text\ncorretto\n```"), "corretto");
-        assert_eq!(strip_code_fence("lasciato"), "lasciato");
     }
 
     #[test]
@@ -1055,6 +992,15 @@ mod tests {
         .expect("editor schema is valid JSON");
         let embedded: Value =
             serde_json::from_str(DEFAULT_EDITOR_SCHEMA).expect("embedded schema is valid JSON");
+        assert_eq!(file, embedded);
+
+        let file: Value = serde_json::from_str(
+            &std::fs::read_to_string(root.join("prompts/proofreader.schema.json"))
+                .expect("read prompts/proofreader.schema.json"),
+        )
+        .expect("proofreader schema is valid JSON");
+        let embedded: Value = serde_json::from_str(DEFAULT_PROOFREADER_SCHEMA)
+            .expect("embedded schema is valid JSON");
         assert_eq!(file, embedded);
     }
 }

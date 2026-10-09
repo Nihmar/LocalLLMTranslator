@@ -729,7 +729,8 @@ REPRESENTATIVE_CONTEXTS: dict[str, dict[str, object]] = {
     "proofreader.md": {
         "source_language": "English",
         "target_language": "Italian",
-        "text": "Il porto era tranquillo \u27e61\u27e7.",
+        "text": "[0] Il porto era tranquillo \u27e61\u27e7.",
+        "response_schema": "{}",
     },
     "summarizer.md": {
         "source_language": "English",
@@ -828,6 +829,22 @@ def test_editor_schema_matches_plan():
         "placeholder",
     ]
     assert issue["required"] == ["block_index", "kind", "quote", "suggested", "reason"]
+
+
+def test_proofreader_schema_matches_plan():
+    schema = json.loads((PROMPTS_DIR / "proofreader.schema.json").read_text(encoding="utf-8"))
+    assert schema["required"] == ["issues"]
+
+    issue = schema["properties"]["issues"]["items"]
+    assert issue["properties"]["severity"]["enum"] == ["major", "minor"]
+    assert issue["required"] == [
+        "block_index",
+        "severity",
+        "kind",
+        "quote",
+        "suggested",
+        "reason",
+    ]
 
 
 def test_analyze_book_marker_and_schema_match_plan():
