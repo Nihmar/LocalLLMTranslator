@@ -71,19 +71,12 @@ TRANSLATION:
 {{ excerpt }}
 "#;
 
-/// SHA-256 of the templates earlier releases wrote into project snapshots. A snapshot
-/// file still byte-identical to one of them was never edited by the user, so it is
-/// replaced by the current default instead of being kept forever.
-const SHIPPED_TEMPLATE_HASHES: &[(&str, &str)] = &[
-    (
-        "summarizer.system.md",
-        "1a5b98b8f29b0c4aa657993a284bdc4c7b30e4f1a6703c7d13b31f4044b57d23",
-    ),
-    (
-        "summarizer.user.md",
-        "35fb639ffde848f131f5f826a8f3065ea0f87a7df63c1460071758a25688c255",
-    ),
-];
+/// SHA-256 of the summarizer templates earlier releases wrote into project
+/// snapshots (see [`crate::util::ensure_prompt_file`]).
+const SHIPPED_SYSTEM_HASHES: &[&str] =
+    &["1a5b98b8f29b0c4aa657993a284bdc4c7b30e4f1a6703c7d13b31f4044b57d23"];
+const SHIPPED_USER_HASHES: &[&str] =
+    &["35fb639ffde848f131f5f826a8f3065ea0f87a7df63c1460071758a25688c255"];
 
 pub const DEFAULT_SUMMARIZER_SCHEMA: &str = r##"{"$comment":"Rolling-memory schema for prompts/summarizer.md (PLAN.md section 8). The control plane clamps every value again before persisting it: the summary to 200 words, the term list to 8 entries, the style notes to 8 candidates.","type":"object","properties":{"summary":{"type":"string","maxLength":1600},"new_terms":{"type":"array","maxItems":8,"items":{"type":"object","properties":{"source":{"type":"string","maxLength":120},"target":{"type":"string","maxLength":120},"kind":{"enum":["term","proper_noun","do_not_translate"]},"note":{"type":"string","maxLength":200}},"required":["source","target","kind"]}},"style_notes":{"type":"array","maxItems":8,"items":{"type":"string","maxLength":240}}},"required":["summary","new_terms","style_notes"]}"##;
 
@@ -280,21 +273,20 @@ fn terms_found_in_source(terms: Vec<CandidateTerm>, source_text: &str) -> Vec<Ca
 /// overwrite an edited one.
 pub async fn ensure_prompt_files(dir: &Path) -> Result<()> {
     tokio::fs::create_dir_all(dir).await?;
-    for (name, content) in [
-        ("summarizer.system.md", DEFAULT_SUMMARIZER_SYSTEM_TEMPLATE),
-        ("summarizer.user.md", DEFAULT_SUMMARIZER_USER_TEMPLATE),
-        ("summarizer.schema.json", DEFAULT_SUMMARIZER_SCHEMA),
+    for (name, content, shipped) in [
+        (
+            "summarizer.system.md",
+            DEFAULT_SUMMARIZER_SYSTEM_TEMPLATE,
+            SHIPPED_SYSTEM_HASHES,
+        ),
+        (
+            "summarizer.user.md",
+            DEFAULT_SUMMARIZER_USER_TEMPLATE,
+            SHIPPED_USER_HASHES,
+        ),
+        ("summarizer.schema.json", DEFAULT_SUMMARIZER_SCHEMA, &[]),
     ] {
-        let path = dir.join(name);
-        let stale = match tokio::fs::read_to_string(&path).await {
-            Ok(current) => SHIPPED_TEMPLATE_HASHES
-                .iter()
-                .any(|(file, hash)| *file == name && sha256_hex_str(&current) == *hash),
-            Err(_) => true,
-        };
-        if stale {
-            tokio::fs::write(&path, content).await?;
-        }
+        crate::util::ensure_prompt_file(&dir.join(name), content, shipped).await?;
     }
     Ok(())
 }
@@ -657,7 +649,7 @@ mod tests {
     #[tokio::test]
     async fn a_shipped_template_is_upgraded_and_an_edited_one_is_kept() {
         let dir = tempfile::tempdir().expect("tempdir");
-        // A snapshot written by an earlier release (the hash in SHIPPED_TEMPLATE_HASHES).
+        // A snapshot written by an earlier release (the hash in SHIPPED_SYSTEM_HASHES).
         let old_system = "You maintain the memory of a translation project ({{ source_language }} → {{ target_language }}).
 From the chapter excerpt below produce JSON only:
 {\"summary\": \"3-5 sentences in {{ target_language }}\",

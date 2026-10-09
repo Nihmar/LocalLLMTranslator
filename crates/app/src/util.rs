@@ -16,6 +16,28 @@ pub fn sha256_hex_str(text: &str) -> String {
     sha256_hex(text.as_bytes())
 }
 
+/// Write a shipped prompt file into a project snapshot unless the user owns it.
+///
+/// Prompts are user data, so an existing file is kept — except one still
+/// byte-identical to a default an earlier release shipped (its SHA-256 is listed in
+/// `shipped`): nobody edited it, so it follows the current default instead of
+/// pinning the project to an old prompt forever.
+pub async fn ensure_prompt_file(
+    path: &std::path::Path,
+    content: &str,
+    shipped: &[&str],
+) -> crate::error::Result<()> {
+    let stale = match tokio::fs::read_to_string(path).await {
+        Ok(current) => current != content && shipped.contains(&sha256_hex_str(&current).as_str()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+        Err(error) => return Err(error.into()),
+    };
+    if stale {
+        tokio::fs::write(path, content).await?;
+    }
+    Ok(())
+}
+
 /// Canonical hash of a JSON value. `serde_json::Map` is a `BTreeMap` by default,
 /// so object keys are serialised in sorted order and the hash is stable.
 pub fn json_hash(value: &serde_json::Value) -> String {
