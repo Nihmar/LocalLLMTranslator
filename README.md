@@ -305,6 +305,10 @@ Test fixtures (EPUB, Markdown, PDF, plus a ~1M character EPUB):
 uv run --project sidecar python tools/make_fixtures.py
 ```
 
+The offline suite never proves the core loop on a **real** book with a real `llama-server`.
+That is a manual run; the step-by-step procedure, the pass criteria and the verification
+queries are in [`docs/acceptance-run.md`](docs/acceptance-run.md) (tracked by issue #15).
+
 ---
 
 ## Repository structure

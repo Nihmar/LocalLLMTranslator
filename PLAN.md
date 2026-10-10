@@ -1345,7 +1345,8 @@ context); M6 after M3 (concurrency requires the versioned glossary).
   halfway via `SIGTERM` and resume; verification that the translated Markdown has the same sequence
   of block types as the original.
 - **Manual**: translate a real ~300-page EPUB with a real `llama-server`, interrupt,
-  resume, export PDF and EPUB.
+  resume, export PDF and EPUB. The step-by-step checklist, pass criteria and verification
+  queries live in [`docs/acceptance-run.md`](docs/acceptance-run.md).
 
 ---
 
